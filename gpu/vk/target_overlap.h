@@ -22,7 +22,8 @@ struct DrawnOver {
     void add(uint64_t lo, uint64_t hi, uint64_t last_used, uint64_t olo, uint64_t ohi, uint64_t o_written) {
         if (hi <= lo || ohi <= olo || o_written <= last_used) return;
         if (olo == lo) return;   // (drawn_over's own case)
-        if (olo >= lo && ohi <= hi) return;   // (a view of a part of it, not a new target: 5bfa6aa, PR #899)
+        // (a view of a part of it, not a new target: 5bfa6aa, https://github.com/NotRexed/Hookshot/pull/899)
+        if (olo >= lo && ohi <= hi) return;
         const uint64_t a = std::max(lo, olo), b = std::min(hi, ohi);
         if (b <= a) return;
         if (open && a <= end) {

@@ -4672,7 +4672,8 @@ void texture_frame(uint64_t completed) {
     // after its last use (target_overlap.h): the transient targets above. Its texels are gone from that memory on the console
     // too. Their shares are added up, several over parts of it: judged one by one (an eighth each) they left the big ones, and
     // what was missed grew to 3-4 GB of target images (issue 2180). A newer target inside it is a view of a part of it, not a
-    // new target (5bfa6aa, PR #899): counted, a live scene target would go on its sub-rects being drawn as views
+    // new target (5bfa6aa, https://github.com/NotRexed/Hookshot/pull/899): counted, a live scene target would go on its
+    // sub-rects being drawn as views
     const auto drawn_over_shifted = [&](const Texture* tex) {
         if (!dead_targets || !tex->gpu_written || !tex->first_render_frame || !tex->guest_size || tex->levels != 1 ||
             tex->layers != 1 || tex->depth > 1)

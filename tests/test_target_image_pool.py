@@ -79,7 +79,8 @@ class TargetImagePoolTests(unittest.TestCase):
         self.assertNotIn("target_overlap::shifted_over", rule)
 
     def test_a_view_inside_a_target_is_not_a_new_target(self):
-        # (5bfa6aa, PR #899: a live scene target's sub-rects redrawn as views must not make it a dead one)
+        # (5bfa6aa, https://github.com/NotRexed/Hookshot/pull/899: a live scene target's sub-rects redrawn as views must
+        # not make it a dead one)
         hdr = (ROOT / "gpu" / "vk" / "target_overlap.h").read_text(encoding="utf-8")
         add = block(hdr, "void add(")
         self.assertIn("if (olo == lo) return;", add)   # (drawn_over's own case)
