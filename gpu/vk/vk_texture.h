@@ -64,7 +64,7 @@ struct Texture {
     // contents
     bool uploaded = false;    // from guest memory, as of upload_gen
     uint32_t upload_gen = 0;
-    uint64_t bc_retry_frame = 0;   // (longshot) a BC3 image whose upload failed: tried again from this frame (vk_texture.cpp)
+    uint64_t retry_frame = 0;   // (longshot) an image whose upload failed: tried again from this frame (vk_texture.cpp)
     // (longshot, OcaDim, RX_VK_MEM_CENSUS) the same storage, size and format went through the budget within 600 frames:
     // this object is a make again, and its decode is one the eviction cost. evicted_ago: the frames since it went
     bool made_again = false;
