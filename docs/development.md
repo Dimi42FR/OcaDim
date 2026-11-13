@@ -287,6 +287,13 @@ Pipeline-cache file ownership, temporary storage and failure behavior are descri
 | `RX_VK_NAN_GUARD=0` | No NaN guard on float colour outputs (on by default on every card: one NaN texel spreads through bloom into glowing blocks) |
 | `RX_VK_FIFO=1`, `RX_VK_IMMEDIATE=1` | V-Sync On (FIFO) or Off (immediate) for one run, over the menu's V-Sync row |
 | `HOS_VCORES=0`, `HOS_CORES=<1..8>`, `HOS_RESERVE_CORE=0` | No virtual cores; the cores the game sees (6); no core kept for the replay (one is, with 8 or more logical processors) |
+| `RX_VK_ASTC_BC1=0` | Every ASTC texture kept as BC3, as before; by default a big ASTC texture whose blocks all decode opaque is kept as BC1 (half BC3's video memory), and one that later gets alpha is made BC3 again |
+| `RX_VK_GAME_ORDER=1` / `=0` | A draw pass right after another waits in its fragment stages only, and a compute dispatch right after another gets no barrier: their order is the game's own barriers'. A switch between draws and compute, the replay's own copies, clears and uniform updates, an indirect dispatch and the game's barriers keep the full barrier. On by default on NVIDIA only (measured there; the log says which); `=1` tries it elsewhere, `=0` turns it off |
+| `RX_VK_VIEW_FAST=0` | No front cache for texture views: every lookup goes to the map, as before; by default a 1024-entry cache answers a repeated lookup whose slot version, destroy generation and texture epoch are unchanged |
+| `RX_VK_NATIVE_NARROW=0` | 8- and 16-bit global stores through the compare-exchange loop on the word, as before; by default they are written directly through narrow views (part of the program cache stamp) |
+| `RX_VK_IMPORT_FENCE=0` | No fence page while the driver is asked about an imported host pointer, as before; by default the page after the range ends the run of read-write pages the driver walks (not with the CPU write watches) |
+| `RX_VK_UNSWIZZLE_IMPORT=1` | A GPU unswizzle for one upload may import its pool, as before; by default only an already imported pool is used, and the CPU unswizzles the rest (several threads from 4 MB) |
+| `HOS_CV_SIGNAL_ALWAYS=1` | Every condition-variable signal takes the lock and wakes, as before; by default a signal with no waiter returns at once (`tests/test_cv_signal_early.py`) |
 
 ### Building
 
