@@ -957,30 +957,218 @@ struct ParPoint {
     int64_t work;
 };
 std::vector<ParPoint> par_points;   // (every 64 draws and dispatches of the dry pass)
-// (longshot, the step 3 P1) RX_VK_DESC_PREFETCH=1: the dry pass queues its points for a descriptor-prefetch
-// helper (BELOW_NORMAL, the priority pattern proven with the parallel workers). P1 is the plumbing alone:
-// the helper drains and counts — the payload build (P2) and the record's consumption (P3) come next. Off by
-// default: inert until P2 lands.
+// (longshot, the step 3's P2) RX_VK_DESC_PREFETCH=1: the dry pass queues its stretches (a point to the next, the
+// buffer's start to the first, the last to its stop) for a descriptor-prefetch helper (BELOW_NORMAL, the priority
+// pattern proven with the parallel workers). The helper re-walks each stretch from the point's state, mirroring the
+// binds and the stream's inline uniform updates, and at every draw publishes the bytes of each uniform range whose
+// overlay the record will build: the capture's pages with the updates over them, exactly as ub_overlay builds them.
+// The record's ub_overlay takes a published copy instead of reading guest memory and walking the update list (P3),
+// and builds locally on a miss — the fallback is always the record's own path. Off by default.
+bool deferred_late();   // (below: RX_VK_DEFERRED_LATE)
+extern uint64_t rec_value_now;   // (below: the submission being recorded)
+constexpr size_t kPfQueueMax = 8;          // (stretches queued ahead: a lagged helper drops new ones, the record falls back)
+constexpr uint64_t kPfMaxBytes = 4096;     // (a uniform range longer than this is not prefetched: the record builds it)
+constexpr size_t kPfSlots = 2048;          // (published entries; 8 MiB with the 4 KiB copies)
+struct PfUb { uint64_t dst; std::vector<uint8_t> bytes; };          // (an update before the buffer: the item's own copies)
+struct PfWalked { uint64_t dst; const uint8_t* bytes; uint64_t size; };   // (an inline update: a span into the stream)
+struct PfItem {
+    ParPoint pt;                 // (the stretch's start: the dry pass's state and place there)
+    const uint8_t* end;          // (the stretch's end; null: the buffer's NOP_END — the last stretch)
+    bool closed = false;         // (the buffer's last stretch: the helper's walk state ends with it)
+    bool start = false;          // (the buffer's first stretch: it carries the updates before the buffer)
+    size_t ub0 = 0;              // (start only: how many entries the updates before the buffer were)
+    std::vector<PfUb> ubs;       // (start only: their copies — the list may prune under a lagged helper)
+};
 std::mutex pf_mu;
-std::deque<ParPoint> pf_queue;
-std::atomic<int64_t> pf_queued{0}, pf_drained{0};
+std::condition_variable pf_cv;
+std::deque<PfItem> pf_queue;
+std::atomic<int64_t> pf_queued{0}, pf_drained{0}, pf_dropped{0};
+std::atomic<int64_t> st_pf_built{0}, st_pf_hit{0}, st_pf_miss{0};
+thread_local std::vector<uint8_t> pf_got;   // (the record's threads: a lookup's copy, sized once and kept)
 bool desc_prefetch_on() {
     static const bool on = getenv("RX_VK_DESC_PREFETCH") && atoi(getenv("RX_VK_DESC_PREFETCH")) != 0;
     return on;
 }
+// (the record's overlay applies this buffer's place's updates over the capture; RX_VK_UB_CUR_ONLY applies this
+// recording's only — the helper cannot know that bound, so the prefetch stands down while it is set)
+bool pf_active() {
+    static const bool cur_only = env_on("RX_VK_UB_CUR_ONLY");
+    return desc_prefetch_on() && !cur_only;
+}
+// ---- the published entries: one writer (the helper), many readers (the record's threads), a seqlock each — a
+// reader copies between two equal reads of an even sequence, a rewrite under it is seen and the lookup falls back ----
+struct PfSlot {
+    std::atomic<uint64_t> seq{0};    // (even: the entry stands; odd: it is being rewritten)
+    uint64_t addr, n, lim, view, rec;
+    uint8_t bytes[kPfMaxBytes];
+};
+alignas(64) PfSlot pf_slots[kPfSlots];
+size_t pf_slot_index(uint64_t addr, uint64_t n, uint64_t lim) {
+    uint64_t x = addr * 0x9E3779B97F4A7C15ull ^ (n << 24) ^ lim;
+    x ^= x >> 30, x *= 0xBF58476D1CE4E5B9ull, x ^= x >> 27, x *= 0x94D049BB133111EBull, x ^= x >> 31;
+    return (size_t)x & (kPfSlots - 1);
+}
+/// Whether (addr, n, lim, view, rec) stands published already: an entry of at least n bytes at addr (the record's
+/// build may ask a shorter range of the same bound: the bytes are per address, its first n serve)
+PfSlot* pf_slot_stored(uint64_t addr, uint64_t n, uint64_t lim, uint64_t view, uint64_t rec) {
+    const size_t i0 = pf_slot_index(addr, n, lim);
+    for (size_t probe = 0; probe < 4; probe++) {
+        PfSlot& s = pf_slots[(i0 + probe) & (kPfSlots - 1)];
+        for (int attempt = 0; attempt < 2; attempt++) {
+            const uint64_t v1 = s.seq.load(std::memory_order_acquire);
+            if (v1 & 1) continue;   // (being rewritten: once more, then the next probe)
+            if (s.addr == addr && s.n >= n && s.lim == lim && s.view == view && s.rec == rec) return &s;
+            break;
+        }
+    }
+    return nullptr;
+}
+void pf_publish(uint64_t addr, uint64_t n, uint64_t lim, uint64_t view, uint64_t rec, const uint8_t* src) {
+    PfSlot& s = pf_slots[pf_slot_index(addr, n, lim)];
+    const uint64_t v = s.seq.load(std::memory_order_relaxed);
+    s.seq.store(v + 1, std::memory_order_relaxed);   // (odd: the entry is being rewritten)
+    s.addr = addr, s.n = n, s.lim = lim, s.view = view, s.rec = rec;
+    std::memcpy(s.bytes, src, (size_t)n);
+    s.seq.store(v + 2, std::memory_order_release);   // (even again: the entry stands)
+}
+/// The record's overlay copy from the published entries (P3): the bytes as of (addr, n, lim, view, rec), or false —
+/// the fallback builds them, as today. A slot rewritten under the copy is seen (the sequence moved) and refused.
+bool pf_ub_lookup(uint64_t addr, uint64_t n, size_t lim, uint8_t* dst) {
+    if (!pf_active() || n > kPfMaxBytes) return false;
+    const uint64_t view = memory_capture_view(), rec = rec_value_now;
+    const size_t i0 = pf_slot_index(addr, n, lim);
+    for (size_t probe = 0; probe < 4; probe++) {
+        PfSlot& s = pf_slots[(i0 + probe) & (kPfSlots - 1)];
+        for (int attempt = 0; attempt < 2; attempt++) {
+            const uint64_t v1 = s.seq.load(std::memory_order_acquire);
+            if (v1 & 1) continue;
+            if (s.addr == addr && s.n >= n && s.lim == (uint64_t)lim && s.view == view && s.rec == rec) {
+                std::memcpy(dst, s.bytes, (size_t)n);
+                if (s.seq.load(std::memory_order_relaxed) == v1) return true;
+                continue;   // (rewritten under the copy: the new entry may be the same key again)
+            }
+            break;
+        }
+    }
+    return false;
+}
+// ---- the helper: the walk, and at each draw the uniform ranges' overlay bytes, published ----
+void pf_prefetch(const NvnState& s, size_t lim, uint64_t view, uint64_t rec, const std::vector<PfUb>& ubs,
+                 const std::vector<PfWalked>& walked) {
+    static std::vector<uint8_t> scratch;   // (the one helper thread's)
+    for (int st = 0; st < kNvnStages; st++)
+        for (int i = 0; i < 16; i++) {
+            const nvn_p_bind_buf& u = s.ubo[st][i];
+            if (!u.addr || !u.size) continue;
+            const uint64_t n = std::min<uint64_t>(std::max<uint64_t>(u.size, 16), dev.props.limits.maxUniformBufferRange);
+            if (n > kPfMaxBytes) continue;
+            if (pf_slot_stored(u.addr, n, lim, view, rec)) continue;
+            // (the record only builds an overlay when an update of this place covers the range — the same test as
+            // ub_overlay's: a range no update touches is bound from the pools, nothing to prefetch)
+            bool any = false;
+            for (const PfUb& w : ubs)
+                if (w.dst < u.addr + n && u.addr < w.dst + w.bytes.size()) { any = true; break; }
+            if (!any)
+                for (const PfWalked& w : walked)
+                    if (w.dst < u.addr + n && u.addr < w.dst + w.size) { any = true; break; }
+            if (!any) continue;
+            scratch.resize((size_t)n);
+            if (!memory_read_as_submitted(u.addr, scratch.data(), n)) std::memset(scratch.data(), 0, (size_t)n);
+            for (const PfUb& w : ubs) {
+                const uint64_t lo = std::max(u.addr, w.dst), hi = std::min(u.addr + n, w.dst + w.bytes.size());
+                if (lo < hi) std::memcpy(scratch.data() + (lo - u.addr), w.bytes.data() + (lo - w.dst), hi - lo);
+            }
+            for (const PfWalked& w : walked) {
+                const uint64_t lo = std::max(u.addr, w.dst), hi = std::min(u.addr + n, w.dst + w.size);
+                if (lo < hi) std::memcpy(scratch.data() + (lo - u.addr), w.bytes + (lo - w.dst), hi - lo);
+            }
+            pf_publish(u.addr, n, lim, view, rec, scratch.data());
+            st_pf_built.fetch_add(1, std::memory_order_relaxed);
+        }
+}
 void pf_helper_main() {
     SetThreadDescription(GetCurrentThread(), L"mkw_vk desc prefetch");
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);   // (the game's threads keep their cores: the proven pattern)
+    std::vector<PfUb> ubs;               // (this buffer's updates before it: the start item's copies, the list's own dropped)
+    std::vector<PfWalked> walked;        // (this buffer's inline updates so far, in stream order: spans into the stream)
+    NvnState s{};
     for (;;) {
-        ParPoint pt;
+        PfItem it;
         {
-            std::lock_guard lk(pf_mu);
-            if (pf_queue.empty()) continue;
-            pt = std::move(pf_queue.front());
+            std::unique_lock lk(pf_mu);
+            // (a stretch's end is known only when the next item is queued, or the buffer closed its last: an item
+            // whose end is still null is walked to the buffer's end only once the buffer is done with it)
+            pf_cv.wait(lk, [] { return !pf_queue.empty() && (pf_queue.size() >= 2 || pf_queue.front().closed); });
+            it = std::move(pf_queue.front());
             pf_queue.pop_front();
         }
-        // (P2 lands here: the payload build from pt.s — the draws' descriptor data, into the prefetch arena)
         pf_drained.fetch_add(1, std::memory_order_relaxed);
+        if (it.start) {
+            ubs = std::move(it.ubs);
+            walked.clear();   // (the spans were the last buffer's stream: gone with it)
+        }
+        // (the walk: from the point's state and place, the ops the record's descriptors read — the uniform buffer
+        // binds and the stream's inline updates. An op kind not mirrored (a texture bind, a state bundle) leaves the
+        // state as the point had it: the record asks for ranges the helper did not publish, and builds them itself)
+        s = it.pt.s;
+        size_t lim = it.pt.ub;   // (the updates before the stretch: the record's overlays there see exactly these)
+        const uint64_t view = memory_capture_view(), rec = rec_value_now;
+        const uint8_t* p = it.pt.p;
+        for (;;) {
+            if (it.end && p == it.end) break;
+            nvn_op_hdr h;
+            std::memcpy(&h, p, sizeof h);
+            if (h.op == NOP_END) break;
+            if (h.size < 8 || h.size > (1u << 22)) break;   // (a stream rewritten under a starved helper: stop here)
+            const uint8_t* a = p + 8;
+            const uint32_t avail = h.size - 8;
+            // (if/else, not a switch: tests cut the replay's case labels out of this file by their text, and the
+            // walk's must not be the first ones found)
+            if (h.op == NOP_UPDATE_UB) {
+                const auto u = payload<nvn_p_update_ub>(a, avail);
+                if (u.size && u.size <= avail - sizeof u) {   // (the same test as the dry pass's append: the count matches)
+                    walked.push_back({u.dst, a + sizeof u, u.size});
+                    lim++;
+                }
+            } else if (h.op == NOP_BIND_BUFS) {
+                auto b = payload<nvn_p_bind_bufs>(a, avail);
+                if (b.src && deferred_late()) {   // (as the record reads them: a later read may differ, the key misses, the record builds)
+                    const int n = std::clamp(b.n, 0, 16);
+                    std::memset(b.r, 0, sizeof b.r);
+                    host->gpu_read(b.src, b.r, (uint64_t)n * sizeof(NVNbufferRange));
+                }
+                for (int i = 0; i < b.n && i < 16; i++) {
+                    const int index = b.first + i;
+                    if (b.stage < 0 || b.stage >= kNvnStages || index < 0 || index >= 16) continue;
+                    nvn_p_bind_buf& u = (b.ssbo ? s.ssbo : s.ubo)[b.stage][index];
+                    u.stage = b.stage, u.index = index, u.addr = b.r[i].address, u.size = b.r[i].size;
+                }
+            } else if (h.op == NOP_BIND_UBO || h.op == NOP_BIND_SSBO) {
+                const auto b = payload<nvn_p_bind_buf>(a, avail);
+                if (b.stage >= 0 && b.stage < kNvnStages && b.index >= 0 && b.index < 16)
+                    (h.op == NOP_BIND_UBO ? s.ubo : s.ssbo)[b.stage][b.index] = b;
+            } else if (h.op == NOP_BIND_PROGRAM) {
+                const auto b = payload<nvn_p_bind_program>(a, avail);
+                if (b.prog) s.prog = *b.prog;
+                s.has_prog = b.prog != nullptr && b.prog->nstage > 0;
+            } else if (h.op == NOP_RENDER_ENABLE) {
+                s.render_enabled = payload<nvn_p_flag>(a, avail).value != 0;
+            } else if (h.op == NOP_RASTER_DISCARD) {
+                s.raster_discard = payload<nvn_p_flag>(a, avail).value != 0;
+            } else if (h.op == NOP_DRAW || h.op == NOP_DRAW_IDX || h.op == NOP_DRAW_INDIRECT || h.op == NOP_DRAW_MESH ||
+                       h.op == NOP_DISPATCH || h.op == NOP_DISPATCH_INDIRECT) {
+                // (what the record builds descriptors for: a program bound, the draw not gated off — a render
+                // condition's result is the dry pass's and is not mirrored: those draws publish for nothing)
+                const bool compute = h.op == NOP_DISPATCH || h.op == NOP_DISPATCH_INDIRECT;
+                if (s.has_prog && s.render_enabled && (compute || !s.raster_discard))
+                    pf_prefetch(s, lim, view, rec, ubs, walked);
+            }
+            p += h.size;
+        }
+        if (it.closed) {
+            ubs.clear();      // (the copies were this buffer's list: the next start item brings its own)
+            walked.clear();   // (the spans were this buffer's stream: gone with it)
+        }
     }
 }
 void pf_start() {
@@ -988,7 +1176,8 @@ void pf_start() {
     if (started || !desc_prefetch_on()) return;
     started = true;
     std::thread(pf_helper_main).detach();
-    logf("vk: descriptor prefetch: the dry pass queues its points for a BELOW_NORMAL helper (P1: the plumbing; the payload build is P2)");
+    logf("vk: descriptor prefetch: the dry pass queues its stretches for a BELOW_NORMAL helper, which walks them and "
+         "publishes each draw's uniform overlay bytes; the record's overlays take them, and build locally on a miss");
 }
 bool dry_clears_on() {   // (the dry pass marks a clear's targets too: NOP_CLEAR_COLOR in replay())
     static const bool v = !env_on("RX_VK_NO_DRY_CLEARS");
@@ -1118,6 +1307,22 @@ uint64_t ub_overlay(uint64_t addr, uint64_t n, uint8_t* base, const std::functio
     const size_t lim = ub_limit ? std::min(ub_limit, ub_updates.size()) : 0;
     static const bool cur_only = env_on("RX_VK_UB_CUR_ONLY");   // (A/B: this submission's updates only)
     const size_t first = cur_only ? std::min(ub_first_of_recording, lim) : 0;
+    // (longshot, the step 3's P3) the prefetch helper's published copy first: this range's bytes as of this place —
+    // the capture's pages with the updates before it over them, as the build below would resolve them. A miss (the
+    // helper lagged, the range dropped, a rewrite under the copy) builds locally, exactly as before
+    if (!cur_only && n <= kPfMaxBytes) {
+        pf_got.resize((size_t)n);
+        if (pf_ub_lookup(addr, n, lim, pf_got.data())) {
+            const uint64_t at = alloc(n);
+            if (at == UINT64_MAX) return UINT64_MAX;
+            std::memcpy(base + at, pf_got.data(), (size_t)n);
+            st_ub_overlays++;
+            st_pf_hit.fetch_add(1, std::memory_order_relaxed);
+            ub_copy_keep(addr, n, base, first, lim, at, memory_capture_view(), ub_list_epoch.load(std::memory_order_relaxed));
+            return at;
+        }
+        st_pf_miss.fetch_add(1, std::memory_order_relaxed);
+    }
     if (ub_gap_holds(addr, n, first, lim)) return UINT64_MAX;
     const uint64_t view = memory_capture_view();
     uint64_t kept = 0;
@@ -1781,8 +1986,17 @@ void replay(VkCommandBuffer& cmd, NvnState& s, const uint8_t* p, const uint8_t* 
                     if (desc_prefetch_on()) {
                         pf_start();
                         std::lock_guard pfl(pf_mu);
-                        pf_queue.push_back(par_points.back());
-                        pf_queued.fetch_add(1, std::memory_order_relaxed);
+                        // (the stretch before this point ends here — an earlier one left open by a dropped item ends
+                        // here too, its draws prefetched with this stretch's)
+                        if (!pf_queue.empty() && !pf_queue.back().closed && !pf_queue.back().end)
+                            pf_queue.back().end = par_points.back().p;
+                        if (pf_queue.size() < kPfQueueMax) {
+                            pf_queue.push_back({par_points.back(), nullptr, false, false, 0, {}});
+                            pf_queued.fetch_add(1, std::memory_order_relaxed);
+                            pf_cv.notify_one();
+                        } else {
+                            pf_dropped.fetch_add(1, std::memory_order_relaxed);
+                        }
                     }
                 }
             } else if (!worker) {
@@ -2005,6 +2219,19 @@ const uint8_t* replay_handle(VkCommandBuffer& cmd, const uint8_t* h, bool may_st
     const size_t ub0 = ub_updates.size();
     par_points.clear(), par_conds.clear(), dry_work = 0;
     dry_marks_begin();
+    if (desc_prefetch_on()) {   // (longshot, the step 3's P2) the buffer's first stretch: from its start to the first point
+        pf_start();
+        PfItem it{{h, start, ub0, par_conds.size(), 0}, nullptr, false, true, ub0, {}};
+        // (the updates before this buffer, copied now: the list is pruned between submissions and the helper may
+        // only get here after — its overlays apply these by copy, never by the list's place)
+        for (size_t i = 0; i < ub0; i++) it.ubs.push_back({ub_updates[i].dst, ub_updates[i].bytes});
+        {
+            std::lock_guard pfl(pf_mu);
+            pf_queue.push_back(std::move(it));
+            pf_queued.fetch_add(1, std::memory_order_relaxed);
+            pf_cv.notify_one();
+        }
+    }
     rmode = Mode::Dry;
     VkCommandBuffer none = cmd;
     suspend_ok = may_stop;
@@ -2012,6 +2239,14 @@ const uint8_t* replay_handle(VkCommandBuffer& cmd, const uint8_t* h, bool may_st
     suspend_ok = false;
     rmode = Mode::Serial;
     const uint8_t* const stop = suspend_at;   // (the segments end there)
+    if (desc_prefetch_on()) {   // (longshot) this buffer's last stretch ends here: the helper walks it to the stop (or the end)
+        std::lock_guard pfl(pf_mu);
+        if (!pf_queue.empty() && !pf_queue.back().closed) {
+            pf_queue.back().end = stop;
+            pf_queue.back().closed = true;
+            pf_cv.notify_one();
+        }
+    }
     const int64_t total = dry_work;
     static double dry_ms, seg_ms, segs_n;
     static int64_t timed;
@@ -2174,12 +2409,24 @@ const uint8_t* replay_handle(VkCommandBuffer& cmd, const uint8_t* h, bool may_st
     segs_n += (double)seg.size();
     static double wait_ms, locks_n;
     wait_ms += (par_lock_wait_ns.load() - wait0) / 1e6, locks_n += (double)(par_locks.load() - locks0);
+    // (longshot, the step 3's P3) the prefetch's book: the overlays the record took from the helper's published
+    // copies against the ones it built itself (a miss builds locally, exactly as before)
+    static int64_t pf_hit0, pf_miss0, pf_built0, pf_dropped0;
+    const int64_t pf_hit = st_pf_hit.load(std::memory_order_relaxed), pf_miss = st_pf_miss.load(std::memory_order_relaxed),
+                  pf_built = st_pf_built.load(std::memory_order_relaxed), pf_drop = pf_dropped.load(std::memory_order_relaxed);
     if (++timed % 240 == 0) {
         logf("vk: parallel replay, a command buffer: dry pass %.2f ms, segments %.2f ms (%.1f of them), lock taken %.0f "
-             "times, waited for %.2f ms (all threads); %lld short ones recorded here", dry_ms / 240, seg_ms / 240,
-             segs_n / 240, locks_n / 240, wait_ms / 240, (long long)shorts);
+             "times, waited for %.2f ms (all threads); %lld short ones recorded here%s", dry_ms / 240, seg_ms / 240,
+             segs_n / 240, locks_n / 240, wait_ms / 240, (long long)shorts,
+             desc_prefetch_on() ? "" : " (descriptor prefetch off: RX_VK_DESC_PREFETCH)");
+        if (desc_prefetch_on())
+            logf("vk: descriptor prefetch: %lld overlays served, %lld built by the record (of %lld lookups a "
+                 "window); the helper published %lld, %lld stretches queued ahead were dropped",
+                 pf_hit - pf_hit0, pf_miss - pf_miss0, pf_hit + pf_miss - pf_hit0 - pf_miss0, pf_built - pf_built0,
+                 pf_drop - pf_dropped0);
         dry_ms = seg_ms = segs_n = wait_ms = locks_n = 0;
         shorts = 0;
+        pf_hit0 = pf_hit, pf_miss0 = pf_miss, pf_built0 = pf_built, pf_dropped0 = pf_drop;
     }
     // what follows, after them all (the uniform updates are written to guest memory at the submission's end)
     texture_set_segment(++seq);
