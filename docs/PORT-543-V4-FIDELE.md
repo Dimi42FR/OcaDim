@@ -65,6 +65,32 @@ points — les ranges UB liés sont dans l'état des bindings aux par points).
   memory_read_as_submitted remplacé par memcpy de la copie pour la part
   hors ub_updates ✓ (la boucle ub_updates par-dessus inchangée ✓).
 
+== CONFIRMATION DE FAISABILITÉ (2026-11-14, le code relu) ==
+LA SOURCE DES RANGES TROUVÉE: vk_draw.cpp:3315 — l'overlay UBO lit
+  s.ubo[stage][index-3] (nvn_p_bind_buf: u.addr, u.size) — LES RANGES LIÉS
+  SONT DANS L'ÉTAT NVNSTATE ✓. Et les ParPoint du dry pass portent des
+  copies de l'état (ParPoint{s, ...} vk_replay.cpp:1737) ✓ -> la collecte
+  des ranges à la suspension = parcourir les par points du dry pass du
+  reste et tirer s.ubo[*][*].addr != 0 ✓ FAISABILITÉ VERROUILLÉE.
+L'IMPLÉMENTATION PRÉCISE (la prochaine session, ~2-3 h):
+  1. À la suspension gated (run_submit's stop, sous replay_mu): le dry
+     pass du reste (from = le point d'arrêt, l'état = cur_state ✓) ->
+     les ranges: pour chaque ParPoint: s.ubo[st][i].addr != 0 ->
+     {addr, min(size, maxUniformBufferRange)} -> dédup/merge -> q.gate_ranges
+     (un global sous mutex: le signal path ne peut pas toucher qruns).
+  2. Au signal (event_signal_queued, le ring match ✓): pour chaque range
+     tenu: la copie (host->guest_base + addr, n octets) -> gate_held_copies
+     (le global sous le même mutex).
+  3. Dans ub_overlay (vk_replay.cpp:1083): AVANT memory_read_as_submitted:
+     le lookup (addr, n) dans gate_held_copies (la couverture: n_held >= n) ->
+     la base = memcpy des bytes tenus (au lieu de la capture) -> la boucle
+     ub_updates inchangée par-dessus ✓.
+  4. Le cycle de vie: gate_held_copies consommé à la fin de la reprise
+     gated (les ranges non couverts: le chemin actuel ✓).
+  5. Le coût: le dry pass du reste par stop gated (2-5 ms?) — seulement
+     sous la gate (off par défaut) et pour les stops gated.
+
+
 == L'ORDRE DES TESTS ==
 1. La gate v4 au stop (les ranges collectés) + au signal (les copies) +
    à la reprise (les overlays tenus) — async + parallel 4/32 + late_fix.
