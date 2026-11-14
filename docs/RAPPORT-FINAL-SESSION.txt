@@ -1,0 +1,68 @@
+SESSION 2026-11-14 - RAPPORT FINAL (5800X + RX 9070 XT + 32 Go, Windows)
+=========================================================================
+
+== LA CONFIG FINALE VALIDÉE (longshot_env.txt du dossier de jeu) ==
+  RX_VK_PARALLEL=3
+  RX_VK_PARALLEL_SEG=64
+  RX_VK_LATE_FIX_PARALLEL=1
++ INI: fullscreen=1, frame_rate_cap=5 (240), descriptor_reuse=1,
+  sampler_cache=1, quality_preset=6, memory_budget=5, vram_budget=7
+
+== LA BUILD ==
+Longshot main @ 5e072fc8 + PR #288 fusionné (head 5ce3b68a) @ 4512617a
++ 3 commits locaux: a536f5a5 (workers BELOW_NORMAL + LATE_FIX_PARALLEL),
+  48680c28 (gate #543 off par défaut + fixes de tests #288),
+  55717747 (le hint d'engagement parallel)
+519 checks du projet au vert. Packaging via make_game --update uniquement.
+
+== LES MESURES (A/B, scènes lourdes ~2500-2900 draws) ==
+
+| config                    | replay lourd (méd) | fps lourd |
+|---------------------------|--------------------|-----------|
+| Hookshot v2.1.0 (serial)  | 18,8-20,8 ms       | 40-42     |
+| Longshot main (serial)    | ~15,0 ms           | 44-51     |
+| + #288 (serial)           | 14,7-15,6 ms       | 44-51     |
+| + PARALLEL 3/32           | 8,1-9,8 ms         | 47-56     |
+| + PARALLEL 2/32           | 11,4 ms            | 47,2      |
+| + PARALLEL 3/64 (final)   | 8,72-8,93 ms       | 48,6-49,0 (max 61,5) |
+
+REPLAY TOTAL: Hookshot 20,8 ms -> 8,9 ms = **-57 %**
+FPS: 40-42 -> 49 méd (max 61,5) en scènes lourdes.
+Plafond replay: ~67 fps -> ~110 fps théoriques.
+
+== LES DÉCOUVERTES CLÉS ==
+1. OoT: les command buffers sont trop petits pour le SEG défaut (160):
+   il faut SEG=32-64, sinon le parallel ne s'engage JAMAIS (le hint
+   55717747 le dit maintenant au log).
+2. Le hang intermittent au démarrage (2/2 à froid ce jour-là, 0/6 depuis):
+   suspect = late_fix désactivé dès le départ avec PARALLEL posé -> le
+   wait bloquant des late pages armé. RX_VK_LATE_FIX_PARALLEL=1 le
+   neutralise: session longue SANS artefact (validé visuellement).
+3. L'ordonnancement des événements est hermétique sous parallel:
+   "waits met 53748, not met 0" - l'ordre du jeu respecté à 100 %.
+4. L'arbitrage cœurs: 3 workers au-dessus de la normale affamaient les
+   threads du jeu (6,9 ms/frame d'attente de vcore, HOS_CHAIN). Les
+   workers en BELOW_NORMAL (a536f5a5) + SEG=64 = fluidité + vitesse.
+5. La fenêtre de capture au signal CPU (NX2navi #543): le port v1 a
+   régressé (textures disparues: le resume_capture de Longshot n'est pas
+   redondant). Leçon: ne pas retirer les mécanismes existants; le port
+   v2 devra cohabiter (PORT-543-DESIGN.md).
+
+== POUR L'ÉQUIPE (à poster) ==
+- PR #288: les mesures (le tableau ci-dessus, colonnes main/#288/fusion)
+  + le bug test_recorder_own_idle (gpu_wait_stats.h non copié)
+- L'étude parallel: SEG=32-64 requis pour OoT; LATE_FIX_PARALLEL=1 sain
+  en jeu (0 artefact, waits not met 0) - à revalider sur NVIDIA/Intel;
+  le hang intermittent (suspect documenté, non reproduit depuis)
+- Le hint d'engagement (55717747): utile à tous les jeux à petits buffers
+
+== POUR LA MACHINE 16 Go (R5 5600 + 6750 XT) ==
+PROFIL-5600-6750XT.txt: memory_budget=4, vram_budget=5,
+RX_VK_PCACHE_LOAD=0, PARALLEL=3 + SEG=64 à valider sur ce tier.
+
+== LES CHANTIERS RESTANTS ==
+- La chasse du hang si il reparait (l'instrumentation est prête, par env
+  réel, pas par longshot_env.txt)
+- Le port #543 v2 (cohabitation avec resume_capture)
+- L'eviction VRAM NX2navi (#888/#805), le commit-limit (#871)
+- La surveillance longue session: la fuite VRAM (#993)

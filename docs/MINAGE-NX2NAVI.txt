@@ -1,0 +1,78 @@
+MINAGE NX2navi (concurrent, meme jeu) - idees applicables a notre build Longshot
+================================================================================
+(source: github.com/tangerineturtle1/NX2navi, PRs ouvertes, lu le 14/11/2026)
+
+1) PR #543 - replay sur son propre thread AVEC ordre des evenements conserve
+   Leur probleme = le notre exactement: Ocarina empile les submissions des
+   queues de travail AVANT que le main ne signale depuis le CPU que les donnees
+   de la frame sont ecrites; elles attendent des evenements que la queue
+   principale signale apres sa propre attente. Replay async -> ordre faux ->
+   frames ou la geo eclairée est noire / soleil manquant (9 noires en 6 runs).
+   LEUR SOLUTION (3 pieces):
+   a. L'ordre des evenements tourne aussi sur le thread de replay
+      (NX2NAVI_EVENT_ORDER_ASYNC): une submission arretée a un wait garde la
+      copie uniform de SON appel submit; ce qu'une frame a laissé retenu part
+      dans une submission a part avant le present.
+   b. Une submission avec wait empilee avant le signal CPU prend sa copie
+      uniform A CE SIGNAL (vk_usnap_take_later/take_open) et le replay la
+      retient jusqu'au signal et ses copies (replay_gate). Elle part aussi
+      tout de suite si un thread du jeu attend du travail pas encore soumis,
+      et au bout de 50 ms au plus tard.
+   c. Une ecriture GPU en vol ne prend que SES octets de la copie uniform,
+      pas toute la region fusionnee (adopt/drop_in).
+   LEURS MESURES: 0 frame noire (contre 3/3 runs sans le fix), fps 92-93
+   contre 95.6 synchrone / 103 async casse -> le gate coute ~3-4% mais rend
+   l'async CORRECT. Et l'async de base donnait 103 fps contre 95.6 synchrone
+   (+7-8%) chez eux (RTX ?).
+   => PISTE POUR LONGSHOT: RX_VK_ASYNC=1 + le meme trio de mecanismes sur
+   vk_replay.cpp (submit_job honore deja les waits par queue - la piece
+   manquante est la copie uniform au signal CPU + le gate). C'est la voie
+   vers le replay hors thread critique SANS le parallel replay et son
+   deadlock.
+
+2) PR #392 + #860 - write-back par difference + merges sur un thread de
+   completion + tail lazy par fence -> leur version de notre chantier
+   "memoire hors chemin critique". A lire quand la nôtre sera mesuree.
+
+3) PR #850 - un anneau de marks de texture pool partages par shader:
+   draw de l'eau du fossé du chateau 7.4 -> 0.3 ms, GPU de la frame -35%.
+   Hotspot localise: a verifier chez nous (le fossé autour du chateau,
+   l'eau qui tourne).
+
+4) PR #888 - VRAM sous budget a detail texture plein: Hyrule Field x1.5-2
+   fps sur carte 6 Go. Pour les GTX 1060/1070 et la machine 12 Go.
+
+5) PR #805 - evict les textures rendues relachees quand la VRAM approche
+   du budget, meme recemment utilisees. Meme theme.
+
+6) PR #637/#638 - prebuilds compute paralleles + sauvegarde du cache
+   pipelines pendant les builds NVIDIA en fond.
+
+7) PR #868 - --warm-shaders: warm incomplet du cache pilote, marque fait
+   apres une preparation complete. Contre le stutter des premieres visites.
+
+8) Issue #906 chez eux: fuite VRAM en longues sessions -> 12 fps apres 1h
+   sur 12 Go. Leur version du probleme memoire n.1 de la worklist Longshot.
+
+NOTE: NX2navi = implementation independante (C, runtime/vk_exec.c vk_usnap.c
+vk_backend.c) - on PORTE les IDEES, pas le code (licences: verifier avant
+tout copiage; les idees suffisent).
+
+== PLAN DE PORTAGE #543 -> Longshot (cartographie fichier:ligne) ==
+- Ce qui existe: Job queue (vk_replay.cpp:5095-5123), submit_job honore les
+  waits par queue (regle design.md n.1), captures prises au submit
+  (memory_capture_submit, :5306) - rien n'est lu de la memoire vive.
+- async off pour: "OoT rewrites double-buffered data right after a submit
+  with no fence" (vk_replay.cpp:5126) = le bug #543 de NX2navi.
+- A creer:
+  1. flag deferred dans Job pour les submissions arretees a un wait sur un
+     event que la queue principale signale plus tard;
+  2. capture differee: memory_capture_submit pour ces submissions a
+     l'arrivee du JOB_EVENT_SIGNAL au lieu du submit;
+  3. gate dans run_submit (:2503): partir au signal, ou tout de suite si un
+     thread du jeu attend, ou au bout de 50 ms;
+  4. interrupteurs: RX_VK_EVENT_ORDER_ASYNC + RX_VK_EVENT_GATE (meme
+     decoupage qu'eux, off par defaut).
+- Gain esperé d'apres leurs mesures: async correct = base pour sortir le
+  replay du thread critique (+7-8% chez eux), sans le parallel replay et
+  son deadlock de demarrage.

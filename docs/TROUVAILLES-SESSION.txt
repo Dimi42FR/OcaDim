@@ -1,0 +1,62 @@
+TROUVAILLES SESSION 2026-11-14 (5800X + RX 9070 XT, Windows) - v2
+==================================================================
+
+== A/B : build fusionnee main + PR 288 (Hookshot speed-ups restores) ==
+
+Commits: main @ 5e072fc8, fusion @ 4512617a (PR 288 head 5ce3b68a)
+Hardware: Ryzen 7 5800X (8c/16t), Radeon RX 9070 XT (Vulkan 1.4, driver 0x8001a0),
+32 Go RAM, Windows. Scene: zone exterieur chargee, ~2890 draws, uncapped (cap 240),
+fullscreen 2560x1440, generation de frames OFF, upscaling off.
+
+| metrique        | Hookshot v2.1.0 | main @ 5e072fc8 | fusion @ 4512617a |
+|-----------------|-----------------|-----------------|-------------------|
+| fps             | 40-42           | 43-48 (~2406 draws) | 44-51 (~2890 draws) |
+| replay submit   | 18.8-20.8 ms    | 15.7-16.3 ms    | 14.7-15.0 ms      |
+| descriptors     | 3.0 ms          | 4.2-4.4 ms      | 2.4-2.5 ms        |
+| texture lookups | 0.9 ms          | 0.8-0.9 ms      | 0.1-0.6 ms        |
+| memory sync     | 4.3-5.6 ms      | 1.17 ms         | 0.40-0.55 ms      |
+| GPU/frame       | 14.4 ms         | 11.4 ms         | 11.3 ms           |
+
+Lignes de log (fusion, zone chargee):
+"vk: 12360 presents, 50.1 fps; a frame: 2896 draws (0 skipped), ... GPU-bound
+wait 0.1 ms"
+"vk: a frame's replay time (ms): submit 14.78, present 0.13, draw 8.72,
+descriptors 2.52, ... memory sync 0.40, queue submit 0.90, slot wait 0.13"
+
+Note de methode: sessions de jeu reelles, pas encore entrelacees (2 runs par
+brut prevus); les chiffres viennent des lignes "presents" et "replay time" de
+longshot_log.txt, prises dans les memes zones.
+
+BUG TROUVE DANS LE PR 288: tests/test_recorder_own_idle.py ne copie pas
+gpu_wait_stats.h dans son build de test (vk_work.h l'inclut depuis les timed
+waits) -> echec de compilation. Fix local: ajouter la ligne
+"(d / "gpu_wait_stats.h").write_text(...)" comme dans test_recorder_sync.py.
+
+== DEADLOCK RX_VK_PARALLEL (course intermittente au demarrage) ==
+
+- 2 blocages sur 3 lancements le jour ou le cache pipelines venait d'etre
+  prepare (fichiers de 7.5 Go jamais lus: cache OS a froid); ecran
+  "loading the shader cache", process a CPU 0, log fige aux premiers builds
+  de programmes (apres "one build of a program goes to the driver at a time
+  (AMD)" ou aux vertex formats).
+- Tous les lancements suivants (5+), cache OS chaud: AUCUN blocage, le jeu a
+  joue jusqu'au bout avec parallel actif (2885-2902 draws, 43-48 fps).
+- Hypothese: la course n'existe que pendant la lecture lente a froid des
+  caches (pipeline 1.1 Go + programmes 7.5 Go); le chemin parallele
+  s'engage pendant ce chargement.
+- RX_VK_HANG_DUMP=<fichier> n'a rien produit: le watchdog demarre au premier
+  present (vk_hangdump.cpp:125) et le blocage est avant/at; HOS_SAMPLE_ALL +
+  HOS_CHAIN poses dans longshot_env.txt n'ont rien ecrit non plus (hos_prof
+  start lu a mkw_glue.c:670, probablement avant l'application du fichier env).
+- Plan: reproduire a froid (apres reboot) avec les variables passees par
+  l'environnement reel du lanceur, puis chain.py/prof.py sur les stacks.
+- Piste de fix: n'engager les segments paralleles qu'apres la fin du
+  chargement des caches de demarrage.
+
+== TESTS A/B RESTANTS (interrupteurs existants, env ou menu) ==
+- RX_VK_PRESENT_THREAD=1 (design.md section 12)
+- RX_VK_BATCH=1 (pire sur Hookshot v2.1.0: memory sync x2; a retester sur la
+  fusionnee ou late_fix gere les late pages autrement)
+- RX_VK_RECORDER=defer (le recorder a change avec le PR)
+- Sampler cache (menu Debug) / descriptor_reuse deja actif
+- Generation de frames 3x-6x pour le jeu quotidien
