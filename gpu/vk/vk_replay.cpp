@@ -1739,7 +1739,11 @@ void replay(VkCommandBuffer& cmd, NvnState& s, const uint8_t* p, const uint8_t* 
             if (dry) {
                 const bool compute = h.op == NOP_DISPATCH || h.op == NOP_DISPATCH_INDIRECT;
                 if (s.render_enabled && (compute || !s.raster_discard)) dry_mark_written(s, compute, dry_work == 0);
-                if (++dry_work % 64 == 0) par_points.push_back({p + h.size, s, ub_updates.size(), par_conds.size(), dry_work});
+                // (longshot) the point interval copies the whole state: coarser points make the dry pass cheaper
+                // (fewer state copies) at coarser segment boundaries. RX_VK_PAR_POINT=<n> (64 measured)
+                static const int every = getenv("RX_VK_PAR_POINT") && atoi(getenv("RX_VK_PAR_POINT")) > 0
+                                             ? atoi(getenv("RX_VK_PAR_POINT")) : 64;
+                if (++dry_work % every == 0) par_points.push_back({p + h.size, s, ub_updates.size(), par_conds.size(), dry_work});
             } else if (!worker) {
                 maybe_split(cmd);
             }
