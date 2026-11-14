@@ -1769,6 +1769,26 @@ void copy_pairs(const CopyPair* pairs, int64_t n) {
 std::unique_ptr<Capture> capture_make();
 void shadow_free(Pool& p);
 void shadow_forget(Pool& p, uint64_t at, uint64_t len);   // (the write-back's diff, below: a range its shadow no longer knows)
+// (longshot, the #543 port v2) RX_VK_EVENT_GATE=1: the capture at the frame's CPU signal. Under RX_VK_ASYNC=1 a submission
+// stopped at a wait resumes after the signal was processed, and the capture it then takes holds the game's next-frame
+// rewrites of the pages the frame reads: single frames with the scene's sunlight missing or lit geometry black. The gate:
+// at the signal (event_signal_queued, the signalling thread, in the window between the frame's writes and the game's
+// next-frame rewrites) the capture is taken and its pages held here; the gated resume's capture excludes them (their
+// stamps stay at the signal capture: the frame's reads take its bytes) and re-marks them, so the submissions that submit
+// after the rewrite capture them. The resume capture keeps everything else. v1 (the resume capture skipped) lost the
+// textures streamed between the signal and the resume: both captures now coexist. RX_VK_EVENT_GATE=0: as before.
+std::mutex gate_cap_mu;
+std::vector<uint32_t> gate_pages;   // (the held signal capture's pages, sorted)
+bool gate_pages_held = false;       // (a signal capture is held for a stopped submission)
+bool gate_filter_on() {   // (the capture_make filter runs only while a signal capture is held)
+    std::lock_guard lk(gate_cap_mu);
+    return gate_pages_held;
+}
+bool gate_page_held(uint32_t page) {   // (gate_cap_mu held; gate_pages sorted)
+    return std::binary_search(gate_pages.begin(), gate_pages.end(), page);
+}
+void memory_capture_gate();
+bool memory_capture_now_gated(uint64_t value, uint64_t completed);
 void memory_capture_submit() {
     std::unique_ptr<Capture> c = capture_make();
     if (!c) return;
@@ -1855,6 +1875,22 @@ std::unique_ptr<Capture> capture_make() {
         }
         if (v && cap_wait == 2) c->late_value = v;
         else if (v) vk_timeline_wait(v);
+    }
+    if (n > 0 && gate_filter_on()) {   // (the #543 v2 gate: the pages the signal capture holds keep its bytes — the frame's reads take them —
+        int64_t w = 0;                 // and the game's next-frame rewrites of them are re-marked, for the submissions that submit after)
+        for (int64_t i = 0; i < n; i++) {
+            std::lock_guard lk(gate_cap_mu);
+            if (gate_pages_held && gate_page_held(pages[i])) {
+                host->mark_written((const uint8_t*)host->guest_base() + ((uint64_t)pages[i] << kPageShift), 4096);
+                continue;
+            }
+            pages[w++] = pages[i];
+        }
+        n = w;
+        if (!n) {
+            host->free_pages(pages);
+            return nullptr;   // (everything this collect held, the signal capture holds: the gated resume's reads take it whole)
+        }
     }
     if (n > 0) shadow_written(pages, n);
     if (n > 0) {
@@ -2725,6 +2761,54 @@ bool memory_take_capture(uint64_t value, uint64_t completed) {
 bool memory_capture_now(uint64_t value, uint64_t completed) {
     if (completed > mem_completed) mem_completed = completed;
     std::unique_ptr<Capture> c = capture_make();
+    return c && take_capture(std::move(c), value, completed);
+}
+
+// (longshot, the #543 port v2) RX_VK_EVENT_GATE=1: the gate's three pieces, beside the flows above:
+// - memory_capture_gate, on the signalling thread (event_signal_queued): the capture at the frame's CPU signal —
+//   the window between the frame's writes and the game's next-frame rewrites — made and held aside (not in the
+//   `captures` flow: under async the replay drains that flow behind the game, and the held capture must be taken
+//   before the gated resume's reads, not whenever the drain reaches it);
+// - memory_take_capture_gated, at the gated resume: the held capture's take — its pages stamped and their entries
+//   set, so the frame's reads (cap entry == the page's stamp) take its bytes;
+// - memory_capture_now_gated, right after: the resume's own capture, made with the held pages excluded (their
+//   stamps stay at the held capture) and re-marked (the submissions that submit after the rewrite recapture them).
+//   v1 skipped the resume's capture and the textures streamed between the signal and the resume vanished: both
+//   captures now coexist. The held capture's take also re-stamps the held pages, so the reads match it whole.
+std::unique_ptr<Capture> gate_capture;   // (the signal capture, held aside: gate_cap_mu)
+bool memory_capture_gate() {
+    std::unique_ptr<Capture> c = capture_make();
+    if (!c) return false;
+    {
+        std::lock_guard lk(gate_cap_mu);
+        if (gate_pages_held) return true;   // (one held capture per signal cycle: this frame's window is already held)
+        gate_pages.assign(c->copied.begin(), c->copied.end());
+        std::sort(gate_pages.begin(), gate_pages.end());
+        gate_pages_held = true;
+        gate_capture = std::move(c);
+    }
+    return true;
+}
+bool memory_take_capture_gated(uint64_t value, uint64_t completed) {
+    if (completed > mem_completed) mem_completed = completed;
+    if (!capture_on()) return false;
+    std::unique_ptr<Capture> c;
+    {
+        std::lock_guard lk(gate_cap_mu);
+        if (!gate_capture) return false;
+        c = std::move(gate_capture);
+    }
+    return take_capture(std::move(c), value, completed);   // (its pages stamped: the frame's reads take its bytes)
+}
+bool memory_capture_now_gated(uint64_t value, uint64_t completed) {
+    if (completed > mem_completed) mem_completed = completed;
+    std::unique_ptr<Capture> c = capture_make();   // (the filter inside: the held pages excluded and re-marked)
+    {
+        std::lock_guard lk(gate_cap_mu);
+        gate_pages_held = false;   // (the stop is answered: the held pages' stamps stay at the signal capture)
+        gate_pages.clear();
+        gate_capture.reset();
+    }
     return c && take_capture(std::move(c), value, completed);
 }
 

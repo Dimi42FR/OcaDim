@@ -265,6 +265,14 @@ void memory_capture_submit();
 bool memory_take_capture(uint64_t value, uint64_t completed);
 int64_t memory_late_wait_ns();   // (longshot: RX_VK_FRAME_TRACE's late_wait_ms)
 bool memory_capture_now(uint64_t value, uint64_t completed);   // (longshot: made and taken at once)
+// (longshot, the #543 port v2) RX_VK_EVENT_GATE=1: under RX_VK_ASYNC=1 a submission stopped at a wait resumes after
+// the signal was processed, and its reads took the capture made at its submit — the frame before the game's next-frame
+// rewrites. The gate takes the capture AT the frame's CPU signal (the signalling thread, the window between the frame's
+// writes and the rewrites), holds it aside, and the gated resume takes it (its stamps) plus a capture that excludes its
+// pages (the frame's reads take the signal capture's bytes; the submissions after the rewrite recapture them).
+bool memory_capture_gate();   // (the signalling thread: made and held aside; false: nothing to capture)
+bool memory_take_capture_gated(uint64_t value, uint64_t completed);   // (the held capture: stamps and entries)
+bool memory_capture_now_gated(uint64_t value, uint64_t completed);   // (the resume's capture, the held pages excluded)
 /// The submission the replay records next (bindings note it: a pool's mirror is in use until it is done)
 void memory_recording_value(uint64_t value, uint64_t completed);
 // (longshot) The recording being made, as vk_replay.cpp numbers them (Recording::part), and the newest of them in which

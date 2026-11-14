@@ -2619,23 +2619,27 @@ void resume_queue(uint64_t queue, bool forced) {
             // exposure of the frame before, for a frame. A capture now, for what follows the wait. RX_VK_RESUME_CAPTURE=0: none
             static const bool resume_capture = !getenv("RX_VK_RESUME_CAPTURE") || atoi(getenv("RX_VK_RESUME_CAPTURE")) != 0;
             const uint64_t wgpu = wait_at(q.p).gpu;
-            bool signal_captured = false;
+            bool gate_captured = false;
             if (gate_on())
                 for (int i = 0; i < kGateWaitEvents; i++)
                     if (gate_wait_gpu[i].load(std::memory_order_acquire) == wgpu) {
                         gate_wait_gpu[i].store(0, std::memory_order_release);   // (this stop is answered)
-                        if (gate_signal_cap_gpu.load(std::memory_order_acquire) == wgpu)
-                            signal_captured = gate_signal_cap_gpu.exchange(0, std::memory_order_acq_rel) == wgpu;
+                        gate_captured = true;
                     }
             bool cpu_event = false;
-            if (!signal_captured && resume_capture && !forced) {
+            if (!gate_captured && resume_capture && !forced) {
                 std::lock_guard ek(ev_cpu_mu);
                 cpu_event = cpu_events.count(wgpu) != 0;
             }
-            if (cpu_event) {
+            if (gate_captured || cpu_event) {
                 std::lock_guard lk(replay_mu);
                 if (rec_cur) finish_recording(burst_open ? burst_value : q.value);   // (its mirrors synced again after)
-                memory_capture_now(q.value, completed());
+                if (gate_captured) {
+                    memory_take_capture_gated(q.value, completed());   // (the signal capture: its pages stamped, the frame's reads take its bytes)
+                    memory_capture_now_gated(q.value, completed());    // (the resume's: the held pages excluded and re-marked, the rest)
+                } else {
+                    memory_capture_now(q.value, completed());
+                }
                 st_resume_captures++;
             }
             q.waiting = false;
@@ -5481,9 +5485,7 @@ void event_signal_queued(uint64_t gpu, uint32_t value) {
                      // rewrites: a stopped submission waits for this event, and its reads take the capture taken here)
         for (int i = 0; i < kGateWaitEvents; i++)
             if (gate_wait_gpu[i].load(std::memory_order_acquire) == gpu) {
-                std::lock_guard order(sync_order_mu);   // (the captures stay ordered with the submits')
-                memory_capture_submit();
-                gate_signal_cap_gpu.store(gpu, std::memory_order_release);
+                memory_capture_gate();
                 break;
             }
     j.ev_gpu = gpu, j.ev_value = value;
