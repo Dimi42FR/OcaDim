@@ -60,6 +60,9 @@ bool memory_read_as_submitted(uint64_t addr, void* dst, uint64_t n) {
     for (uint64_t i = 0; i < n; i++) bytes[i] = (uint8_t)((addr + i) >> 9);
     return true;
 }
+// (the descriptor prefetch's negatives: stubbed off, the walk the fixture exercises is ub_read's own)
+constexpr uint64_t kPfMaxBytes = 16384;
+bool pf_neg_lookup(uint64_t, uint64_t, size_t) { return false; }
 '''
     fixture += cache + "\n" + block(source, "bool ub_read(")
     fixture += r'''

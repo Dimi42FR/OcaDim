@@ -1012,6 +1012,61 @@ uint64_t pf_asked(uint64_t addr) {
     const uint64_t cur = pf_learned[pf_learn_index(addr)].load(std::memory_order_relaxed);
     return (cur >> 24) == addr ? cur & 0xFFFFFFull : 0;
 }
+// ---- the negatives: "no update of this place covers the bound's head" — the record's ub_overlay and ub_read both
+// decide that by walking the update list for every descriptor (some 2600 of them a buffer); a negative entry lets
+// them skip the walk. Sound because the record's ask is never longer than the helper's take (the learned ask), and
+// an update covering the ask covers the take's head: the helper's no-any says the record's any is false too. A
+// dropped stretch or an evicted entry only costs the walk, as today ----
+struct PfNeg {
+    std::atomic<uint64_t> seq{0};    // (even: the entry stands; odd: it is being rewritten)
+    uint64_t addr, take, lim, view, rec;
+};
+constexpr size_t kPfNeg = 4096;
+alignas(64) PfNeg pf_negs[kPfNeg];
+size_t pf_neg_index(uint64_t addr, uint64_t lim) {
+    uint64_t x = addr * 0xD6E8FEB86659FD93ull ^ lim;
+    x ^= x >> 30, x *= 0xBF58476D1CE4E5B9ull, x ^= x >> 27, x *= 0x94D049BB133111EBull, x ^= x >> 31;
+    return (size_t)x & (kPfNeg - 1);
+}
+PfNeg* pf_neg_stored(uint64_t addr, uint64_t take, uint64_t lim, uint64_t view, uint64_t rec) {
+    const size_t i0 = pf_neg_index(addr, lim);
+    for (size_t probe = 0; probe < 4; probe++) {
+        PfNeg& s = pf_negs[(i0 + probe) & (kPfNeg - 1)];
+        for (int attempt = 0; attempt < 2; attempt++) {
+            const uint64_t v1 = s.seq.load(std::memory_order_acquire);
+            if (v1 & 1) continue;
+            if (s.addr == addr && s.take >= take && s.lim == lim && s.view == view && s.rec == rec) return &s;
+            break;
+        }
+    }
+    return nullptr;
+}
+void pf_neg_publish(uint64_t addr, uint64_t take, uint64_t lim, uint64_t view, uint64_t rec) {
+    PfNeg& s = pf_negs[pf_neg_index(addr, lim)];
+    const uint64_t v = s.seq.load(std::memory_order_relaxed);
+    s.seq.store(v + 1, std::memory_order_relaxed);
+    s.addr = addr, s.take = take, s.lim = lim, s.view = view, s.rec = rec;
+    s.seq.store(v + 2, std::memory_order_release);
+}
+bool pf_active();   // (below: RX_VK_DESC_PREFETCH on and RX_VK_UB_CUR_ONLY off)
+bool pf_neg_lookup(uint64_t addr, uint64_t n, size_t lim) {
+    if (!pf_active()) return false;
+    const uint64_t view = memory_capture_view(), rec = rec_value_now;
+    const size_t i0 = pf_neg_index(addr, lim);
+    for (size_t probe = 0; probe < 4; probe++) {
+        PfNeg& s = pf_negs[(i0 + probe) & (kPfNeg - 1)];
+        for (int attempt = 0; attempt < 2; attempt++) {
+            const uint64_t v1 = s.seq.load(std::memory_order_acquire);
+            if (v1 & 1) continue;
+            if (s.addr == addr && s.take >= n && s.lim == (uint64_t)lim && s.view == view && s.rec == rec) {
+                if (s.seq.load(std::memory_order_relaxed) == v1) return true;
+                continue;
+            }
+            break;
+        }
+    }
+    return false;
+}
 bool desc_prefetch_on() {
     static const bool on = getenv("RX_VK_DESC_PREFETCH") && atoi(getenv("RX_VK_DESC_PREFETCH")) != 0;
     return on;
@@ -1106,7 +1161,10 @@ void pf_prefetch(const NvnState& s, size_t lim, uint64_t view, uint64_t rec, con
             if (!any)
                 for (const PfWalked& w : walked)
                     if (w.dst < u.addr + take && u.addr < w.dst + w.size) { any = true; break; }
-            if (!any) continue;
+            if (!any) {   // (the negative: the record's walks for this bound, this place, are done by this stamp)
+                if (!pf_neg_stored(u.addr, take, lim, view, rec)) pf_neg_publish(u.addr, take, lim, view, rec);
+                continue;
+            }
             scratch.resize((size_t)take);
             if (!memory_read_as_submitted(u.addr, scratch.data(), take)) std::memset(scratch.data(), 0, (size_t)take);
             for (const PfUb& w : ubs) {
@@ -1361,6 +1419,9 @@ uint64_t ub_overlay(uint64_t addr, uint64_t n, uint8_t* base, const std::functio
     // the capture's pages with the updates before it over them, as the build below would resolve them. A miss (the
     // helper lagged, the range dropped, a rewrite under the copy) builds locally, exactly as before
     if (!cur_only && n <= kPfMaxBytes) {
+        // (longshot, the step 3's P3/P2b) the helper's negatives first: no update of this place covers the ask, so
+        // no overlay — the gap checks below would walk the list to say the same
+        if (pf_neg_lookup(addr, n, lim)) return UINT64_MAX;
         pf_got.resize((size_t)n);
         if (pf_ub_lookup(addr, n, lim, pf_got.data())) {
             const uint64_t at = alloc(n);
@@ -1417,9 +1478,12 @@ bool ub_read(uint64_t addr, void* dst, uint64_t n) {
     }
     const uint32_t page = n == 4 ? memory_page_stamp(addr) : 0;
     if (!memory_read_as_submitted(addr, dst, n)) return false;
+    // (longshot, P2b) the helper's negative: no update of this place covers the range — the scans below would walk
+    // the list to find the same nothing
+    const bool pf_neg = n <= kPfMaxBytes && pf_neg_lookup(addr, n, lim);
     // (most words are not inside an inline update: the scan that finds that is kept for the gap, and the next words
     // in the gap do not walk the list. A word kept from that gap is the capture's own bytes)
-    if (ub_gap_holds(addr, n, 0, lim) || ub_try_gap(0, lim, addr, n)) {
+    if (pf_neg || ub_gap_holds(addr, n, 0, lim) || ub_try_gap(0, lim, addr, n)) {
         if (n == 4 && page == memory_page_stamp(addr)) {
             UbWord& w = ub_words[ub_word_index(addr)];
             uint32_t v = 0;
