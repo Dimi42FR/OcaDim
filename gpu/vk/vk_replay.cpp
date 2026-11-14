@@ -1937,6 +1937,14 @@ const uint8_t* replay_handle(VkCommandBuffer& cmd, const uint8_t* h, bool may_st
     static int64_t shorts;
     if (!no_short && stream_work(h, 2 * per) < 2 * per) {
         shorts++;
+        // (longshot) the segment size's default assumes command buffers far bigger than this game's: after many
+        // short ones, one hint, so that RX_VK_PARALLEL without RX_VK_PARALLEL_SEG is not silently idle. The same
+        // walk measured this game's buffers against 160 and 32 (OoT: none of the first reached 320 work)
+        static int told;
+        if (shorts == 2000 && told++ < 2)
+            logf("vk: parallel replay: %lld command buffers were too small for segments of ~%lld draws and "
+                 "dispatches, so it has not engaged: lower RX_VK_PARALLEL_SEG (32 measured for this game)",
+                 (long long)shorts, (long long)per);
         const bool was_split = split_off;
         split_off = true;   // (the segment the dry pass would have recorded is one, and a segment is not split)
         suspend_ok = may_stop;
