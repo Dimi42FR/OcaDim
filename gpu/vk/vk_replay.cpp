@@ -966,9 +966,11 @@ std::vector<ParPoint> par_points;   // (every 64 draws and dispatches of the dry
 // and builds locally on a miss — the fallback is always the record's own path. Off by default.
 bool deferred_late();   // (below: RX_VK_DEFERRED_LATE)
 extern uint64_t rec_value_now;   // (below: the submission being recorded)
-constexpr size_t kPfQueueMax = 8;          // (stretches queued ahead: a lagged helper drops new ones, the record falls back)
-constexpr uint64_t kPfMaxBytes = 4096;     // (a uniform range longer than this is not prefetched: the record builds it)
-constexpr size_t kPfSlots = 2048;          // (published entries; 8 MiB with the 4 KiB copies)
+constexpr size_t kPfQueueMax = 16;         // (stretches queued ahead: a lagged helper drops new ones, the record falls back)
+constexpr uint64_t kPfMaxBytes = 16384;    // (how much of a bound range is published: the record's build asks the shader's
+                                           // used size of it, often far under the bound's — a bound over this is prefetched
+                                           // to this much and serves any ask inside; over it, the record builds)
+constexpr size_t kPfSlots = 512;           // (published entries; ~8 MiB with the 16 KiB copies)
 struct PfUb { uint64_t dst; std::vector<uint8_t> bytes; };          // (an update before the buffer: the item's own copies)
 struct PfWalked { uint64_t dst; const uint8_t* bytes; uint64_t size; };   // (an inline update: a span into the stream)
 struct PfItem {
@@ -984,7 +986,32 @@ std::condition_variable pf_cv;
 std::deque<PfItem> pf_queue;
 std::atomic<int64_t> pf_queued{0}, pf_drained{0}, pf_dropped{0};
 std::atomic<int64_t> st_pf_built{0}, st_pf_hit{0}, st_pf_miss{0};
+int64_t pf_st_draws, pf_st_noprog, pf_st_norange, pf_st_big, pf_st_noany;   // (the one helper thread's: why a draw published nothing)
 thread_local std::vector<uint8_t> pf_got;   // (the record's threads: a lookup's copy, sized once and kept)
+// (the asks the record made, learned for the helper: an overlay's bytes are asked again next frame at the same bound.
+// The helper publishes the largest ask each bound saw — its own bound-based guess until one is learned — so the
+// record's asks, which come from the program's tables, are served whole. A miss learns; a stale entry just misses)
+constexpr size_t kPfLearned = 2048;
+std::atomic<uint64_t> pf_learned[kPfLearned]{};   // (addr << 24 | the ask, 0: none)
+size_t pf_learn_index(uint64_t addr) {
+    uint64_t x = addr * 0x9E3779B97F4A7C15ull;
+    x ^= x >> 29, x *= 0xBF58476D1CE4E5B9ull, x ^= x >> 32;
+    return (size_t)x & (kPfLearned - 1);
+}
+void pf_learn(uint64_t addr, uint64_t n) {
+    if (!n || n > 0xFFFFFFull || addr >= (1ull << 40)) return;
+    const uint64_t pack = addr << 24 | n;
+    std::atomic<uint64_t>& s = pf_learned[pf_learn_index(addr)];
+    uint64_t cur = s.load(std::memory_order_relaxed);
+    for (;;) {
+        if (cur && (cur & 0xFFFFFFull) >= n) return;   // (the same bound's bigger ask, or another bound's: kept)
+        if (s.compare_exchange_weak(cur, pack, std::memory_order_relaxed)) return;
+    }
+}
+uint64_t pf_asked(uint64_t addr) {
+    const uint64_t cur = pf_learned[pf_learn_index(addr)].load(std::memory_order_relaxed);
+    return (cur >> 24) == addr ? cur & 0xFFFFFFull : 0;
+}
 bool desc_prefetch_on() {
     static const bool on = getenv("RX_VK_DESC_PREFETCH") && atoi(getenv("RX_VK_DESC_PREFETCH")) != 0;
     return on;
@@ -1003,15 +1030,16 @@ struct PfSlot {
     uint8_t bytes[kPfMaxBytes];
 };
 alignas(64) PfSlot pf_slots[kPfSlots];
-size_t pf_slot_index(uint64_t addr, uint64_t n, uint64_t lim) {
-    uint64_t x = addr * 0x9E3779B97F4A7C15ull ^ (n << 24) ^ lim;
+size_t pf_slot_index(uint64_t addr, uint64_t lim) {   // (n out of the hash: the record's build may ask a shorter
+    // range of the same bound than the helper published — the bucket must be the same one)
+    uint64_t x = addr * 0x9E3779B97F4A7C15ull ^ lim;
     x ^= x >> 30, x *= 0xBF58476D1CE4E5B9ull, x ^= x >> 27, x *= 0x94D049BB133111EBull, x ^= x >> 31;
     return (size_t)x & (kPfSlots - 1);
 }
 /// Whether (addr, n, lim, view, rec) stands published already: an entry of at least n bytes at addr (the record's
 /// build may ask a shorter range of the same bound: the bytes are per address, its first n serve)
 PfSlot* pf_slot_stored(uint64_t addr, uint64_t n, uint64_t lim, uint64_t view, uint64_t rec) {
-    const size_t i0 = pf_slot_index(addr, n, lim);
+    const size_t i0 = pf_slot_index(addr, lim);
     for (size_t probe = 0; probe < 4; probe++) {
         PfSlot& s = pf_slots[(i0 + probe) & (kPfSlots - 1)];
         for (int attempt = 0; attempt < 2; attempt++) {
@@ -1024,11 +1052,11 @@ PfSlot* pf_slot_stored(uint64_t addr, uint64_t n, uint64_t lim, uint64_t view, u
     return nullptr;
 }
 void pf_publish(uint64_t addr, uint64_t n, uint64_t lim, uint64_t view, uint64_t rec, const uint8_t* src) {
-    PfSlot& s = pf_slots[pf_slot_index(addr, n, lim)];
+    PfSlot& s = pf_slots[pf_slot_index(addr, lim)];
     const uint64_t v = s.seq.load(std::memory_order_relaxed);
     s.seq.store(v + 1, std::memory_order_relaxed);   // (odd: the entry is being rewritten)
     s.addr = addr, s.n = n, s.lim = lim, s.view = view, s.rec = rec;
-    std::memcpy(s.bytes, src, (size_t)n);
+    std::memcpy(s.bytes, src, (size_t)std::min<uint64_t>(n, kPfMaxBytes));
     s.seq.store(v + 2, std::memory_order_release);   // (even again: the entry stands)
 }
 /// The record's overlay copy from the published entries (P3): the bytes as of (addr, n, lim, view, rec), or false —
@@ -1036,7 +1064,7 @@ void pf_publish(uint64_t addr, uint64_t n, uint64_t lim, uint64_t view, uint64_t
 bool pf_ub_lookup(uint64_t addr, uint64_t n, size_t lim, uint8_t* dst) {
     if (!pf_active() || n > kPfMaxBytes) return false;
     const uint64_t view = memory_capture_view(), rec = rec_value_now;
-    const size_t i0 = pf_slot_index(addr, n, lim);
+    const size_t i0 = pf_slot_index(addr, lim);
     for (size_t probe = 0; probe < 4; probe++) {
         PfSlot& s = pf_slots[(i0 + probe) & (kPfSlots - 1)];
         for (int attempt = 0; attempt < 2; attempt++) {
@@ -1056,35 +1084,46 @@ bool pf_ub_lookup(uint64_t addr, uint64_t n, size_t lim, uint8_t* dst) {
 void pf_prefetch(const NvnState& s, size_t lim, uint64_t view, uint64_t rec, const std::vector<PfUb>& ubs,
                  const std::vector<PfWalked>& walked) {
     static std::vector<uint8_t> scratch;   // (the one helper thread's)
+    pf_st_draws++;
+    int64_t ranges = 0, big = 0, published_now = 0;
     for (int st = 0; st < kNvnStages; st++)
         for (int i = 0; i < 16; i++) {
             const nvn_p_bind_buf& u = s.ubo[st][i];
             if (!u.addr || !u.size) continue;
-            const uint64_t n = std::min<uint64_t>(std::max<uint64_t>(u.size, 16), dev.props.limits.maxUniformBufferRange);
-            if (n > kPfMaxBytes) continue;
-            if (pf_slot_stored(u.addr, n, lim, view, rec)) continue;
+            ranges++;
+            const uint64_t bound = std::min<uint64_t>(std::max<uint64_t>(u.size, 16), dev.props.limits.maxUniformBufferRange);
+            if (bound > kPfMaxBytes) { big++; }   // (counted: the bound is over the slots' size)
+            // (the learned ask first: the record's builds come from the program's tables, and the same bound asks
+            // the same extent every frame — the helper's guess only covers the first frames at a bound)
+            uint64_t take = std::min<uint64_t>(bound, kPfMaxBytes);
+            if (const uint64_t asked = pf_asked(u.addr)) take = std::min<uint64_t>(std::max<uint64_t>(asked, 16), kPfMaxBytes);
+            if (pf_slot_stored(u.addr, take, lim, view, rec)) continue;
             // (the record only builds an overlay when an update of this place covers the range — the same test as
             // ub_overlay's: a range no update touches is bound from the pools, nothing to prefetch)
             bool any = false;
             for (const PfUb& w : ubs)
-                if (w.dst < u.addr + n && u.addr < w.dst + w.bytes.size()) { any = true; break; }
+                if (w.dst < u.addr + take && u.addr < w.dst + w.bytes.size()) { any = true; break; }
             if (!any)
                 for (const PfWalked& w : walked)
-                    if (w.dst < u.addr + n && u.addr < w.dst + w.size) { any = true; break; }
+                    if (w.dst < u.addr + take && u.addr < w.dst + w.size) { any = true; break; }
             if (!any) continue;
-            scratch.resize((size_t)n);
-            if (!memory_read_as_submitted(u.addr, scratch.data(), n)) std::memset(scratch.data(), 0, (size_t)n);
+            scratch.resize((size_t)take);
+            if (!memory_read_as_submitted(u.addr, scratch.data(), take)) std::memset(scratch.data(), 0, (size_t)take);
             for (const PfUb& w : ubs) {
-                const uint64_t lo = std::max(u.addr, w.dst), hi = std::min(u.addr + n, w.dst + w.bytes.size());
+                const uint64_t lo = std::max(u.addr, w.dst), hi = std::min(u.addr + take, w.dst + w.bytes.size());
                 if (lo < hi) std::memcpy(scratch.data() + (lo - u.addr), w.bytes.data() + (lo - w.dst), hi - lo);
             }
             for (const PfWalked& w : walked) {
-                const uint64_t lo = std::max(u.addr, w.dst), hi = std::min(u.addr + n, w.dst + w.size);
+                const uint64_t lo = std::max(u.addr, w.dst), hi = std::min(u.addr + take, w.dst + w.size);
                 if (lo < hi) std::memcpy(scratch.data() + (lo - u.addr), w.bytes + (lo - w.dst), hi - lo);
             }
-            pf_publish(u.addr, n, lim, view, rec, scratch.data());
+            pf_publish(u.addr, take, lim, view, rec, scratch.data());
             st_pf_built.fetch_add(1, std::memory_order_relaxed);
+            published_now++;
         }
+    if (!ranges) pf_st_norange++;
+    else if (!published_now) pf_st_noany++;
+    if (big) pf_st_big++;
 }
 void pf_helper_main() {
     SetThreadDescription(GetCurrentThread(), L"mkw_vk desc prefetch");
@@ -1162,6 +1201,8 @@ void pf_helper_main() {
                 const bool compute = h.op == NOP_DISPATCH || h.op == NOP_DISPATCH_INDIRECT;
                 if (s.has_prog && s.render_enabled && (compute || !s.raster_discard))
                     pf_prefetch(s, lim, view, rec, ubs, walked);
+                else
+                    pf_st_noprog++;
             }
             p += h.size;
         }
@@ -1169,6 +1210,15 @@ void pf_helper_main() {
             ubs.clear();      // (the copies were this buffer's list: the next start item brings its own)
             walked.clear();   // (the spans were this buffer's stream: gone with it)
         }
+        static int64_t told;
+        if (++told % 240 == 0)
+            logf("vk: descriptor prefetch, the helper: %lld stretches walked (%lld queued ahead dropped), %lld draws "
+                 "in them: %lld without a program, %lld with no bound uniform range, %lld with a bound over %llu "
+                 "bytes (its head published), %lld with no update on a bound range, %lld payloads published",
+                 (long long)told, (long long)pf_dropped.load(std::memory_order_relaxed), (long long)pf_st_draws,
+                 (long long)pf_st_noprog, (long long)pf_st_norange, (long long)pf_st_big,
+                 (unsigned long long)kPfMaxBytes, (long long)pf_st_noany,
+                 (long long)st_pf_built.load(std::memory_order_relaxed));
     }
 }
 void pf_start() {
@@ -1348,6 +1398,7 @@ uint64_t ub_overlay(uint64_t addr, uint64_t n, uint8_t* base, const std::functio
         if (lo < hi) std::memcpy(p + (lo - addr), u.bytes.data() + (lo - u.dst), hi - lo);
     }
     st_ub_overlays++;
+    pf_learn(addr, n);   // (longshot, the step 3's P2b) the ask the helper publishes to match: the same bound asks again next frame
     ub_copy_keep(addr, n, base, first, lim, at, view, epoch);
     return at;
 }
