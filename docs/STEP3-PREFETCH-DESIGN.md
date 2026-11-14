@@ -54,6 +54,33 @@ P3. La consommation au record (le memcpy du payload + le fallback).
 P4. Les commands: le même pattern pour la partie cmds (les hazards/
     barriers pré-calculés) — APRÈS que P1-P3 tiennent.
 
+== P2 — LE CONTRAT AU NIVEAU DU CODE (la session copie ceci) ==
+struct PfPayload {                       // (par draw, dans l'arène du helper)
+    size_t stream_pos;                   // (l'offset du draw dans le segment — la clé)
+    uint64_t prog_key;                   // (la vérif: le programme attendu)
+    std::vector<{sampler, view, layout}> imgs;   // (la résolution copiée: 4014)
+    std::vector<uint8_t> ub_bytes;       // (les données ub_overlay résolues)
+    // + le fingerprint desc_fp copié (la vérif à la consommation)
+};
+LE HELPER (par ParPoint drainé): re-walk le segment (de pt.p à la borne
+  suivante) en reproduisant l'évolution d'état du dry pass (le MÊME ordre
+  des ops — la contrainte dure: toute divergence = les mauvaises vues), et
+  pour chaque draw: la résolution textures (texture_view_of:3965 + les
+  tables via memory_read_as_submitted = la capture ✓ stable) + les ub
+  overlays (ub_overlay:1083, la base depuis la capture ✓) — le payload
+  stocké dans l'arène, la queue à la liste des payloads finis.
+LE CONSOMMÉ (build_descriptors, au record du draw — le même stream_pos):
+  le lookup du payload fini (sous le lock du prefetch) + la VÉRIF: le
+  fingerprint (desc_fp ✓) + la capture vue (cap_view_bump ✓) + le prog
+  key — identiques: memcpy du payload (les imgs + les ub bytes) dans le
+  stream (le stream_alloc reste sur le record ✓ l'ordre préservé);
+  différent: le build local complet (le fallback ✓ la justesse garantie).
+LE HELPER: BELOW_NORMAL ✓ (le pattern de priorité validé), l'arène bornée
+  au buffer courant (la backpressure sur la queue), 1-2 helpers.
+LE TEST: les stats (les payloads servis/le fallback) dans la ligne de
+  frame + la route lourde -> les fps + le replay.
+
+
 == LES RISQUES ET LES PARADES ==
 - La justesse: le fingerprint + la vue à la consommation (le même
   mécanisme que desc_fp — éprouvé).
