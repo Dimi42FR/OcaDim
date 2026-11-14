@@ -1994,10 +1994,18 @@ int64_t memory_late_wait_ns() { return st_late_wait_ns.load(std::memory_order_re
 // stamps or snapshot yet (the first time it is found), or is late for an earlier capture whose fix is not recorded yet.
 // RX_VK_LATE_FIX=0: the wait, as before
 namespace {
+bool late_fix_parallel_on() {   // (local study) with RX_VK_PARALLEL set, late_fix stayed off from start-up, and the
+    static const int on = [] {   // blocked late-page wait (the pre-late_fix path) is our start-up hang's suspect: two hangs
+        const char* e = getenv("RX_VK_LATE_FIX_PARALLEL");   // with the caches cold, none since. RX_VK_LATE_FIX_PARALLEL=1
+        return e ? atoi(e) != 0 : false;                     // tries late_fix on anyway (the ordering says it is safe; the
+    }();                                                     // game's own flashes say whether it is)
+    return on;
+}
 bool late_fix_on() {   // (not with the parallel replay: its segments' workers record copies out of the captures in any order)
     static const bool on = [] {   // (on unless an off value: env_value_off)
         const char* e = getenv("RX_VK_LATE_FIX");
-        return (!e || !env_value_off(e)) && !(getenv("RX_VK_PARALLEL") && atoi(getenv("RX_VK_PARALLEL")) > 1);
+        const bool parallel_set = getenv("RX_VK_PARALLEL") && atoi(getenv("RX_VK_PARALLEL")) > 1;
+        return (!e || !env_value_off(e)) && (!parallel_set || late_fix_parallel_on());
     }();
     return on;
 }
