@@ -310,10 +310,20 @@ def object_store():
     return os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "longshot-objects")
 
 
+def lift_store():
+    """(nx2/lift_store.py) The translations every base and pack on this PC share, unless LONGSHOT_LIFT_STORE names another (or is
+    empty or 0: none): a new base or a first pack translates the game only when the translator, the hot list or the game
+    changed. Copies are clones where the file system has them (btrfs, XFS), full copies elsewhere"""
+    if os.name == "nt":
+        return os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "Longshot", "lifts")
+    return os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "longshot-lifts")
+
+
 def run(cmd, cwd, env=None):
     print("+ " + " ".join(cmd), flush=True)
     e = dict(os.environ, **(env or {}))
     e.setdefault("LONGSHOT_OBJ_STORE", object_store())
+    e.setdefault("LONGSHOT_LIFT_STORE", lift_store())
     subprocess.run(cmd, cwd=cwd, check=True, env=e)
 
 
@@ -323,6 +333,15 @@ def base_env(predict_s):
     RX_VK_PREDICT_S). For development only: a player's build prepares them all. 0 (the default) changes nothing. Given to the
     game's prepare only, never to make_game.py: its lift key hashes every RX_ variable"""
     return {"RX_VK_PREDICT_S": str(predict_s)} if predict_s > 0 else {}
+
+
+def renderer_profile(base_work, environ):
+    """The renderer's play profile for a pack of the renderer alone: the one make_game.py gave the base's build
+    (<base work>/longshot_vk.profdata, by the same path, so the base's objects are found again), since nx2/build.py run by
+    itself uses none and the pack's renderer would then differ from the base's by more than the change. Nothing when the base
+    had none, or when RX_VK_PGO is set (a counting pack, or another profile)"""
+    prof = os.path.join(base_work, "longshot_vk.profdata")
+    return {"RX_VK_PGO": prof} if not environ.get("RX_VK_PGO") and os.path.isfile(prof) else {}
 
 
 PREPARE_FAILED = {3: "no usable Vulkan here", 4: "the GPU driver stopped responding"}   # (make_game.py prepare_shaders' codes)
@@ -510,7 +529,8 @@ def cmd_pack(a):
     elif how == "renderer":
         link_objects(b["work"], w["renderer_work"])
         run([sys.executable, "-I", "nx2/build.py", "--standalone"], tree,
-            {"OOT_WORK": w["renderer_work"], "RX_RELEASE": "1", "RX_VK_ONLY": "1", "LONGSHOT_KEEP_BUILD_FILES": "1"})
+            dict({"OOT_WORK": w["renderer_work"], "RX_RELEASE": "1", "RX_VK_ONLY": "1", "LONGSHOT_KEEP_BUILD_FILES": "1"},
+                 **renderer_profile(b["work"], os.environ)))
         built, kinds = os.path.join(w["renderer_work"], "sa", "build"), MODULES[1:]
     else:
         built, kinds = None, ()
