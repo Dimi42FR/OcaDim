@@ -973,7 +973,9 @@ inline void cap_entry_set(uint64_t page, CapEntry e) {
     cap_table[c][page % kCapChunkPages] = e;
 }
 // (each kept capture's copy on the GPU, by its generation)
-struct CapBuf { uint64_t value; VkBuffer buffer; VmaAllocation alloc; uint64_t size; void* map; uint64_t last_use = 0; };
+struct CapBuf { uint64_t value; VkBuffer buffer; VmaAllocation alloc; uint64_t size; void* map; uint64_t last_use = 0;
+                 std::vector<uint32_t> ipages;   // (longshot, the #543 v3: the pages this capture copied, sorted, with their slots)
+                 std::vector<int32_t> islots; };  // (the submission's reads take ITS capture's bytes: memory_read_as_submitted)
 std::map<uint32_t, CapBuf> cap_bufs;
 uint64_t cap_bytes = 0;
 constexpr size_t kKeep = 24;
@@ -1349,6 +1351,25 @@ bool memory_read_as_submitted(uint64_t gpu, void* dst, uint64_t n) {
     {
         std::lock_guard lk(pools_mu);
         for (uint64_t page = guest >> kPageShift; page < (guest + n + 4095) >> kPageShift; page++) {
+            // (longshot, the #543 v3) the submission's own capture first: under RX_VK_ASYNC=1 a later submission's capture
+            // re-captures the shared pages (the game's next-frame rewrites), and the latest-entry read gave the older
+            // submission the next frames' data — single frames with the scene's sunlight missing or lit geometry black.
+            // The console's GPU reads memory as of its submission: this replay's capture (cur_cap_gen) answers first.
+            if (cur_cap_gen) {
+                auto cc = cap_bufs.find(cur_cap_gen);
+                if (cc != cap_bufs.end() && cc->second.map && !cc->second.ipages.empty()) {
+                    const auto& ip = cc->second.ipages;
+                    const auto it = std::lower_bound(ip.begin(), ip.end(), (uint32_t)page);
+                    if (it != ip.end() && *it == (uint32_t)page) {
+                        const int32_t slot = cc->second.islots[(size_t)(it - ip.begin())];
+                        const uint64_t a = std::max(page << kPageShift, guest), z = std::min((page + 1) << kPageShift, guest + n);
+                        std::memcpy((uint8_t*)dst + (a - guest), (const uint8_t*)cc->second.map + (uint64_t)slot * 4096 + (a - (page << kPageShift)), z - a);
+                        cc->second.last_use = std::max(cc->second.last_use, cur_cap_value);
+                        from++;
+                        continue;
+                    }
+                }
+            }
             const CapEntry e = cap_entry(page);
             if (!e.gen || e.gen != page_gen(page)) continue;
             auto b = cap_bufs.find(e.gen);
@@ -2714,6 +2735,17 @@ bool take_capture(std::unique_ptr<Capture> c, uint64_t value, uint64_t completed
     const auto tk1 = std::chrono::steady_clock::now();
     if (!c->copied.empty() && g && c->map) {   // (its buffer kept with the captures, for the mirror syncs)
         CapBuf b{value, c->buffer, c->alloc, c->bsize, c->map};
+        // (longshot, the #543 v3) the page->slot index, sorted: the submission's reads take ITS capture's bytes
+        // (memory_read_as_submitted), not the latest capture's — the console's GPU reads memory as of its submission
+        b.ipages.assign(c->copied.begin(), c->copied.end());
+        b.islots.assign(c->slots.begin(), c->slots.end());
+        // (copied/slots come in collect order: sort the pair together)
+        for (size_t i = 1; i < b.ipages.size(); i++) {   // (insertion sort: the pages arrive nearly sorted)
+            const uint32_t pk = b.ipages[i]; const int32_t sk = b.islots[i];
+            size_t j = i;
+            while (j > 0 && b.ipages[j - 1] > pk) { b.ipages[j] = b.ipages[j - 1]; b.islots[j] = b.islots[j - 1]; j--; }
+            b.ipages[j] = pk, b.islots[j] = sk;
+        }
         c->buffer = VK_NULL_HANDLE, c->alloc = nullptr, c->map = nullptr, c->bsize = 0;
         cap_bufs.emplace(g, b);
         cap_bytes += b.size;
