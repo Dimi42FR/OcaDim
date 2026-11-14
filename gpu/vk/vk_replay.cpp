@@ -2343,7 +2343,6 @@ double st_stopped_max_ms;
 // and the resume uses it instead of taking one of its own. RX_VK_EVENT_GATE=0: the resume's capture, as before.
 constexpr int kGateWaitEvents = 8;
 std::atomic<uint64_t> gate_wait_gpu[kGateWaitEvents]{};   // (the events stopped submissions wait for: the replay thread writes, the signal path reads)
-std::atomic<uint64_t> gate_signal_cap_gpu{0};             // (the last event whose signal took the capture; consumed by the resume)
 bool gate_on() {
     static const bool on = getenv("RX_VK_EVENT_GATE") && atoi(getenv("RX_VK_EVENT_GATE")) != 0;   // (off by default: v1 a regressé, à reprendre après analyse)
     return on;
