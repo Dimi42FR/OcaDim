@@ -1787,7 +1787,7 @@ bool gate_filter_on() {   // (the capture_make filter runs only while a signal c
 bool gate_page_held(uint32_t page) {   // (gate_cap_mu held; gate_pages sorted)
     return std::binary_search(gate_pages.begin(), gate_pages.end(), page);
 }
-void memory_capture_gate();
+bool memory_capture_gate();
 bool memory_capture_now_gated(uint64_t value, uint64_t completed);
 void memory_capture_submit() {
     std::unique_ptr<Capture> c = capture_make();
@@ -1846,7 +1846,7 @@ std::unique_ptr<Capture> capture_make() {
     captures_seen.store(true, std::memory_order_relaxed);
     const auto t_lock = std::chrono::steady_clock::now();
     uint32_t* pages = nullptr;
-    const int64_t n = mirrored.empty() || !host->collect_written_in ? 0
+    int64_t n = mirrored.empty() || !host->collect_written_in ? 0
                     : host->collect_written_in(reinterpret_cast<const uint64_t(*)[2]>(mirrored.data()), (int)mirrored.size(), &pages);
     const auto t_scan = std::chrono::steady_clock::now();
     // (longshot) A page the CPU wrote that a submission still on the GPU writes back: the copy waits for that write-back.
