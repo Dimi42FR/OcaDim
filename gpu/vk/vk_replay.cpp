@@ -2572,12 +2572,17 @@ bool run_submit(const uint64_t* handles, int n, uint64_t value, uint64_t queue, 
         q.handles.assign(handles, handles + n);
         q.cb = cb, q.p = stop, q.value = value;
         const nvn_p_wait_event w = wait_at(stop);
-        if (gate_on())   // (the signal path answers this stop with its capture: gate_wait_gpu; the replay thread is its only writer)
-            for (int i = 0; i < kGateWaitEvents && gate_wait_gpu[i].load(std::memory_order_relaxed) != w.gpu; i++)
-                if (!gate_wait_gpu[i].load(std::memory_order_relaxed)) {
-                    gate_wait_gpu[i].store(w.gpu, std::memory_order_release);
-                    break;
-                }
+        if (gate_on()) {   // (the signal path answers this stop with its capture: gate_wait_gpu; the replay thread is its only writer)
+            bool known = false;
+            for (int i = 0; i < kGateWaitEvents; i++)
+                known |= gate_wait_gpu[i].load(std::memory_order_relaxed) == w.gpu;
+            if (!known)   // (v2: dedupe by address first — v1 stored dupes and their stale slots consumed the signal's capture)
+                for (int i = 0; i < kGateWaitEvents; i++)
+                    if (!gate_wait_gpu[i].load(std::memory_order_relaxed)) {
+                        gate_wait_gpu[i].store(w.gpu, std::memory_order_release);
+                        break;
+                    }
+        }
         if (value > q.ahead_upto) {   // (longshot: its reports "visible" until they are replayed; once a submission: a later
             occ_visible_ahead(handles, n, cb, stop);   // stop in it holds back less of it)
             q.ahead_upto = value;
