@@ -22,6 +22,15 @@ namespace mkwvk {
 struct Texture {
     VkImage image = VK_NULL_HANDLE;
     VmaAllocation allocation = nullptr;
+    // (longshot, OcaDim) bumped whenever this texture's views die (the retirement, the BC reformat, the compaction's
+    // move): the views' caches stamp it at resolve and re-resolve when it moved, instead of the global destroy
+    // generation that one retirement of another texture sent everyone back through the slow path
+    std::atomic<uint64_t> view_gen{1};
+    // (longshot, OcaDim) the texture's identity: fresh at every creation, and the recycled objects' entries in the
+    // views' caches cannot match it. retired: set at its retirement, before its views die — a resolve in that window
+    // is refused, and the caches' checks read it
+    uint64_t serial = 0;
+    std::atomic<bool> retired{false};
     VkFormat format = VK_FORMAT_UNDEFINED;   // the image's own format (views may be others of its class)
     VkImageType type = VK_IMAGE_TYPE_2D;
     VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT;

@@ -4,12 +4,14 @@
 #include <vulkan/vulkan.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
 #include <iterator>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
@@ -33,6 +35,13 @@ struct Texture {
     uint64_t last_value = 0;
     VkImage image = VK_NULL_HANDLE;
     VmaAllocation allocation = nullptr;
+    // (the views' caches stamp it at resolve: bumped whenever this texture's views die; the real one is
+    // std::atomic<uint64_t>, the fixture's stand-in with the same call shape, no threads here)
+    struct ViewGen {
+        unsigned long long v = 1;
+        void fetch_add(unsigned long long, std::memory_order) { v++; }
+    } view_gen;
+    std::atomic<bool> retired{false};
     std::vector<VkDeviceMemory> sparse_chunks;
     std::unordered_map<uint64_t, VkImageView> views;
     uint64_t pool_key = 0;
@@ -73,14 +82,14 @@ static uint64_t key_for(uint32_t w, uint32_t h) {
     return pool_key_of(ci);
 }
 
-static Texture target(uint64_t key, VkImage image, VmaAllocation allocation, VkImageView view, uint64_t bytes) {
-    Texture t;
-    t.pool_key = key;
-    t.image = image;
-    t.allocation = allocation;
-    t.views[1] = view;
-    t.bytes = bytes;
-    t.pad = 4096;
+static std::unique_ptr<Texture> target(uint64_t key, VkImage image, VmaAllocation allocation, VkImageView view, uint64_t bytes) {
+    auto t = std::make_unique<Texture>();   // (the atomics: no copy of a Texture any more)
+    t->pool_key = key;
+    t->image = image;
+    t->allocation = allocation;
+    t->views[1] = view;
+    t->bytes = bytes;
+    t->pad = 4096;
     return t;
 }
 
@@ -92,7 +101,8 @@ int main() {
         const VkImage image = reinterpret_cast<VkImage>(static_cast<uintptr_t>(0x1000));
         const VmaAllocation allocation = reinterpret_cast<VmaAllocation>(static_cast<uintptr_t>(0x2000));
         const VkImageView view = reinterpret_cast<VkImageView>(static_cast<uintptr_t>(0x3000));
-        Texture t = target(key, image, allocation, view, 64ull << 20);
+        std::unique_ptr<Texture> tp = target(key, image, allocation, view, 64ull << 20);
+        Texture& t = *tp;
         total_bytes = t.bytes + t.pad;
         destroy_later(t);
         CHECK(dead.empty());   // (it did not wait for the next present)
