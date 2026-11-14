@@ -849,11 +849,6 @@ size_t play_file_write(VkPipelineCache cache, const std::string& path, int wait_
 size_t play_files_merge() {
     std::vector<std::string> merged;
     size_t merged_kb = 0;
-    // (longshot, issue 2579) and into one cache of their own, written as one play file in their place: each save of a session wrote a
-    // file of its own (every 32 new pipelines), and a game folder held 22 of them before the 16 that fold them into pcache
-    VkPipelineCache together = VK_NULL_HANDLE;
-    VkPipelineCacheCreateInfo tci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
-    if (vkCreatePipelineCache(dev.device, &tci, nullptr, &together) != VK_SUCCESS) together = VK_NULL_HANDLE;
     std::error_code ec;
     static const std::string pre = "longshot_vk_pipelines_play_", suf = ".bin";
     for (const auto& e : std::filesystem::directory_iterator(pcache_dir, ec)) {
@@ -877,11 +872,7 @@ size_t play_files_merge() {
             if (part.reset()) remove(path.c_str()); // Release a mapped Windows view before removing rejected bytes.
             continue;
         }
-        if (vkMergePipelineCaches(dev.device, pcache, 1, &tmp) == VK_SUCCESS) {
-            merged.push_back(path), merged_kb += part.size() >> 10;
-            if (together && vkMergePipelineCaches(dev.device, together, 1, &tmp) != VK_SUCCESS)
-                vkDestroyPipelineCache(dev.device, together, nullptr), together = VK_NULL_HANDLE;
-        }
+        if (vkMergePipelineCaches(dev.device, pcache, 1, &tmp) == VK_SUCCESS) merged.push_back(path), merged_kb += part.size() >> 10;
         vkDestroyPipelineCache(dev.device, tmp, nullptr);
     }
     if (!merged.empty()) logf("vk: pipeline cache: %zu play files merged (%zu KB)", merged.size(), merged_kb);
@@ -890,14 +881,7 @@ size_t play_files_merge() {
             for (const std::string& path : merged) remove(path.c_str());
             logf("vk: pipeline cache: the play files written into it (%zu KB)", wrote >> 10);
         }
-    } else if (merged.size() > 1 && together) {   // (into one play file, the others removed once it is in place)
-        if (const size_t wrote = play_file_write(together, play_path(play_seq + 1))) {
-            play_seq++;
-            for (const std::string& path : merged) remove(path.c_str());
-            logf("vk: pipeline cache: %zu play files put together into play file %u (%zu KB)", merged.size(), play_seq, wrote >> 10);
-        }
     }
-    if (together) vkDestroyPipelineCache(dev.device, together, nullptr);
     return merged.size();
 }
 PlayCache* play_cache_make() {
@@ -929,12 +913,6 @@ void play_cache_save(int wait_ms = -1, bool queue = true) {
     static std::mutex mu;   // (a save's thread and the window's close, pipeline_cache_close)
     std::lock_guard lk(mu);
     static std::vector<PlayCache*> unsaved;
-    // (longshot, issue 2579) the session's generations merged into one cache, written each save to one play file: the session's own
-    // number, taken at its first save. A file a save each piled up in the game folder (22 of them)
-    static VkPipelineCache session = VK_NULL_HANDLE;
-    static uint32_t session_n = 0;
-    static int64_t session_built = 0;
-    static bool unwritten = false;   // (the session's cache holds more than its file: a write that failed)
     if (PlayCache* g = play_cache.load(); g && g->built.load()) {
         unsaved.reserve(unsaved.size() + 1);   // (before it is taken away: it cannot then be lost to a failed allocation)
         if (PlayCache* next = play_cache_make()) {
@@ -956,7 +934,10 @@ void play_cache_save(int wait_ms = -1, bool queue = true) {
         }
         if (const size_t wrote = play_file_write(old->cache, play_path(play_seq + 1), wait_ms, queue)) {
             play_seq++;
-            logf("vk: pipeline cache: play file %u saved (%zu KB): %lld pipelines", play_seq, wrote >> 10, (long long)old->built.load());
+            logf("vk: pipeline cache: play file %u saved (%zu KB): %lld pipelines, %lld from the driver's cache, %lld compiled; %lld "
+                 "more from the start's cache",
+                 play_seq, wrote >> 10, (long long)old->built.load(), (long long)old->from_driver.load(), (long long)old->compiled.load(),
+                 (long long)old->from_start.load());
             predicted_use_log();
             vkDestroyPipelineCache(dev.device, old->cache, nullptr);
             old->cache = VK_NULL_HANDLE;

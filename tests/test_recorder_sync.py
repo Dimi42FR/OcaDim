@@ -160,8 +160,10 @@ def check_sources():
     bounds = dict((f, k) for k, f in re.findall(r"\b([KM])\((\w+)\)", m.group(1)))
     timed = {"vkWaitForFences": "fences", "vkWaitSemaphores": "timeline", "vkQueueWaitIdle": "idle",
              "vkDeviceWaitIdle": "idle", "vkGetQueryPoolResults": "queries"}
+    work_code = re.sub(r"//[^\n]*", "", work)   # (a macro may carry a line comment after it: vmaFreeMemory's does)
+    work_code = re.sub(r"[ \t]+$", "", work_code, flags=re.M)
     bmacros = {f: (b, call) for f, b, call in re.findall(
-        r"^#define (\w+)\(\.\.\.\) \(::mkwvk::rec::boundary\(::mkwvk::rec::B_(\w+)\), (.+)\)$", work, re.M)}
+        r"^#define (\w+)\(\.\.\.\) \(::mkwvk::rec::boundary\(::mkwvk::rec::B_(\w+)\), (.+)\)$", work_code, re.M)}
     for f, k in bounds.items():
         q = "::vkx::" if k == "K" else "::"
         mask = ", VK_QUERY_RESULT_WAIT_BIT" if f == "vkGetQueryPoolResults" else ""

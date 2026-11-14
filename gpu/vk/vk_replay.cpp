@@ -1818,7 +1818,15 @@ struct ParPool {
 ParPool par_pool;
 void par_worker_main() {
     SetThreadDescription(GetCurrentThread(), L"mkw_vk replay worker");
-    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+    // (longshot) BELOW_NORMAL, not the replay thread's ABOVE_NORMAL: the workers record segments the game
+    // is not waiting on yet (each submits in order as they finish), and at ABOVE_NORMAL they starved the
+    // game's own threads for cores: the chain analysis measured 6.9 ms a frame of the game's threads
+    // waiting for a virtual core with 3 workers (HOS_CHAIN, 5800X, Hyrule Field). BELOW_NORMAL: the
+    // workers keep the cores only when the game's threads have nothing ready, and the replay keeps its
+    // speed when it does. RX_VK_PARALLEL_PRIO=1: above normal, as before
+    const int prio = getenv("RX_VK_PARALLEL_PRIO") && atoi(getenv("RX_VK_PARALLEL_PRIO")) == 1
+                         ? THREAD_PRIORITY_ABOVE_NORMAL : THREAD_PRIORITY_BELOW_NORMAL;
+    SetThreadPriority(GetCurrentThread(), prio);
     for (;;) {
         std::function<void()> fn;
         {
@@ -2316,6 +2324,18 @@ std::chrono::steady_clock::time_point blocked_since;
 uint64_t done_max = 0, signaled = 0;                // (the newest value recorded whole; the timeline's last signal)
 int64_t st_stops, st_resumed, st_forced_waits, st_forced[4], st_resume_captures;   // (made to go by: presents, releases, waits, time)
 double st_stopped_max_ms;
+// (longshot, NX2navi #543) RX_VK_EVENT_GATE: under RX_VK_ASYNC=1 a stopped submission's reads took their pages from
+// captures taken before the frame's writes were whole: single frames with the scene's sunlight missing or lit geometry
+// black. The fix: when the game's CPU signal for such an event arrives (event_signal_queued, on the signalling
+// thread, in the window between the frame's writes and the game's next-frame rewrites), the capture is taken there,
+// and the resume uses it instead of taking one of its own. RX_VK_EVENT_GATE=0: the resume's capture, as before.
+constexpr int kGateWaitEvents = 8;
+std::atomic<uint64_t> gate_wait_gpu[kGateWaitEvents]{};   // (the events stopped submissions wait for: the replay thread writes, the signal path reads)
+std::atomic<uint64_t> gate_signal_cap_gpu{0};             // (the last event whose signal took the capture; consumed by the resume)
+bool gate_on() {
+    static const bool on = getenv("RX_VK_EVENT_GATE") && atoi(getenv("RX_VK_EVENT_GATE")) != 0;   // (off by default: v1 a regressé, à reprendre après analyse)
+    return on;
+}
 bool event_waits_on() {
     static const bool v = !getenv("RX_VK_EVENT_WAITS") || atoi(getenv("RX_VK_EVENT_WAITS")) != 0;
     return v;
@@ -2539,12 +2559,18 @@ bool run_submit(const uint64_t* handles, int n, uint64_t value, uint64_t queue, 
         q.waiting = true;
         q.handles.assign(handles, handles + n);
         q.cb = cb, q.p = stop, q.value = value;
+        const nvn_p_wait_event w = wait_at(stop);
+        if (gate_on())   // (the signal path answers this stop with its capture: gate_wait_gpu; the replay thread is its only writer)
+            for (int i = 0; i < kGateWaitEvents && gate_wait_gpu[i].load(std::memory_order_relaxed) != w.gpu; i++)
+                if (!gate_wait_gpu[i].load(std::memory_order_relaxed)) {
+                    gate_wait_gpu[i].store(w.gpu, std::memory_order_release);
+                    break;
+                }
         if (value > q.ahead_upto) {   // (longshot: its reports "visible" until they are replayed; once a submission: a later
             occ_visible_ahead(handles, n, cb, stop);   // stop in it holds back less of it)
             q.ahead_upto = value;
         }
         if (st_stops++ < 12) {
-            const nvn_p_wait_event w = wait_at(stop);
             logf("vk: submission %llu (queue %#llx) stopped at command buffer %d's wait for event %#llx %s %u (has %u)",
                  (unsigned long long)value, (unsigned long long)queue, cb, (unsigned long long)w.gpu,
                  w.mode == 0 ? "==" : ">=", w.value, event_value_in(ev_values, w.gpu));
@@ -2575,10 +2601,19 @@ void resume_queue(uint64_t queue, bool forced) {
             // console's GPU reads memory after its wait; the capture taken at the submit had the frame before's: the fog and
             // exposure of the frame before, for a frame. A capture now, for what follows the wait. RX_VK_RESUME_CAPTURE=0: none
             static const bool resume_capture = !getenv("RX_VK_RESUME_CAPTURE") || atoi(getenv("RX_VK_RESUME_CAPTURE")) != 0;
+            const uint64_t wgpu = wait_at(q.p).gpu;
+            bool signal_captured = false;
+            if (gate_on())
+                for (int i = 0; i < kGateWaitEvents; i++)
+                    if (gate_wait_gpu[i].load(std::memory_order_acquire) == wgpu) {
+                        gate_wait_gpu[i].store(0, std::memory_order_release);   // (this stop is answered)
+                        if (gate_signal_cap_gpu.load(std::memory_order_acquire) == wgpu)
+                            signal_captured = gate_signal_cap_gpu.exchange(0, std::memory_order_acq_rel) == wgpu;
+                    }
             bool cpu_event = false;
-            if (resume_capture && !forced) {
+            if (!signal_captured && resume_capture && !forced) {
                 std::lock_guard ek(ev_cpu_mu);
-                cpu_event = cpu_events.count(wait_at(q.p).gpu) != 0;
+                cpu_event = cpu_events.count(wgpu) != 0;
             }
             if (cpu_event) {
                 std::lock_guard lk(replay_mu);
@@ -5425,6 +5460,15 @@ void event_signal_queued(uint64_t gpu, uint32_t value) {
         return;   // (sync_watch or the next submit lets the stopped ones on: not this thread, ~1.7 ms a frame of the critical path)
     }
     Job j{JOB_EVENT_SIGNAL};
+    if (gate_on())   // (the signalling thread, in the window between the frame's writes and the game's next-frame
+                     // rewrites: a stopped submission waits for this event, and its reads take the capture taken here)
+        for (int i = 0; i < kGateWaitEvents; i++)
+            if (gate_wait_gpu[i].load(std::memory_order_acquire) == gpu) {
+                std::lock_guard order(sync_order_mu);   // (the captures stay ordered with the submits')
+                memory_capture_submit();
+                gate_signal_cap_gpu.store(gpu, std::memory_order_release);
+                break;
+            }
     j.ev_gpu = gpu, j.ev_value = value;
     enqueue(std::move(j));
 }
