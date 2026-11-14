@@ -957,6 +957,39 @@ struct ParPoint {
     int64_t work;
 };
 std::vector<ParPoint> par_points;   // (every 64 draws and dispatches of the dry pass)
+// (longshot, the step 3 P1) RX_VK_DESC_PREFETCH=1: the dry pass queues its points for a descriptor-prefetch
+// helper (BELOW_NORMAL, the priority pattern proven with the parallel workers). P1 is the plumbing alone:
+// the helper drains and counts — the payload build (P2) and the record's consumption (P3) come next. Off by
+// default: inert until P2 lands.
+std::mutex pf_mu;
+std::deque<ParPoint> pf_queue;
+std::atomic<int64_t> pf_queued{0}, pf_drained{0};
+bool desc_prefetch_on() {
+    static const bool on = getenv("RX_VK_DESC_PREFETCH") && atoi(getenv("RX_VK_DESC_PREFETCH")) != 0;
+    return on;
+}
+void pf_helper_main() {
+    SetThreadDescription(GetCurrentThread(), L"mkw_vk desc prefetch");
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);   // (the game's threads keep their cores: the proven pattern)
+    for (;;) {
+        ParPoint pt;
+        {
+            std::lock_guard lk(pf_mu);
+            if (pf_queue.empty()) continue;
+            pt = std::move(pf_queue.front());
+            pf_queue.pop_front();
+        }
+        // (P2 lands here: the payload build from pt.s — the draws' descriptor data, into the prefetch arena)
+        pf_drained.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+void pf_start() {
+    static bool started = false;
+    if (started || !desc_prefetch_on()) return;
+    started = true;
+    std::thread(pf_helper_main).detach();
+    logf("vk: descriptor prefetch: the dry pass queues its points for a BELOW_NORMAL helper (P1: the plumbing; the payload build is P2)");
+}
 bool dry_clears_on() {   // (the dry pass marks a clear's targets too: NOP_CLEAR_COLOR in replay())
     static const bool v = !env_on("RX_VK_NO_DRY_CLEARS");
     return v;
@@ -1743,7 +1776,15 @@ void replay(VkCommandBuffer& cmd, NvnState& s, const uint8_t* p, const uint8_t* 
                 // (fewer state copies) at coarser segment boundaries. RX_VK_PAR_POINT=<n> (64 measured)
                 static const int every = getenv("RX_VK_PAR_POINT") && atoi(getenv("RX_VK_PAR_POINT")) > 0
                                              ? atoi(getenv("RX_VK_PAR_POINT")) : 64;
-                if (++dry_work % every == 0) par_points.push_back({p + h.size, s, ub_updates.size(), par_conds.size(), dry_work});
+                if (++dry_work % every == 0) {
+                    par_points.push_back({p + h.size, s, ub_updates.size(), par_conds.size(), dry_work});
+                    if (desc_prefetch_on()) {
+                        pf_start();
+                        std::lock_guard pfl(pf_mu);
+                        pf_queue.push_back(par_points.back());
+                        pf_queued.fetch_add(1, std::memory_order_relaxed);
+                    }
+                }
             } else if (!worker) {
                 maybe_split(cmd);
             }
