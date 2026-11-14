@@ -443,6 +443,7 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | HDR peak brightness | 400 to 4000 nits, in steps of 100 (while HDR is on) | 1000 nits |
 | | HDR contrast | 50% to 200% around mid grey, in steps of 5 (while HDR is on) | 100% |
 | | HDR tone mapper | Vanilla (the game's curve), PsychoV35 (RenoDX's; with HDR set to Native. DLSS/DLAA with their NVIDIA frame-generation inputs, and AMD FSR 4, can be tried with `RX_VK_PSYCHOV35_DLSS=1`; FSR 3.1, TAAU and Upscaler Off still fall back to the game's network) | Vanilla |
+| | Texture detail | Auto, Full, Medium, Low | Auto |
 | | Anisotropic filtering | Game's, 2x, 4x, 8x, 16x | 16x |
 | | GPU device | Auto, or each graphics card by name (after a restart) | Auto |
 | | VRAM budget | Auto, 3.6, 4.8, 6, 7.5, 9, 11 GB (2.2 GB only from the Minimum (4GB) preset); a quality preset sets it | Auto |
@@ -471,6 +472,7 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | Invert camera Y | Off, On | Off |
 | | Camera speed | 50% to 400%, in steps of 25 | 100% |
 | | Stick dead zone | Default (24%), 5%, 10%, 15%, 20%, 30% | Default (24%) |
+| | Auto run | Off, On | Off |
 | | Rumble strength | Off, 25% to 150%, in steps of 25 | 100% |
 | | Layout preset | Nintendo (Def), Xbox / PC, Swap Face; Custom once you bind a button yourself (on the Controls page) | Nintendo (Def) |
 | | Button prompts | Auto, Switch, Xbox, PlayStation 4, PlayStation 5, Steam Deck, Keyboard (on the Controls page; changes at once where the game allows it, else after a restart) | Auto |
@@ -679,6 +681,11 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
   game's own camera speed option still picks the speed this multiplies.
 - **Stick dead zone:** how far a stick moves from center in any direction before it counts. Default is about 24%. Use
   a lower value for a precise stick or a higher one for a stick that drifts. The game also applies its own dead zone.
+- **Auto run:** the sprint goes on after the run button (A) is let go. Hold A for 0.4 s while moving (the roll, then
+  the sprint, as usual), let go, and A stays held for the game while the stick stays pushed; a short press (a roll on
+  its own) is not kept. Letting go of the stick or pressing A again stops it (a long hold keeps it again). Only while
+  Link is yours to move: an event (a talk, a cutscene), the pause menu, the map, the Insert menu and the ocarina's notes
+  end it, so A never picks an entry, skips text or plays a note there.
 - **Rumble strength** scales the controller's rumble: 100% is the game's own, Off turns it off. The game's HD rumble
   goes to a controller's heavy and light motors by its frequency.
 - **Motion controls** (Controls tab, Motion page): the controller's gyroscope aims where the game uses motion, as on the Switch. It works with

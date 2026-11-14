@@ -60,6 +60,9 @@ enum { HOS_OPT_HOLD_TOGGLE = 54 };
 enum { HOS_OPT_AUDIO_OUTPUT = 57 };
 /* Damage taken: 0 Half, 1 Normal (unchanged), 2 Double, 3 Quadruple. */
 enum { HOS_OPT_DAMAGE_TAKEN = 55 };
+/* The Auto run row (Controls): 0 Off, 1 On, A (the sprint) kept held after it is let go (host/auto_run.h,
+   host/nn_hid.c). */
+enum { HOS_OPT_AUTO_RUN = 56 };
 
 /* (longshot) the controls' names (host/nn_hid.c, host/pad_sdl.c, the pad_ and key_ lines of longshot_options.ini):
    the Switch's buttons in nn::hid's bit order, and a gamepad's inputs by position (the bottom face button first:

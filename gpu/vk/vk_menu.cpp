@@ -719,6 +719,10 @@ const char* hn_ultrawide(int v, int variant) {
     return r > game * 1.01 ? t[2] : r < game * 0.99 ? t[3] : t[1];
 }
 /// Anisotropic filtering: the game's own, or 2x to 16x (vk_draw.cpp aniso_override)
+const char* tx_texture_detail(int v) {
+    static const char* t[] = {"Auto", "Full", "Medium", "Low"};
+    return (unsigned)v < 4 ? t[v] : t[0];
+}
 const char* tx_anisotropy(int v) {
     static const char* t[] = {"Game's", "2x", "4x", "8x", "16x"};
     return (unsigned)v < 5 ? t[v] : t[4];
@@ -826,6 +830,8 @@ const char* tx_menu_size(int v) {
     static const char* t[] = {"Small", "Medium", "Large"};
     return v >= 1 && v <= 3 ? t[v - 1] : t[1];
 }
+const char* tx_auto_run(int v) { return v ? "On" : "Off"; }
+
 const char* tx_stick_dead_zone(int v) {
     static const char* t[] = {"Default (24%)", "5%", "10%", "15%", "20%", "30%"};
     return (unsigned)v < 6 ? t[v] : t[0];
@@ -1132,6 +1138,10 @@ const char* hn_intel_compiles(int v, int variant) {
                                     "while it builds them."};
     return hint_in(t, 2, 0, v, variant);
 }
+MENU_HINTS(hn_texture_detail, 0, "Full detail, but on a card with 4.5 GB or less at the Minimum preset: as Medium.",
+           "Every texture at the game's own size (the very largest still trimmed to fit).",
+           "The big textures' largest level left out above 1024 texels: about a quarter of their memory.",
+           "The big textures down to 512 texels: the least memory, the softest picture.")
 MENU_HINTS(hn_robust, 0, "On, on every card.", "Can be faster on some NVIDIA cards.", "Always on.")
 MENU_HINTS(hn_fps, 0, nullptr, "The frame rate. With frame generation on, the game's own rate too.",
            "And the game's frame time, with its 1% low: the rate of its slowest 1% of frames over the last 10 seconds.",
@@ -1245,6 +1255,10 @@ Row rows[] = {
      "tone mapper, the same mid grey with highlights that roll off into the peak and keep their colour.",
      nullptr, false, true},
     {TAB_GRAPHICS, "Detail", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, false, true, -1, true},
+    {TAB_GRAPHICS, "Texture detail", &opts.texture_detail, 0, 3, 1, tx_texture_detail,
+     "How much of the big textures (ground, walls, buildings) is kept in video memory. Lower uses less, for a softer "
+     "picture up close: for 6 and 8 GB cards that slow down after a while. Applies to textures made after the change; "
+     "a restart applies it to all.", hn_texture_detail, false, true},
     {TAB_GRAPHICS, "Anisotropic filtering", &opts.anisotropy, 0, 4, 1, tx_anisotropy,
      "Keeps textures sharp on surfaces seen at a slant, such as the ground ahead: higher is sharper in the distance, for a "
      "little GPU time. Game's is the console's own (1x or 2x).", nullptr, false, true},
@@ -1297,7 +1311,7 @@ Row rows[] = {
      "Skips the new-game opening (the story movie and Navi waking Link) and leaves later cutscenes, the Deku Tree "
      "meeting, and the title screen alone.", nullptr, false, true},
 
-    // Controls (12 rows; Motion opens the 6 TAB_MOTION rows, Controls its page with the 2 TAB_PAGE rows)
+    // Controls (13 rows; Motion opens the 6 TAB_MOTION rows, Controls its page with the 2 TAB_PAGE rows)
     {TAB_CONTROLS, "Controller in background", &opts.pad_background, 0, 1, 1, tx_onoff,
      "Whether the controller plays the game while another window has the focus.", hn_background, false, true},
     {TAB_CONTROLS, "Mouse camera", &opts.mouse_native, 0, 2, 1, tx_mousecam, "How the captured mouse turns the camera.",
@@ -1321,6 +1335,9 @@ Row rows[] = {
      "How far a stick moves from center in any direction before the game sees it. "
      "Lower for a precise stick, higher for one that drifts. "
      "The game's own dead zone still follows.", nullptr, false, true},
+    {TAB_CONTROLS, "Auto run", &opts.auto_run, 0, 1, 1, tx_auto_run,
+     "Sprint without holding A (or its key). Hold it until Link sprints, then let go: he keeps going. Let go of the "
+     "stick or the movement keys, or tap A again, to stop.", nullptr, false, true},
     {TAB_CONTROLS, "Rumble strength", &opts.rumble, 0, 150, 25, tx_rumble,
      "How strongly the controller rumbles, in percent of the game's rumble. Off turns it off.", nullptr, false, true},
     {TAB_MOTION, "Motion controls", &opts.gyro, 0, 1, 1, tx_gyro,

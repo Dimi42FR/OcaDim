@@ -230,6 +230,18 @@ case-sensitive, and an unknown one is ignored.
 | `RX_VK_PRESENT_THREAD=1` | On (off by default: the game's thread presents). Where the device has a second queue that can present to the window (a second queue of the replay's family, else a compute family's): each present is made on a thread and queue of its own once the frame's copy into the window is done, and the game's thread goes on at once (with NVIDIA's driver on Wayland the present otherwise waits ~2.4 ms a frame for the GPU there). One present out at most; under V-Sync On (FIFO) with `VK_KHR_present_wait`, until it is shown. The log has the fence's and the present's time (and how long after it the frame was shown) every 600 presents |
 | `HOS_PGO=<file>` | In a run of an `RX_PGO=gen` build: `<file>.reset` clears the counters, `<file>.dump` writes them to `<file>`. It is read before `longshot_env.txt`, so set it in the environment |
 
+The periodic `GPU-bound wait` log value is **recording-slot reuse only** (the line says so), not a bottleneck test.
+`host time in GPU resource waits` separately sums host-clock time inside nonzero-timeout Vulkan fence and timeline
+wait calls and queue/device-idle calls routed through the replay. This covers capture late-page waits, buffer and
+texture readbacks, recording/display-copy fences and sparse-binding waits. Recorder draining happens before the timer;
+nested waits count once and zero-timeout polls are omitted. Reflex's latency semaphore is pacing and is excluded.
+The sum is **thread wall time**, which can overlap across threads and exceed a frame; do not add the old slot value or
+containing replay/capture/texture phases to it. It excludes the startup cooperative-matrix probe, CPU locks and
+publication waits, display acquisition/pacing, and blocking hidden inside driver submit/present calls. A low value
+still does not prove the GPU is idle: read GPU timestamps, present intervals and CPU profiles together.
+Query-result reads with `VK_QUERY_RESULT_WAIT_BIT` count separately as `queries` (the optional draw-statistics read);
+ordinary timestamp-result polls without that bit do not count.
+
 ### The GPU
 
 Pipeline-cache file ownership, temporary storage and failure behavior are described in
@@ -304,6 +316,13 @@ Pipeline-cache file ownership, temporary storage and failure behavior are descri
 | `RX_VK_NAN_GUARD=0` | No NaN guard on float colour outputs (on by default on every card: one NaN texel spreads through bloom into glowing blocks) |
 | `RX_VK_FIFO=1`, `RX_VK_IMMEDIATE=1` | V-Sync On (FIFO) or Off (immediate) for one run, over the menu's V-Sync row |
 | `HOS_VCORES=0`, `HOS_CORES=<1..8>`, `HOS_RESERVE_CORE=0` | No virtual cores; the cores the game sees (6); no core kept for the replay (one is, with 8 or more logical processors) |
+| `RX_VK_ASTC_BC1=0` | Every ASTC texture kept as BC3, as before; by default a big ASTC texture whose blocks all decode opaque is kept as BC1 (half BC3's video memory), and one that later gets alpha is made BC3 again |
+| `RX_VK_GAME_ORDER=1` / `=0` | A draw pass right after another waits in its fragment stages only, and a compute dispatch right after another gets no barrier: their order is the game's own barriers'. A switch between draws and compute, the replay's own copies, clears and uniform updates, an indirect dispatch and the game's barriers keep the full barrier. On by default on NVIDIA only (measured there; the log says which); `=1` tries it elsewhere, `=0` turns it off |
+| `RX_VK_VIEW_FAST=0` | No front cache for texture views: every lookup goes to the map, as before; by default a 1024-entry cache answers a repeated lookup whose slot version, destroy generation and texture epoch are unchanged |
+| `RX_VK_NATIVE_NARROW=0` | 8- and 16-bit global stores through the compare-exchange loop on the word, as before; by default they are written directly through narrow views (part of the program cache stamp) |
+| `RX_VK_IMPORT_FENCE=0` | No fence page while the driver is asked about an imported host pointer, as before; by default the page after the range ends the run of read-write pages the driver walks (not with the CPU write watches) |
+| `RX_VK_UNSWIZZLE_IMPORT=1` | A GPU unswizzle for one upload may import its pool, as before; by default only an already imported pool is used, and the CPU unswizzles the rest (several threads from 4 MB) |
+| `HOS_CV_SIGNAL_ALWAYS=1` | Every condition-variable signal takes the lock and wakes, as before; by default a signal with no waiter returns at once (`tests/test_cv_signal_early.py`) |
 
 ### Building
 
@@ -393,6 +412,13 @@ what you test.
 **Never use it for numbers:** no fps or frame-time measurements, build timings, hitch or stutter checks, profiles,
 and no release or player build. Build those with the defaults.
 
+## Draw statistics
+
+Set `RX_VK_DRAW_STATS=<directory>` and create `<directory>/draw_stats.now` during play to measure one future frame.
+The report keeps its per-program counts and adds `code` rows with the native stage keys copied when each query was
+recorded, including programs loaded from the cache. The four keys are vertex/mesh/compute, fragment, task and the
+header-only stage; zero means no key was available. Distinct tuples for the same program stay separate. These are
+recorded-query identities, not a complete draw replay or display timestamps. The queries can perturb frame timing.
 #### Testing a change against a base
 
 A full build of a new game folder is more than an hour on some PCs, most of it the shader preparation, which starts

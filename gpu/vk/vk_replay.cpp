@@ -865,6 +865,9 @@ T payload(const uint8_t* a, uint32_t bytes) {
 }
 
 int64_t st_barriers, st_ub_updates, st_ub_overlays, st_submits;
+/* (longshot) what makes a draw rebuild its descriptors: which NVN binding moved the state's generation. A draw's
+   descriptor set is rebuilt when bind_gen moved, and 0.9 of the draws rebuilt theirs (3.2 ms a frame). */
+int64_t st_bg_prog, st_bg_bufs, st_bg_ubo, st_bg_ssbo, st_bg_tex, st_bg_samp, st_bg_img;
 std::map<int32_t, int64_t> st_barrier_flags;   // (the game's nvnCommandBufferBarrier bits: how many of each combination, the frame log)
 std::mutex st_barrier_flags_mu;   // (a parallel replay's threads count their barriers too)
 // ---- events in replay order: the values the stream's signals and the CPU's set, for the GPU's waits on them. The
@@ -1431,7 +1434,7 @@ void replay(VkCommandBuffer& cmd, NvnState& s, const uint8_t* p, const uint8_t* 
             const auto b = payload<nvn_p_bind_program>(a, avail);
             // (the same program bound again: its descriptors already stand)
             const bool same = b.prog && s.has_prog ? std::memcmp(&s.prog, b.prog, sizeof s.prog) == 0 : !b.prog && !s.has_prog;
-            if (!same) s.bind_gen++;
+            if (!same) s.bind_gen++, st_bg_prog++;
             if (b.prog) s.prog = *b.prog;
             s.has_prog = b.prog != nullptr && b.prog->nstage > 0;
             break;
@@ -1509,7 +1512,7 @@ void replay(VkCommandBuffer& cmd, NvnState& s, const uint8_t* p, const uint8_t* 
                 }
                 nvn_p_bind_buf& u = (b.ssbo ? s.ssbo : s.ubo)[b.stage][index];
                 if (!buf_unchanged(u.stage, u.index, u.addr, u.size, b.stage, index, b.r[i].address, b.r[i].size)) {
-                    s.bind_gen++;
+                    s.bind_gen++, st_bg_bufs++;
                     if (b.ssbo) s.ssbo_gen[b.stage] = s.bind_gen;
                 }
                 u.stage = b.stage, u.index = index, u.addr = b.r[i].address, u.size = b.r[i].size;
@@ -1530,6 +1533,7 @@ void replay(VkCommandBuffer& cmd, NvnState& s, const uint8_t* p, const uint8_t* 
                 nvn_p_bind_buf& u = (h.op == NOP_BIND_UBO ? s.ubo : s.ssbo)[b.stage][b.index];
                 if (!buf_unchanged(u.stage, u.index, u.addr, u.size, b.stage, b.index, b.addr, b.size)) {
                     s.bind_gen++;
+                    (h.op == NOP_BIND_UBO ? st_bg_ubo : st_bg_ssbo)++;
                     if (h.op == NOP_BIND_SSBO) s.ssbo_gen[b.stage] = s.bind_gen;
                 }
                 u = b;
@@ -1553,6 +1557,7 @@ void replay(VkCommandBuffer& cmd, NvnState& s, const uint8_t* p, const uint8_t* 
             while (n < b.n && b.first + n < lim) n++;
             if (!handles_unchanged(to + b.first, b.h, n)) {   // (the same handles: the draw keeps its descriptors)
                 s.bind_gen++;
+                (h.op == NOP_BIND_TEX ? st_bg_tex : h.op == NOP_BIND_SAMP ? st_bg_samp : st_bg_img)++;
                 s.tex_gen[b.stage] = s.bind_gen;
             }
             for (int k = 0; k < n; k++) to[b.first + k] = b.h[k];
@@ -2463,11 +2468,10 @@ void finish_recording(uint64_t value) {
 // RX_VK_REPLAY_PIN=0: off. (Only preferring the core, as the thread's ideal processor with every processor allowed, gained
 // nothing there: the pin is what helps)
 bool async_on();
-// (Windows only: on Linux a thread inherits the affinity of the one that makes it, and the back end's threads made on
-// first use inside a replay (the capture's copy helpers, the shader workers, the pool imports...) would all have stayed on
-// the reserved core. Windows gives a new thread the process's)
+// (On Linux pthread_create inherits the calling thread's affinity, so win32_posix.c's thread_self and thread_entry
+// apply process_affinity when a new thread registers via CreateThread or GetCurrentThread in SetThreadDescription,
+// keeping helper threads made on first use inside a replay off the reserved core, as Windows does)
 uint64_t replay_pin_mask() {
-#if defined(_WIN32)
     static const uint64_t m = [] {
         const char* e = getenv("RX_VK_REPLAY_PIN");
         const uint64_t r = !(e && atoi(e) == 0) && host->reserved_cpus ? host->reserved_cpus() : 0;
@@ -2475,9 +2479,6 @@ uint64_t replay_pin_mask() {
         return r;
     }();
     return m;
-#else
-    return 0;
-#endif
 }
 thread_local int replay_pin_depth = 0;
 thread_local DWORD_PTR replay_pin_prev = 0;
@@ -3611,6 +3612,15 @@ void log_frame_stats() {
             snprintf(libs, sizeof libs, "; %.2f library links tried (%.2f ms), %lld libraries the driver had and %lld cold in all; "
                      "%lld of the cold built by workers (%.0f ms)", (links - l_links) / 120.0, (link_ms - l_link_ms) / 120.0,
                      (long long)lib_hits, (long long)lib_cold, (long long)lib_built, lib_build_ms);
+        {
+            static int64_t p0, b0, u0, ss0, t0, sa0, i0;
+            logf("vk: a frame: %lld bind_gen moves: program %.1f, many-binds %.1f, ubo %.1f, ssbo %.1f, tex %.1f, samp %.1f, img %.1f",
+                 (long long)((st_bg_prog - p0) + (st_bg_bufs - b0) + (st_bg_ubo - u0) + (st_bg_ssbo - ss0) + (st_bg_tex - t0) +
+                             (st_bg_samp - sa0) + (st_bg_img - i0)),
+                 (st_bg_prog - p0) / 120.0, (st_bg_bufs - b0) / 120.0, (st_bg_ubo - u0) / 120.0, (st_bg_ssbo - ss0) / 120.0,
+                 (st_bg_tex - t0) / 120.0, (st_bg_samp - sa0) / 120.0, (st_bg_img - i0) / 120.0);
+            p0 = st_bg_prog, b0 = st_bg_bufs, u0 = st_bg_ubo, ss0 = st_bg_ssbo, t0 = st_bg_tex, sa0 = st_bg_samp, i0 = st_bg_img;
+        }
         logf("vk: a frame: %.0f draws kept their neighbour's descriptors (%.0f of them through other slots' registrations)",
              (draw_desc_reused() - l_reused) / 120.0, (draw_slotgen_saves() - l_saves) / 120.0);
         l_reused = draw_desc_reused(), l_saves = draw_slotgen_saves();
@@ -3644,13 +3654,23 @@ void log_frame_stats() {
         l_sync_b = sync_b, l_sync_c = sync_c, l_wb_b = wb_b;
         static int64_t l_d, l_sk, l_di, l_pass, l_sub, l_up, l_upb, l_bar, l_ubu, l_ubo, l_wait;
         logf("vk: %lld presents, %.1f fps; a frame: %.0f draws (%.0f skipped), %.0f dispatches, %.0f passes, %.0f "
-             "barriers, %.0f submits, %.1f uploads (%.1f MB), %.0f ub updates (%.0f overlays), GPU-bound wait %.1f ms; "
+             "barriers, %.0f submits, %.1f uploads (%.1f MB), %.0f ub updates (%.0f overlays), GPU-bound wait %.1f ms (recording slots only); "
              "%lld pipelines (%.0f ms), %lld programs (%lld failed), %zu textures (%llu MB)",
              (long long)presents, 120.0 / secs, (d - l_d) / 120.0, (sk - l_sk) / 120.0, (di - l_di) / 120.0,
              (passes - l_pass) / 120.0, (st_barriers - l_bar) / 120.0, (st_submits - l_sub) / 120.0,
              (up - l_up) / 120.0, (upb - l_upb) / 120.0 / 1048576.0, (st_ub_updates - l_ubu) / 120.0,
              (st_ub_overlays - l_ubo) / 120.0, (st_wait_ns - l_wait) / 120.0 / 1e6, (long long)pl, pms,
              (long long)tr, (long long)fl, texture_count(), (unsigned long long)(texture_bytes() >> 20));
+        {
+            const auto waits = gpu_wait_stats::counters.take();
+            const double scale = 1.0 / (120.0 * 1e6);
+            logf("vk: host time in GPU resource waits: %.2f ms a frame (fences %.2f, timelines %.2f, idle %.2f, queries %.2f; "
+                 "sum across threads, not frame time; excludes pacing and driver submit/present blocking)",
+                 (waits[gpu_wait_stats::kFence] + waits[gpu_wait_stats::kTimeline] + waits[gpu_wait_stats::kIdle] +
+                  waits[gpu_wait_stats::kQuery]) * scale,
+                 waits[gpu_wait_stats::kFence] * scale, waits[gpu_wait_stats::kTimeline] * scale,
+                 waits[gpu_wait_stats::kIdle] * scale, waits[gpu_wait_stats::kQuery] * scale);
+        }
         draw_skip_report(120.0);
         {   // (longshot: the full barriers recorded and the ones left out as the second of two in a row, RX_VK_BARRIER_DEDUPE_OFF=1)
             static int64_t l_made, l_left;
@@ -5542,6 +5562,7 @@ void fill_replay_table(MkwVkRenderer& t) {
         if (id == HOS_OPT_AUDIO_OUTPUT) return opts.audio_output;
         if (id == HOS_OPT_MUTE_BACKGROUND) return opts.mute_background;
         if (id == HOS_OPT_DISABLE_CAMERA_CENTERING) return opts.disable_camera_centering;
+        if (id == HOS_OPT_AUTO_RUN) return opts.auto_run;   // (host/nn_hid.c and host/auto_run.h)
         if (id == HOS_OPT_TEXT_SIZE) return opts.text_size;
         if (id == HOS_OPT_CAMERA_SPEED) return opts.camera_speed;
         if (id == HOS_OPT_PROMPTS) return opts.prompts;
