@@ -429,8 +429,41 @@ std::vector<OccSlot> occ_slots(kOccSlots);
 uint64_t occ_seq = 0;
 OccSlot& occ_slot(uint64_t addr) { return occ_slots[(size_t)((addr >> 4) * 0x9E3779B97F4A7C15ull >> 50)]; }
 struct {
-    uint64_t real, zero, unknown, stale, lag, calls, polls, ns, sum, small, creal, czero, split, ahead, walks, walk_ns;
+    uint64_t real, zero, unknown, stale, lag, calls, polls, ns, sum, small, creal, czero, split, ahead, walks, walk_ns, copies, copied, fell_back;
 } occ_st;
+
+/// (longshot) RX_VK_OCC_COPY: the queries' results copied by the GPU at the end of the recording that ran them
+/// (vkCmdCopyQueryPoolResults, after the recording's end barrier) into a buffer in host memory, which occ_collect reads as plain
+/// memory. Read from the pool (vkGetQueryPoolResults), each query cost ~3.4 us in the driver on an Arc B580 (101.9154; the time
+/// grew with the queries read, not with the calls): 7.4 ms of the render thread's 28.8 ms a frame in Castle Town's market,
+/// 34.8 fps there against 45.8 with the copy. A query the copy found not done (never begun: its draw did not draw), or one
+/// whose recording ended without the copy, is read from the pool once its submission is done, as before. A count reads
+/// kOccUnread until its copy has written it, whichever of its two words the GPU writes first. The copies cost GPU time (~2 ms
+/// a frame in the market on the B580, ~1,400 queries), so they are on by default only where they were measured: Intel's
+/// Windows driver on a discrete GPU (Arc). An iGPU, mostly held back by the GPU, or another driver whose pool reads cost
+/// less, may lose by them (RX_VK_OCC_COPY=1: on there too). Off with the parallel replay (its workers record the queries) and
+/// without coherent host memory. RX_VK_OCC_COPY=0: read from the pool
+int par_threads();
+bool occ_copy_wanted() {
+    static const bool on = [] {
+        if (par_threads() != 0) return false;
+        if (const char* e = getenv("RX_VK_OCC_COPY")) return atoi(e) != 0;
+        return dev.driver_id == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS &&
+               dev.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+    }();
+    return on;
+}
+VkBuffer occ_host_buf = VK_NULL_HANDLE;
+VmaAllocation occ_host_alloc = nullptr;
+volatile uint64_t* occ_host = nullptr;   // ((count, availability) for each query of the ring, at its place in the pool)
+constexpr uint64_t kOccUnread = ~0ull;   // (a count no copy has written since the query's reset)
+uint64_t occ_part_lo = UINT64_MAX, occ_part_hi = 0;   // (the queries the recording being made took: occ_copy_part)
+void occ_host_clear(uint64_t at, uint64_t k) {
+    for (uint64_t i = at; i < at + k; i++) {
+        occ_host[2 * i] = kOccUnread;
+        occ_host[2 * i + 1] = 0;
+    }
+}
 
 bool occ_queries_on() {
     static const bool on = [] {
@@ -457,8 +490,22 @@ bool occ_queries_on() {
             return false;
         }
         vkResetQueryPool(dev.device, occ_pool, 0, (uint32_t)kOccPool);
-        logf("vk: occlusion queries on (RX_VK_OCC_QUERIES): the game's samples-passed reports get the GPU's counts%s",
-             dev.occlusion_precise ? "" : " (not precise: a count says only none or some)");
+        if (occ_copy_wanted()) {
+            void* m = nullptr;
+            if (create_buffer_cached(kOccPool * 16, VK_BUFFER_USAGE_TRANSFER_DST_BIT, occ_host_buf, occ_host_alloc, &m, true) && m &&
+                host_coherent(occ_host_alloc)) {
+                occ_host = (volatile uint64_t*)m;
+                occ_host_clear(0, kOccPool);
+            } else {
+                if (occ_host_buf) destroy_buffer(occ_host_buf, occ_host_alloc);
+                occ_host_buf = VK_NULL_HANDLE, occ_host_alloc = nullptr;
+            }
+        }
+        logf("vk: occlusion queries on (RX_VK_OCC_QUERIES): the game's samples-passed reports get the GPU's counts%s; %s",
+             dev.occlusion_precise ? "" : " (not precise: a count says only none or some)",
+             occ_host ? "copied into host memory at each recording's end (RX_VK_OCC_COPY)"
+                      : occ_copy_wanted() ? "read from the pool (RX_VK_OCC_COPY: no coherent host memory for the copies)"
+                                          : "read from the pool");
         return true;
     }();
     return on;
@@ -468,6 +515,7 @@ void occ_reset(uint64_t first, uint64_t n) {
     while (n) {
         const uint64_t at = first % kOccPool, k = std::min(n, kOccPool - at);
         vkResetQueryPool(dev.device, occ_pool, (uint32_t)at, (uint32_t)k);
+        if (occ_host) occ_host_clear(at, k);   // (the GPU is done with them, and with their copies: the same submissions)
         first += k, n -= k;
     }
 }
@@ -584,17 +632,34 @@ void occ_collect() {
     }
     static std::vector<uint64_t> got;   // (count, availability) for each query of [first, end)
     got.assign(2 * (end - first), 0);
-    for (uint64_t i = 0; i < end - first;) {
-        const uint64_t at = (first + i) % kOccPool, k = std::min(end - first - i, kOccPool - at);
-        vkGetQueryPoolResults(dev.device, occ_pool, (uint32_t)at, (uint32_t)k, k * 16, got.data() + 2 * i, 16,
-                              VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);   // (VK_NOT_READY: some not done)
-        i += k;
+    const auto pool_read = [&](uint64_t from, uint64_t to) {   // (the queries [first + from, first + to), from the pool)
+        for (uint64_t i = from; i < to;) {
+            const uint64_t at = (first + i) % kOccPool, k = std::min(to - i, kOccPool - at);
+            vkGetQueryPoolResults(dev.device, occ_pool, (uint32_t)at, (uint32_t)k, k * 16, got.data() + 2 * i, 16,
+                                  VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);   // (VK_NOT_READY: some not done)
+            i += k;
+        }
+    };
+    if (occ_host) {   // (RX_VK_OCC_COPY: their copies. One is there once its availability word is set and its count written)
+        for (uint64_t i = 0; i < end - first; i++) {
+            const uint64_t at = (first + i) % kOccPool;
+            const uint64_t a = occ_host[2 * at + 1], c = occ_host[2 * at];
+            got[2 * i] = c, got[2 * i + 1] = a && c != kOccUnread;
+        }
+    } else {
+        pool_read(0, end - first);
     }
     size_t ready = 0;
     for (size_t r = 0; r < span; r++) {
         const OccReport& o = occ_pending[r];
+        const uint64_t from = o.first - first, to = from + o.n;
         bool all = true;
-        for (uint64_t i = o.first - first; i < o.first - first + o.n && all; i++) all = got[2 * i + 1] != 0;
+        for (uint64_t i = from; i < to && all; i++) all = got[2 * i + 1] != 0;
+        if (!all && occ_host && o.value && done >= o.value) {   // (its submission done: what its copy did not have, from the pool)
+            std::fill(got.begin() + 2 * from, got.begin() + 2 * to, 0);
+            pool_read(from, to);
+            occ_st.fell_back += o.n;
+        }
         if (!all && !(o.value && done >= o.value)) break;   // (still on the GPU: it and those after it wait)
         ready++;
     }
@@ -655,7 +720,8 @@ void occ_collect() {
              "%llu reported again first; written %.1f recordings after the report; %zu waiting; %llu reads (%llu wrote), %.1f us each; "
              "the others: %.0f samples on average, %llu under 64; runs with colour draws %llu (%llu of them 0); "
              "queries not begun: %llu draws returned before drawing, %llu with vertex input not all bound, %llu task batches; "
-             "%llu runs split by another queue's queries; %llu slots made visible ahead of a stopped queue (%llu walks, %.1f us each)",
+             "%llu runs split by another queue's queries; %llu slots made visible ahead of a stopped queue (%llu walks, %.1f us each); "
+             "%llu copies, %.1f queries each, %llu queries read from the pool after their copy (RX_VK_OCC_COPY)",
              (unsigned long long)w, (unsigned long long)occ_st.zero, w ? 100.0 * occ_st.zero / w : 0.0,
              (unsigned long long)occ_st.unknown, (unsigned long long)occ_st.stale, w ? (double)occ_st.lag / w : 0.0,
              occ_pending.size(), (unsigned long long)occ_st.polls, (unsigned long long)occ_st.calls,
@@ -663,9 +729,32 @@ void occ_collect() {
              (unsigned long long)occ_st.small, (unsigned long long)(occ_st.creal + occ_st.czero), (unsigned long long)occ_st.czero,
              (unsigned long long)nd[0], (unsigned long long)nd[1], (unsigned long long)nd[2], (unsigned long long)occ_st.split,
              (unsigned long long)occ_st.ahead, (unsigned long long)occ_st.walks,
-             occ_st.walks ? occ_st.walk_ns / 1e3 / occ_st.walks : 0.0);
+             occ_st.walks ? occ_st.walk_ns / 1e3 / occ_st.walks : 0.0, (unsigned long long)occ_st.copies,
+             occ_st.copies ? (double)occ_st.copied / occ_st.copies : 0.0, (unsigned long long)occ_st.fell_back);
         occ_st = {};
     }
+}
+
+/// (RX_VK_OCC_COPY) The queries the recording took, copied into the host buffer after its last draws (the recording's end
+/// barrier is before this: a query not done by then is copied as not available), then made the host's. Every recording's end
+/// forgets them (submit_recording): the queries of one that ended without this are read from the pool
+void occ_copy_part(VkCommandBuffer cmd) {
+    if (occ_host && occ_part_hi > occ_part_lo) {
+        for (uint64_t q = occ_part_lo; q < occ_part_hi;) {
+            const uint64_t at = q % kOccPool, k = std::min(occ_part_hi - q, kOccPool - at);
+            vkCmdCopyQueryPoolResults(cmd, occ_pool, (uint32_t)at, (uint32_t)k, occ_host_buf, at * 16, 16,
+                                      VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+            q += k;
+        }
+        VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        mb.srcStageMask = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        mb.dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT, mb.dstAccessMask = VK_ACCESS_2_HOST_READ_BIT;
+        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        di.memoryBarrierCount = 1, di.pMemoryBarriers = &mb;
+        vkCmdPipelineBarrier2(cmd, &di);
+        occ_st.copies++, occ_st.copied += occ_part_hi - occ_part_lo;
+    }
+    occ_part_lo = UINT64_MAX, occ_part_hi = 0;
 }
 
 /// RX_VK_OCC_QUERIES=2: the runs with colour draws counted too (occ_take)
@@ -687,7 +776,10 @@ void occ_take(NvnState& s, DrawArgs& da, bool dry) {
         return;
     }
     const uint64_t q = s.occ_next++;
-    if (!dry) da.occ_pool = occ_pool, da.occ_query = (uint32_t)(q % kOccPool);
+    if (!dry) {
+        da.occ_pool = occ_pool, da.occ_query = (uint32_t)(q % kOccPool);
+        if (occ_host) occ_part_lo = std::min(occ_part_lo, q), occ_part_hi = std::max(occ_part_hi, q + 1);
+    }
 }
 
 /// The next recording slot, begun, for the submission that will signal value
@@ -725,6 +817,7 @@ Recording& begin_recording(uint64_t value) {
     return r;
 }
 void submit_recording(Recording& r, bool signal_value = true, uint64_t signal_at = 0) {
+    occ_part_lo = UINT64_MAX, occ_part_hi = 0;   // (RX_VK_OCC_COPY: copied only if occ_copy_part did, else read from the pool)
     draw_flush_recording(r.slot);
     const bool uploads = texture_uploads_recorded();
     gprof_submitted(r.slot, uploads);
@@ -929,11 +1022,112 @@ void gpu_write(VkCommandBuffer cmd, uint64_t gpu, const void* data, uint64_t n) 
 struct UbUpdate {
     uint64_t value;   // the submission that writes it
     uint64_t dst;
-    std::vector<uint8_t> bytes;
+    const uint8_t* bytes;   // (in ub_chunks, until the update is pruned)
+    uint64_t size;
 };
 std::deque<UbUpdate> ub_updates;   // in stream order, oldest first
 std::atomic<uint64_t> ub_list_epoch{1};   // (bumped when that deque gains or loses an update)
 thread_local uint64_t ub_gen = 0;   // (each recording thread's: its draws' overlays change with what it passed)
+uint64_t ub_seq0 = 0;   // (ub_updates[i]'s number in the stream: ub_seq0 + i; a prune moves it on)
+
+// (the updates' bytes, one after another in chunks of 256 KB, freed as the updates are pruned, oldest first: an update is
+// not a heap block of its own. A chunk holds updates first to last, by seq)
+constexpr uint64_t kUbChunk = 256 << 10;
+struct UbChunk {
+    std::unique_ptr<uint8_t[]> p;
+    uint64_t size = 0, used = 0, first = 0, last = 0;
+};
+std::deque<UbChunk> ub_chunks;
+UbChunk ub_spare;   // (the last one freed, for the next)
+const uint8_t* ub_store(const uint8_t* src, uint64_t n, uint64_t seq) {
+    if (ub_chunks.empty() || ub_chunks.back().size - ub_chunks.back().used < n) {
+        UbChunk c;
+        if (ub_spare.p && ub_spare.size >= n) c = std::move(ub_spare);
+        else c.size = std::max(n, kUbChunk), c.p.reset(new uint8_t[c.size]);
+        c.used = 0, c.first = seq;
+        ub_chunks.push_back(std::move(c));
+    }
+    UbChunk& c = ub_chunks.back();
+    uint8_t* at = c.p.get() + c.used;
+    std::memcpy(at, src, n);
+    c.used += n, c.last = seq;
+    return at;
+}
+void ub_chunk_free(UbChunk& c) {
+    if (c.size == kUbChunk) ub_spare = std::move(c);
+}
+void ub_chunks_release() {   // (those whose updates are all pruned)
+    while (!ub_chunks.empty() && (ub_updates.empty() || ub_chunks.front().last < ub_seq0))
+        ub_chunk_free(ub_chunks.front()), ub_chunks.pop_front();
+}
+
+// (where the updates are: each 1 KB of guest memory an update touches lists it, in stream order, and a range's lookup
+// reads the buckets it touches, not the whole list, which spans the submissions still in flight. Kept as the list changes
+// (the replay thread, replay_mu); the parallel replay's workers only read it, while the list holds still. An update over
+// more than 128 buckets, or that wraps, is in ub_odd instead: a lookup that would see one walks the list, as before)
+constexpr int kUbShift = 10;
+constexpr uint64_t kUbBucketsMost = 128;
+struct UbEntry {
+    uint64_t dst, end, seq;
+    const uint8_t* bytes;
+};
+struct UbBucket {
+    std::vector<UbEntry> e;   // (from head on: by seq)
+    size_t head = 0;
+};
+std::map<uint64_t, UbBucket> ub_buckets;   // (by dst >> kUbShift)
+std::deque<uint64_t> ub_odd;               // (their seqs)
+bool ub_is_odd(const UbUpdate& u) {
+    const uint64_t end = u.dst + u.size;
+    return end <= u.dst || ((end - 1) >> kUbShift) - (u.dst >> kUbShift) >= kUbBucketsMost;
+}
+void ub_index_add(const UbUpdate& u, uint64_t seq) {
+    if (ub_is_odd(u)) {
+        ub_odd.push_back(seq);
+        return;
+    }
+    const uint64_t end = u.dst + u.size;
+    for (uint64_t b = u.dst >> kUbShift; b <= (end - 1) >> kUbShift; b++) {
+        UbBucket& k = ub_buckets[b];
+        if (k.e.empty()) k.e.reserve(4);
+        k.e.push_back({u.dst, end, seq, u.bytes});
+    }
+}
+void ub_index_drop_front(const UbUpdate& u, uint64_t seq) {   // (the oldest: first in its buckets)
+    if (ub_is_odd(u)) {
+        if (!ub_odd.empty() && ub_odd.front() == seq) ub_odd.pop_front();
+        return;
+    }
+    for (uint64_t b = u.dst >> kUbShift; b <= (u.dst + u.size - 1) >> kUbShift; b++) {
+        const auto it = ub_buckets.find(b);
+        if (it == ub_buckets.end()) continue;
+        UbBucket& k = it->second;
+        if (k.head < k.e.size() && k.e[k.head].seq == seq) k.head++;
+        if (k.head == k.e.size()) ub_buckets.erase(it);
+        else if (k.head >= 32 && k.head * 2 >= k.e.size()) k.e.erase(k.e.begin(), k.e.begin() + (ptrdiff_t)k.head), k.head = 0;
+    }
+}
+/// An update the stream made (UPDATE_UB): its bytes kept, at the list's end
+void ub_push(uint64_t value, uint64_t dst, const uint8_t* src, uint64_t size) {
+    const uint64_t seq = ub_seq0 + ub_updates.size();
+    ub_updates.push_back({value, dst, ub_store(src, size, seq), size});
+    ub_index_add(ub_updates.back(), seq);
+    ub_list_epoch.fetch_add(1, std::memory_order_relaxed);
+}
+/// The list cut back to its first n (the benchmark's replays: as if the last time's updates were pruned)
+void ub_truncate(size_t n) {
+    if (ub_updates.size() <= n) return;
+    ub_updates.resize(n);
+    const uint64_t keep = ub_seq0 + n;   // (the updates before it stay: the chunk of the last one goes on after it)
+    while (!ub_chunks.empty() && (!n || ub_chunks.back().first >= keep)) ub_chunk_free(ub_chunks.back()), ub_chunks.pop_back();
+    if (n) {
+        UbChunk& c = ub_chunks.back();
+        c.used = (uint64_t)(ub_updates.back().bytes + ub_updates.back().size - c.p.get()), c.last = keep - 1;
+    }
+    ub_buckets.clear(), ub_odd.clear();
+    for (size_t i = 0; i < n; i++) ub_index_add(ub_updates[i], ub_seq0 + i);
+    ub_list_epoch.fetch_add(1, std::memory_order_relaxed);
+}
 
 // ---- parallel replay (RX_VK_PARALLEL=<threads>): MKW hands over nearly a frame's draws in one command buffer with
 // its present, and waits for the last frame's GPU work before it submits the next: the replay of that command buffer
@@ -1299,9 +1493,11 @@ bool deferred_late() {   // (RX_VK_DEFERRED_LATE=1: deferred binds read from the
 void ub_prune(uint64_t done) {
     if (ub_updates.empty() || ub_updates.front().value > done) return;
     while (!ub_updates.empty() && ub_updates.front().value <= done) {
+        ub_index_drop_front(ub_updates.front(), ub_seq0++);
         ub_updates.pop_front();
         if (ub_first_of_recording) ub_first_of_recording--;
     }
+    ub_chunks_release();
     ub_list_epoch.fetch_add(1, std::memory_order_relaxed);
 }
 
@@ -1309,6 +1505,9 @@ void ub_prune(uint64_t done) {
 
 uint64_t ub_generation() {
     return ub_gen;
+}
+uint64_t ub_list_generation() {
+    return ub_list_epoch.load(std::memory_order_relaxed);
 }
 void ub_thread_off() {
     ub_limit = 0;
@@ -1327,6 +1526,78 @@ bool ub_gap(const uint64_t* dst, const uint64_t* end, int n, uint64_t addr, uint
     *hi = right;
     return true;
 }
+/// Whether the buckets cannot say for [addr, addr+n) and the list's [first, lim): a range of no bytes or that wraps, or an
+/// update of ub_odd among them. The list is walked then, as before the buckets
+bool ub_walk(size_t first, size_t lim, uint64_t addr, uint64_t n) {
+    if (!n || addr + n < addr) return true;
+    if (first >= lim || ub_odd.empty()) return false;   // (none: and a background thread reads nothing of the replay's)
+    const auto o = std::lower_bound(ub_odd.begin(), ub_odd.end(), ub_seq0 + first);
+    return o != ub_odd.end() && *o < ub_seq0 + lim;
+}
+/// Whether an update of the list's [first, lim) overlaps [addr, addr+n), from ub_buckets: 1; 0: none, and [lo, hi) is a
+/// gap round the range that none of them covers (to the buckets either side that have updates); -1: ub_walk
+int ub_find(size_t first, size_t lim, uint64_t addr, uint64_t n, uint64_t* lo, uint64_t* hi) {
+    if (ub_walk(first, lim, addr, n)) return -1;
+    if (first >= lim) {
+        *lo = 0, *hi = ~uint64_t{0};
+        return 0;
+    }
+    const uint64_t s0 = ub_seq0 + first, s1 = ub_seq0 + lim, stop = addr + n;
+    auto it = ub_buckets.lower_bound(addr >> kUbShift);
+    uint64_t left = it == ub_buckets.begin() ? 0 : (std::prev(it)->first + 1) << kUbShift, right = ~uint64_t{0};
+    for (; it != ub_buckets.end() && it->first <= (stop - 1) >> kUbShift; ++it)
+        for (size_t k = it->second.head; k < it->second.e.size(); k++) {
+            const UbEntry& e = it->second.e[k];
+            if (e.seq < s0) continue;
+            if (e.seq >= s1) break;
+            if (e.dst < stop && addr < e.end) return 1;
+            if (e.end <= addr) left = std::max(left, e.end);
+            if (e.dst >= stop) right = std::min(right, e.dst);
+        }
+    if (it != ub_buckets.end()) right = std::min(right, it->first << kUbShift);
+    *lo = left, *hi = right;
+    return 0;
+}
+bool ub_overlaps(size_t first, size_t lim, uint64_t addr, uint64_t n) {
+    uint64_t lo = 0, hi = 0;
+    const int found = ub_find(first, lim, addr, n, &lo, &hi);
+    if (found >= 0) return found;
+    for (size_t i = first; i < lim; i++) {
+        const UbUpdate& u = ub_updates[i];
+        if (u.dst < addr + n && addr < u.dst + u.size) return true;
+    }
+    return false;
+}
+/// The updates of [first, lim) copied over p, the bytes of [addr, addr+n): in stream order, the last one's bytes where
+/// they overlap. By bucket, each its part of the range, from the last update that covers all that part
+void ub_apply(size_t first, size_t lim, uint64_t addr, uint64_t n, uint8_t* p) {
+    if (first >= lim) return;
+    if (ub_walk(first, lim, addr, n)) {
+        for (size_t i = first; i < lim; i++) {
+            const UbUpdate& u = ub_updates[i];
+            const uint64_t l = std::max(addr, u.dst), h = std::min(addr + n, u.dst + u.size);
+            if (l < h) std::memcpy(p + (l - addr), u.bytes + (l - u.dst), h - l);
+        }
+        return;
+    }
+    const uint64_t s0 = ub_seq0 + first, s1 = ub_seq0 + lim, stop = addr + n, last = (stop - 1) >> kUbShift;
+    for (auto it = ub_buckets.lower_bound(addr >> kUbShift); it != ub_buckets.end() && it->first <= last; ++it) {
+        const std::vector<UbEntry>& e = it->second.e;
+        const uint64_t a = std::max(addr, it->first << kUbShift), b = it->first == last ? stop : (it->first + 1) << kUbShift;
+        const auto by_seq = [](const UbEntry& x, uint64_t s) { return x.seq < s; };
+        size_t k0 = (size_t)(std::lower_bound(e.begin() + (ptrdiff_t)it->second.head, e.end(), s0, by_seq) - e.begin());
+        const size_t k1 = (size_t)(std::lower_bound(e.begin() + (ptrdiff_t)k0, e.end(), s1, by_seq) - e.begin());
+        for (size_t k = k1; k-- > k0;)
+            if (e[k].dst <= a && e[k].end >= b) {
+                k0 = k;
+                break;
+            }
+        for (size_t k = k0; k < k1; k++) {
+            const uint64_t l = std::max(a, e[k].dst), h = std::min(b, e[k].end);
+            if (l < h) std::memcpy(p + (l - addr), e[k].bytes + (l - e[k].dst), h - l);
+        }
+    }
+}
 struct UbGapCache {
     uint64_t epoch = 0, lo = 0, hi = 0;
     size_t first = 0, lim = 0;
@@ -1341,17 +1612,21 @@ bool ub_gap_holds(uint64_t addr, uint64_t n, size_t first, size_t lim) {
 bool ub_try_gap(size_t first, size_t lim, uint64_t addr, uint64_t n) {
     if (first > lim) return false;
     const uint64_t epoch = ub_list_epoch.load(std::memory_order_relaxed);
-    static thread_local std::vector<uint64_t> dst, end;
-    dst.clear();
-    end.clear();
-    dst.reserve(lim - first);
-    end.reserve(lim - first);
-    for (size_t i = first; i < lim; i++) {
-        dst.push_back(ub_updates[i].dst);
-        end.push_back(ub_updates[i].dst + ub_updates[i].bytes.size());
-    }
     uint64_t lo = 0, hi = 0;
-    if (!ub_gap(dst.data(), end.data(), (int)dst.size(), addr, n, &lo, &hi)) return false;
+    const int found = ub_find(first, lim, addr, n, &lo, &hi);
+    if (found > 0) return false;
+    if (found < 0) {   // (ub_walk: the whole list's)
+        static thread_local std::vector<uint64_t> dst, end;
+        dst.clear();
+        end.clear();
+        dst.reserve(lim - first);
+        end.reserve(lim - first);
+        for (size_t i = first; i < lim; i++) {
+            dst.push_back(ub_updates[i].dst);
+            end.push_back(ub_updates[i].dst + ub_updates[i].size);
+        }
+        if (!ub_gap(dst.data(), end.data(), (int)dst.size(), addr, n, &lo, &hi)) return false;
+    }
     if (ub_list_epoch.load(std::memory_order_relaxed) != epoch) return false;   // (the list changed: do not keep the gap)
     ub_gap_cache = {epoch, lo, hi, first, lim, true};
     return true;
@@ -1436,24 +1711,12 @@ uint64_t ub_overlay(uint64_t addr, uint64_t n, uint8_t* base, const std::functio
     if (ub_copy_hit(addr, n, base, first, lim, &kept)) return kept;
     if (ub_try_gap(first, lim, addr, n)) return UINT64_MAX;
     const uint64_t epoch = ub_list_epoch.load(std::memory_order_relaxed);
-    bool any = false;
-    for (size_t i = first; i < lim; i++) {
-        const UbUpdate& u = ub_updates[i];
-        if (u.dst < addr + n && addr < u.dst + u.bytes.size()) {
-            any = true;
-            break;
-        }
-    }
-    if (!any) return UINT64_MAX;
+    if (!ub_overlaps(first, lim, addr, n)) return UINT64_MAX;
     const uint64_t at = alloc(n);
     if (at == UINT64_MAX) return UINT64_MAX;
     uint8_t* p = base + at;
     if (!memory_read_as_submitted(addr, p, n)) std::memset(p, 0, n);
-    for (size_t i = first; i < lim; i++) {
-        const UbUpdate& u = ub_updates[i];
-        const uint64_t lo = std::max(addr, u.dst), hi = std::min(addr + n, u.dst + u.bytes.size());
-        if (lo < hi) std::memcpy(p + (lo - addr), u.bytes.data() + (lo - u.dst), hi - lo);
-    }
+    ub_apply(first, lim, addr, n, p);
     st_ub_overlays++;
     pf_learn(addr, n);   // (longshot, the step 3's P2b) the ask the helper publishes to match: the same bound asks again next frame
     ub_copy_keep(addr, n, base, first, lim, at, view, epoch);
@@ -1477,8 +1740,8 @@ bool ub_read(uint64_t addr, void* dst, uint64_t n) {
     // (longshot, P2b) the helper's negative: no update of this place covers the range — the scans below would walk
     // the list to find the same nothing
     const bool pf_neg = n <= kPfMaxBytes && pf_neg_lookup(addr, n, lim);
-    // (most words are not inside an inline update: the scan that finds that is kept for the gap, and the next words
-    // in the gap do not walk the list. A word kept from that gap is the capture's own bytes)
+    // (most words are not inside an inline update: the lookup that finds that is kept for the gap, and the next words
+    // in the gap do not look again. A word kept from that gap is the capture's own bytes)
     if (pf_neg || ub_gap_holds(addr, n, 0, lim) || ub_try_gap(0, lim, addr, n)) {
         if (n == 4 && page == memory_page_stamp(addr)) {
             UbWord& w = ub_words[ub_word_index(addr)];
@@ -1489,11 +1752,7 @@ bool ub_read(uint64_t addr, void* dst, uint64_t n) {
         }
         return true;
     }
-    for (size_t i = 0; i < lim; i++) {
-        const UbUpdate& u = ub_updates[i];
-        const uint64_t lo = std::max(addr, u.dst), hi = std::min(addr + n, u.dst + u.bytes.size());
-        if (lo < hi) std::memcpy((uint8_t*)dst + (lo - addr), u.bytes.data() + (lo - u.dst), hi - lo);
-    }
+    ub_apply(0, lim, addr, n, (uint8_t*)dst);
     return true;
 }
 
@@ -1507,7 +1766,7 @@ void flush_ub_updates(VkCommandBuffer cmd) {
     gp.items = (int)(ub_updates.size() - ub_first_of_recording);
     full_barrier(cmd);
     for (size_t i = ub_first_of_recording; i < ub_updates.size(); i++)
-        gpu_write(cmd, ub_updates[i].dst, ub_updates[i].bytes.data(), ub_updates[i].bytes.size()), gp.bytes += ub_updates[i].bytes.size();
+        gpu_write(cmd, ub_updates[i].dst, ub_updates[i].bytes, ub_updates[i].size), gp.bytes += ub_updates[i].size;
     full_barrier(cmd);
 }
 
@@ -1754,9 +2013,7 @@ void replay(VkCommandBuffer& cmd, NvnState& s, const uint8_t* p, const uint8_t* 
                      (unsigned long long)u.dst, (unsigned)u.size, f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[10], f[11]);
             }
             if (u.size && u.size <= avail - sizeof u) {
-                UbUpdate up{rec_value_now, u.dst, std::vector<uint8_t>(a + sizeof u, a + sizeof u + u.size)};
-                ub_updates.push_back(std::move(up));
-                ub_list_epoch.fetch_add(1, std::memory_order_relaxed);
+                ub_push(rec_value_now, u.dst, a + sizeof u, u.size);
                 ub_gen++;
                 st_ub_updates++;
             }
@@ -2156,6 +2413,7 @@ void maybe_split(VkCommandBuffer& cmd) {
     if (part_flush) flush_ub_updates(cmd);
     memory_end_submission(cmd, rec_cur->part);
     full_barrier(cmd, "barrier (recording end)");
+    occ_copy_part(cmd);
     submit_recording(*rec_cur, false);
     if (part_flush) ub_first_of_recording = ub_updates.size();
     Recording& r = begin_recording(rec_cur_value);
@@ -2335,7 +2593,8 @@ const uint8_t* replay_handle(VkCommandBuffer& cmd, const uint8_t* h, bool may_st
         PfItem it{{h, start, ub0, par_conds.size(), 0}, nullptr, false, true, ub0, {}};
         // (the updates before this buffer, copied now: the list is pruned between submissions and the helper may
         // only get here after — its overlays apply these by copy, never by the list's place)
-        for (size_t i = 0; i < ub0; i++) it.ubs.push_back({ub_updates[i].dst, ub_updates[i].bytes});
+        for (size_t i = 0; i < ub0; i++)
+            it.ubs.push_back({ub_updates[i].dst, std::vector<uint8_t>(ub_updates[i].bytes, ub_updates[i].bytes + ub_updates[i].size)});
         {
             std::lock_guard pfl(pf_mu);
             pf_queue.push_back(std::move(it));
@@ -2605,7 +2864,7 @@ void bench_frame(int64_t presents) {
     queue_flush();
     for (int i = 0; i < times; i++) {
         vkDeviceWaitIdle(dev.device);
-        ub_updates.resize(ub_before);   // (the last time's uniform updates are written: as if pruned)
+        ub_truncate(ub_before);   // (the last time's uniform updates are written: as if pruned)
         const auto t0 = std::chrono::steady_clock::now();
         for (const auto& h : frame_submits) bench_replay(h);
         ms.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
@@ -2883,6 +3142,7 @@ void finish_recording(uint64_t value) {
     flush_ub_updates(r.cmd);
     memory_end_submission(r.cmd, r.part);
     full_barrier(r.cmd, "barrier (recording end)");
+    occ_copy_part(r.cmd);
     const uint64_t oldest = oldest_unfinished();
     const uint64_t at = oldest == UINT64_MAX ? done_max : std::min(done_max, oldest - 1);
     const bool signal = at > signaled;
@@ -4560,7 +4820,7 @@ void do_present(const nvn_tex* t, const int crop[4]) {
         const bool fg_after = framegen_on() && tex && !fg_inline;
         interpolated = framegen_on() && tex && fg_inline &&
                        framegen_record(r.cmd, texture_view(tex, t, nullptr, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Sample), sw,
-                                       sh, crop);
+                                       sh, crop, present_native_pq.load(std::memory_order_relaxed));
         texture_frame(completed());
         full_barrier(r.cmd);
         presents++;
@@ -4651,7 +4911,7 @@ void do_present(const nvn_tex* t, const int crop[4]) {
             // (its slot is free again once the next submit's value is reached: that one comes after it)
             Recording& g = begin_recording(value + 1);
             interpolated = framegen_record(g.cmd, texture_view(tex, t, nullptr, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Sample),
-                                           sw, sh, crop);
+                                           sw, sh, crop, present_native_pq.load(std::memory_order_relaxed));
             submit_recording(g, false);
         }
         // (frame generation at Off or Auto, where DLSS-G is not asked: its feature, if made, let go, vk_dlss.cpp)

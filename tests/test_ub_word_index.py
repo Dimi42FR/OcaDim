@@ -51,6 +51,13 @@ bool ub_gap_holds(uint64_t addr, uint64_t n, size_t first, size_t lim) {
 bool ub_try_gap(size_t first, size_t lim, uint64_t addr, uint64_t n) {
     return ub_gap_holds(addr, n, first, lim);
 }
+void ub_apply(size_t first, size_t lim, uint64_t addr, uint64_t n, uint8_t* p) {
+    for (size_t i = first; i < lim; i++) {
+        const auto& u = ub_updates[i];
+        const uint64_t lo = std::max(addr, u.dst), hi = std::min<uint64_t>(addr + n, u.dst + u.bytes.size());
+        if (lo < hi) std::memcpy(p + (lo - addr), u.bytes.data() + (lo - u.dst), hi - lo);
+    }
+}
 uint64_t reads = 0;
 bool fail_read = false;
 bool memory_read_as_submitted(uint64_t addr, void* dst, uint64_t n) {

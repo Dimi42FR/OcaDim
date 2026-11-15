@@ -27,6 +27,7 @@
    pad } = 0x28 bytes. */
 #include "hos.h"
 #include "hos_paths.h"
+#include "options_path.h"
 #include "control.h"
 #include <math.h>
 #include <stdio.h>
@@ -502,7 +503,7 @@ static void stick_max(int32_t stick[4], const int32_t v[4]) {
 }
 
 /* ---- (longshot) the controls: the gamepad inputs (by position) and the keys that press each Switch button, from
-   longshot_options.ini beside the executable when it has them: pad_<button>=<position>[,<position>] (HOS_PAD_*, -1 none) and
+   longshot_options.ini in the user folder (host/options_path.c) when it has them: pad_<button>=<position>[,<position>] (HOS_PAD_*, -1 none) and
    key_<button>=<key code>,<key code> (Windows key codes, 0 none), <button> one of bind_names. Read once, at the
    first use; what the file leaves out keeps its default. Keys only, after the Switch's buttons (HOS_KEY_*): the left
    stick's and the camera's directions, and Walk; the ocarina's five note controls take a gamepad input too.
@@ -573,14 +574,7 @@ static void binds_load(void) {
         return;
     }
     binds_default();
-    char path[MAX_PATH];
-    const DWORD len = hos_game_path_a(path, MAX_PATH);
-    char *slash = len ? (strrchr(path, 92) ? strrchr(path, 92) : strrchr(path, 47)) : NULL;   /* (linux: '/') */
-    FILE *f = NULL;
-    if (slash) {
-        snprintf(slash + 1, (size_t)(path + MAX_PATH - slash - 1), "longshot_options.ini");
-        f = fopen(path, "r");
-    }
+    FILE *f = fopen(hos_options_file(), "r");   /* (host/options_path.c) */
     int changed = 0;
     if (f) {
         char line[80];

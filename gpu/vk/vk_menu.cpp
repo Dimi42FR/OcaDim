@@ -87,7 +87,8 @@ enum MenuTab {
     TAB_GAMEPLAY = 2,
     TAB_CONTROLS = 3,
     TAB_DEBUG = 4,   // (the OoT debug tools of #785, a tab of their own)
-    TAB_COUNT = 5,
+    TAB_PERF = 5,    // (longshot) what this PC is doing now: read-only numbers, no setting
+    TAB_COUNT = 6,
     TAB_MOTION = TAB_COUNT,   // (longshot: not a tab of the strip, the Motion page that the Controls tab's Motion row
                               // opens: one past the strip's tabs, so a tab added before TAB_COUNT moves it along)
     TAB_PAGE = TAB_MOTION + 1   // (longshot: the Controls page's rows, above its grid; no tab shows them)
@@ -860,39 +861,6 @@ const char* tx_preset(int v) {
                               "Auto (this PC)"};
     return t[std::min(std::max(v, 0), 6)];
 }
-// (longshot) The VRAM budget row's choices: the texture and mirror budgets in MB (0: Auto, the renderer's own rule). The presets'
-// budgets are among them (preset_vram_budget), so a preset sets the row, and the row can also be chosen on its own (null and
-// Gummi, #dev-work 2026-11-10: the presets were the only way to set a limit)
-constexpr int kVramBudgets = 8;
-constexpr int kVramMinimumOnly = 1;   // (2.2 GB: set by the Minimum (4GB) preset only; the row's own steps go past it)
-constexpr int kVramTextureMb[kVramBudgets] = {0, 2200, 3600, 4800, 6144, 7500, 9216, 11000};
-// (longshot) 3.6 GB's mirrors, the Low (6GB) preset's and so every 6 GB card's from its first start (menu_first_start_for_gpu): 1536
-// MB, not 512, what Auto gives a 6 GB card too (mirror_budget.h auto_bytes). At 512 the game's pools left out of VRAM were read over
-// PCIe, 30-32 GB of bound ranges every 600 submits in Hyrule Field on an RTX 3060 Laptop (6 GB), the GPU's frame 27 ms. A preset's
-// mirrors are never more than Auto's on the card (mirror_budget.h budget_bytes): Low on a 4 GB card, which preset_caps_memory lets
-// through, keeps 512
-constexpr int kVramMirrorMb[kVramBudgets] = {0, 256, 1536, 1024, 1536, 2048, 2560, 3072};
-int preset_vram_budget(int p) {
-    static const int of[] = {0, 1, 2, 3, 5, 7};   // (none: Auto; Minimum 2.2 GB, Low 3.6, Balanced 4.8, High 7.5, Ultra 11)
-    return of[std::min(std::max(p, 0), 5)];
-}
-void vram_budget_sync() {
-    const int b = std::min(std::max(opts.vram_budget, 0), kVramBudgets - 1);
-    opts.vram_mb = kVramTextureMb[b];
-    opts.mirror_mb = kVramMirrorMb[b];
-}
-const char* tx_vram_budget(int v) {
-    static const char* t[kVramBudgets] = {"Auto", "2.2 GB (4GB preset)", "3.6 GB", "4.8 GB", "6 GB", "7.5 GB", "9 GB", "11 GB"};
-    return t[std::min(std::max(v, 0), kVramBudgets - 1)];
-}
-MENU_HINTS(hn_vram_budget, 0, "Set from what the driver allows: 70% of it, 45% on cards of 8 GB or less, at most 6 GB.",
-           "For 4 GB cards.", "For 6 GB cards.", "For 8 GB cards.", "The most Auto ever sets.", "For 12 GB cards.", nullptr,
-           "For 16 GB cards.")
-/// a preset's budgets (0: none, Auto): the VRAM budget row set to them
-void sync_preset_budgets(int p) {
-    opts.vram_budget = preset_vram_budget(p);
-    vram_budget_sync();
-}
 // (Sharpness: tuned for the window pass's neighbours one picture pixel apart, each about the old setting's sharpening on a
 // 3840 x 2160 window at that preset's picture, 2048 x 1152 or the handheld profile's 1536 x 864: same frame, mean |Laplacian|
 // of the window and of the picture, on the slider's steps)
@@ -903,10 +871,12 @@ uint64_t auto_for = 0;               // (the fingerprint of the hardware the opt
 uint64_t auto_fp = 0;                // (this PC's, menu_auto_for_gpu)
 uint64_t auto_tuned = 0;             // (the fingerprint the measured tuning in play finished for: auto_tuned=)
 ::auto_settings::Tuning auto_tuning;   // (the measured tuning in play, menu_auto_tune; its steps kept as auto_steps=)
-void apply_auto(bool keep_own);   // (below: the Auto preset's rows)
+std::string gpu_saved_card;           // (the GPU device row's card as the options file saved it, gpu_device_id=: gpu_choice.h)
+bool gpu_card_missing = false;        // (that card is not among this run's GPUs: menu_set_gpu_count)
+void apply_auto();   // (below: the Auto preset's rows)
 void apply_preset(int p) {
     if (p == kAutoPreset) {
-        apply_auto(false);   // (chosen on the row: all of its rows, as any preset)
+        apply_auto();   // (chosen on the row: all of its rows, as any preset)
         return;
     }
     // (the rows it sets are the preset's from now on, even at the value the environment forced: save writes them)
@@ -940,35 +910,26 @@ void apply_preset(int p) {
     // (the Upscaler and Frame generation are the player's: a preset never turns DLSS or made frames on or off. With DLSS
     // its resolution is DLSS's nearest mode)
     if (p > 0) opts.resolution = ur::snap_render(upscaler(), opts.resolution);   // (a slider stop kept)
-    opts.budget = p;   // (Custom chosen on this row: no budget, as before)
-    sync_preset_budgets(p);
+    opts.budget = p;   // (Custom chosen on this row: none, as before)
 }
-/// keep_own (Auto choosing again for new hardware): the VRAM budget row the player set under Auto stays theirs (budget 0,
-/// set_row). The Output resolution Auto never sets (auto_settings.h Choice: the game's own or the player's, read at boot), nor
+/// The Output resolution Auto never sets (auto_settings.h Choice: the game's own or the player's, read at boot), nor
 /// Mesh shaders (RX_VK_MESH_SHADERS), and the fingerprint has the card's mesh shaders, not this run's mode
-void apply_auto(bool keep_own) {
+void apply_auto() {
     const ::auto_settings::Choice& c = auto_choice;
     if (c.tier < 1) return;
-    const bool own_budget = keep_own && opts.preset == kAutoPreset && opts.budget == 0;
-    const int vram_budget = opts.vram_budget;
     env_release(&opts.dlss);
     opts.dlss = c.upscaler;   // (before the tier's rows: apply_preset snaps its Render resolution to this upscaler)
-    apply_preset(c.tier);   // (the tier's scaling rows and memory budgets)
+    apply_preset(c.tier);   // (the tier's scaling rows)
     if (c.tier == 1) opts.upscale = 0, opts.sharpness = 0;   // (the plain scale, as RX_VK_LOW_SPEC: the lightest)
     opts.handheld = 0;   // (docked: the handheld profile gave a GTX 1050 a black picture; the Render resolution lightens the card)
     if (c.resolution) opts.resolution = ur::snap_render(c.upscaler, c.resolution);
-    if (own_budget) {
-        opts.budget = 0;
-        opts.vram_budget = vram_budget;
-        vram_budget_sync();
-    }
     auto_tuned = 0;   // (chosen again: measured again in play)
     auto_tuning = {};
     opts.preset = kAutoPreset;   // (apply_preset set the tier's number)
     auto_for = auto_fp;          // (chosen for this PC, whether at a start or on the menu's row)
 }
 
-MENU_HINTS(hn_preset, 0, "Each row as you set it. Changing most rows yourself comes back to Custom; the VRAM budget row keeps its value.",
+MENU_HINTS(hn_preset, 0, "Each row as you set it. Changing most rows yourself comes back to Custom.",
            "Resolution 50% (with DLSS its nearest mode), Lanczos, Sharpness 30%, the Handheld Profile.",
            "Resolution 75% (with DLSS its nearest mode), Lanczos, Sharpness 30%, the Handheld Profile.",
            "Resolution 100% (with DLSS its nearest mode), Catmull-Rom, Sharpness 30%.",
@@ -1276,12 +1237,58 @@ void text_set(TextField& f, const char* t) {
     f.len = f.caret = (int)strlen(f.text);
 }
 
+// (longshot) The Performance tab: this PC's numbers as they are now, read-only. Each row formats its line when it is drawn, from
+// the accounts the FPS counter's Dev level reads (the frame's parts, the textures, the driver's memory). Nothing here sets
+// anything: perf_value stands for every row's value, and stops_at_ends keeps the arrows off it.
+int perf_value = 0;
+fps_stats::Summary perf_summary() { return fps_summary(fps_clock(), fps_stats::kSecond / 2, fps_stats::kLowWindow); }
+const char* perf_frame_rate(int) {
+    static char b[48];
+    const fps_stats::Summary s = perf_summary();
+    if (!s.frames) return "-";
+    snprintf(b, sizeof b, "%.1f fps  %.1f ms", s.avg_ms > 0 ? 1000.0 / s.avg_ms : 0.0, s.avg_ms);
+    return b;
+}
+void perf_part_line(int part, char* b, size_t n) {
+    const fps_stats::Summary s = perf_summary();
+    if (!s.frames) { snprintf(b, n, "%s", "-"); return; }
+    snprintf(b, n, "%.1f ms", s.part[part]);
+}
+const char* perf_game(int) { static char b[24]; perf_part_line(fps_stats::kGame, b, sizeof b); return b; }
+const char* perf_render(int) { static char b[24]; perf_part_line(fps_stats::kRender, b, sizeof b); return b; }
+const char* perf_gpu_wait(int) { static char b[24]; perf_part_line(fps_stats::kGpuWait, b, sizeof b); return b; }
+const char* perf_pace(int) { static char b[24]; perf_part_line(fps_stats::kPace, b, sizeof b); return b; }
+const char* perf_gpu(int) {
+    static char b[24];
+    const fps_stats::Summary s = perf_summary();
+    if (!s.frames) { snprintf(b, sizeof b, "%s", "-"); return b; }
+    snprintf(b, sizeof b, "%.1f ms", s.gpu_ms);
+    return b;
+}
+const char* perf_vram(int) {
+    static char b[40];
+    uint64_t used = 0, allowed = 0;
+    const bool known = vram_usage(&used, &allowed);   // (before the line reads them: one statement, one order)
+    fps_stats::vram_line(b, sizeof b, used, allowed, known);
+    return b;
+}
+const char* perf_textures(int) {
+    static char b[40];
+    fps_stats::textures_line(b, sizeof b, texture_count(), texture_bytes());
+    return b;
+}
+const char* perf_pipelines(int) {
+    static char b[48];
+    const fps_stats::Summary s = perf_summary();
+    snprintf(b, sizeof b, "%d made, %d left out", s.pipelines, s.left_out);
+    return b;
+}
 Row rows[] = {
     // Graphics, in sections: a heading row is a section's title (draw_options draws it, the selection steps over it). The
     // Quality preset first, as it sets rows in every section. (Reflex, Anti-Lag 2, the Upscaler and the DLSS model only where
     // they run here; HDR's paper white and peak brightness only with HDR on: row_shown)
     {TAB_GRAPHICS, "Quality preset", &opts.preset, 0, 6, 1, tx_preset,
-     "Sets the scaling rows and memory limits for a GPU with that much memory. The Upscaler and Frame generation stay yours.",
+     "Sets the scaling rows for a GPU with that much memory. The Upscaler and Frame generation stay yours.",
      hn_preset},
     // (the picture's way, top to bottom: the output's size, what fills it from the 3D, the 3D's size, its sharpening; then
     // the frames, and the window it is shown in)
@@ -1373,9 +1380,6 @@ Row rows[] = {
     {TAB_GRAPHICS, "Threaded rendering", &opts.threaded_rendering, 0, 2, 1, tx_vsync,
      "Draws the picture on threads of its own, beside the game's, on a processor with threads to spare. Applies after a "
      "restart.", hn_threaded, true, true},
-    {TAB_GRAPHICS, "VRAM budget", &opts.vram_budget, 0, kVramBudgets - 1, 1, tx_vram_budget,
-     "How much video memory the game's textures may use, and its copies of game memory with them. Lower it if the game "
-     "stutters after a while of play; a preset sets it.", hn_vram_budget, false, true},
     // (no Mesh shaders row: changing it translated every shader again at the next start, for nothing a player gains. A launch
     // switch now, RX_VK_MESH_SHADERS: gpu/vk/mesh_mode.h)
 
@@ -1554,8 +1558,29 @@ Row rows[] = {
     // (longshot, integrated graphics only: row_shown) weak_laptop_apply
     {TAB_DEBUG, "Set up for a weak laptop", nullptr, 0, 0, 0, nullptr,
      "For integrated graphics with 4 CPU threads or fewer (an i3 laptop's UHD Graphics): Render resolution 33% with the game's own "
-     "upscaler, the plain window scale without sharpening, the handheld profile, the smallest memory budgets, Intel's shaders "
+     "upscaler, the plain window scale without sharpening, the handheld profile, smaller textures, Intel's shaders "
      "one at a time and quick compute builds. The handheld profile applies after a restart."},
+    // (longshot) the Performance tab: what this PC is doing now. Read-only rows (perf_value, stops_at_ends): no setting here
+    {TAB_PERF, "Frame rate", &perf_value, 0, 0, 1, perf_frame_rate,
+     "The frame rate and the frame time of the last half second. Read-only: nothing on this tab changes a setting."},
+    {TAB_PERF, "The game's code", &perf_value, 0, 0, 1, perf_game,
+     "How much of each frame is the game's own work: its logic, its threads, its sound. Read-only."},
+    {TAB_PERF, "The renderer", &perf_value, 0, 0, 1, perf_render,
+     "How much of each frame is the renderer recording the game's draws and submitting them. Read-only."},
+    {TAB_PERF, "Waiting for the GPU", &perf_value, 0, 0, 1, perf_gpu_wait,
+     "How much of each frame waits for the graphics card: a recording slot, a fence, OoT's own poll for its frame's GPU work. "
+     "Read-only."},
+    {TAB_PERF, "The GPU", &perf_value, 0, 0, 1, perf_gpu,
+     "The graphics card's own time for a frame, a few frames late. Read-only."},
+    {TAB_PERF, "Frame pacing", &perf_value, 0, 0, 1, perf_pace,
+     "How much of each frame waits for its turn: the frame rate cap, V-Sync, the game's own sleeps. Read-only."},
+    {TAB_PERF, "Video memory", &perf_value, 0, 0, 1, perf_vram,
+     "How much of the driver's budget the renderer holds: textures, render targets, the game's memory mirrors. Read-only."},
+    {TAB_PERF, "Textures", &perf_value, 0, 0, 1, perf_textures,
+     "How many textures the renderer holds, and how much video memory they take. Read-only."},
+    {TAB_PERF, "Pipelines", &perf_value, 0, 0, 1, perf_pipelines,
+     "Shaders built while playing since the counter's window began, and draws left out because their pipeline was not ready "
+     "yet. Read-only."},
     // (longshot) the Gameplay tab's Bug report (vk_bug_report.h): A or Enter writes the report's folder; the help says what is in it
     {TAB_GAMEPLAY, "Bug report", nullptr, 0, 0, 0, nullptr,
      "Saves what an issue needs in a new folder, bug-reports in the game folder: report.txt with the issue form's answers (this "
@@ -1879,7 +1904,7 @@ int drag_row = -1;
 bool mouse_read = false;   // (the menu has read the mouse since it opened)
 bool is_slider(const Row& r) { return r.value == &opts.sharpness || r.value == &opts.mouse_sens || r.value == &opts.gyro_sens_x || r.value == &opts.gyro_sens_y || r.value == &opts.volume || r.value == &opts.camera_speed || r.value == &opts.fov; }
 /// (a scale: the arrows and a click stop at its ends; Rumble strength would go from Off to its strongest)
-bool stops_at_ends(const Row& r) { return r.value == &opts.ultrawide || r.value == &opts.mouse_sens || r.value == &opts.rumble || r.value == &opts.gyro_sens_x || r.value == &opts.gyro_sens_y || r.value == &opts.volume || r.value == &opts.camera_speed || r.value == &opts.fov; }
+bool stops_at_ends(const Row& r) { return r.value == &opts.ultrawide || r.value == &opts.mouse_sens || r.value == &opts.rumble || r.value == &opts.gyro_sens_x || r.value == &opts.gyro_sens_y || r.value == &opts.volume || r.value == &opts.camera_speed || r.value == &opts.fov || r.value == &perf_value; }
 /// (the ini's Rumble strength on the menu's steps: 0 to 150, the nearest 25)
 int rumble_step(int v) { return (std::min(std::max(v, 0), 150) + 12) / 25 * 25; }
 // (longshot) A run's environment over a saved row (RX_VK_PACE=1, HOS_OUTPUT_RES=...): for that run only. save() writes the
@@ -1924,12 +1949,7 @@ bool env_holds(const int* value) {
     return false;
 }
 Out player_custom_output{0, 0};   // (the player's own Output resolution size when HOS_OUTPUT_RES names another of its own)
-std::string ini_path() {
-    char exe[MAX_PATH];
-    const DWORD n = game_module_path(exe, MAX_PATH);
-    std::string dir(exe, n);
-    return dir.substr(0, dir.find_last_of("\\/") + 1) + "longshot_options.ini";
-}
+std::string ini_path() { return options_path(); }   // (the user folder's when --user names one: vk_paths.h)
 const char* ini_key(const Row& r) {
     if (r.value == &opts.output_res) return "output_res";   // (host/nn_applet.c reads it at the start)
     if (r.value == &opts.vsync) return "vsync";
@@ -2056,6 +2076,9 @@ void save() {
                         key == "auto_tuned" || key == "auto_output" || key == "auto_steps";
             // (and the Mesh shaders row's line, no longer read (gpu/vk/mesh_mode.h): dropped, not kept for nothing)
             mine |= key == "mesh_shaders";
+            // (and the VRAM budget row's, removed: one rule by the card, texture_budget.h and mirror_budget.h)
+            mine |= key == "vram_budget";
+            mine |= key == "gpu_device_id";   // (the GPU device row's card: written below)
             for (const Row& r : rows)
                 if (!mine && r.value && key == ini_key(r)) mine = true;
             if (!mine) others += line, others += others.back() == '\n' ? "" : "\n";
@@ -2078,9 +2101,13 @@ void save() {
             }
         }
         if (!mic_want.empty()) fprintf(f, "microphone_device=%s\n", mic_want.c_str());   // (longshot: also while it is unplugged)
-        // (not a row: the budgets Custom keeps. 0 too: with a preset on, the VRAM budget row chosen by the player, which the next
-        // start must not take back to the preset's)
+        // (not a row: the preset Custom came from, whose mip trimming it keeps: opts.budget)
         fprintf(f, "memory_budget=%d\n", opts.budget);
+        // (the GPU device row's card itself, not only its place in the list: gpu_choice.h. A saved card not here this run, the
+        // row still at the Auto it started on, stays saved for when it is back)
+        const std::string card = opts.gpu_device > 0 ? gpu_choice::card_id(gpu_device_cards, opts.gpu_device - 1)
+                                 : opts.gpu_device == 0 && gpu_card_missing ? gpu_saved_card : std::string();
+        if (!card.empty()) fprintf(f, "gpu_device_id=%s\n", card.c_str());
         if (auto_for) fprintf(f, "auto_for=%016llx\n", (unsigned long long)auto_for);   // (the hardware Auto (this PC) chose for)
         if (auto_tuned) fprintf(f, "auto_tuned=%016llx\n", (unsigned long long)auto_tuned);   // (and measured in play for)
         // (the tuning's steps so far and whether one went down: the no-seesaw rule and the two steps hold across restarts)
@@ -2139,12 +2166,12 @@ void share_finish() {
     menu_refresh = true;
 }
 bool is_share_row(const Row& r) { return !r.value && r.tab == TAB_DEBUG && !strcmp(r.name, "Save my pipeline list"); }
-// (longshot) Set up for a weak laptop (the Debug tab, integrated graphics: row_shown): Minimum's rows and memory budgets, then
+// (longshot) Set up for a weak laptop (the Debug tab, integrated graphics: row_shown): Minimum's rows and mip trimming, then
 // lighter still. An i3-1115G4's UHD Graphics (2 cores, 4 threads, 16 GB shared) ran Kokiri Forest and the Deku Tree at 3-6 fps
 // with 120-200 ms of GPU time a frame on the game's own dynamic resolution, docked at 2048 x 1152
 bool laptop_applied = false;
 void weak_laptop_apply() {
-    apply_preset(1);   // (Minimum: its scaling rows, the handheld profile, its memory budgets)
+    apply_preset(1);   // (Minimum: its scaling rows, the handheld profile, its mip trimming on a small or shared GPU)
     env_release(&opts.dlss);
     opts.dlss = 0;   // (the game's own upscaler: no DLSS or FSR on these GPUs, and the lightest)
     opts.resolution = ur::snap_render(upscaler(), 6);   // (33%: auto_settings.h RES_ULTRA_PERFORMANCE)
@@ -2152,7 +2179,7 @@ void weak_laptop_apply() {
     for (int* v : {&opts.framegen, &opts.intel_compiles, &opts.intel_quick}) env_release(v);
     opts.framegen = 0;
     opts.intel_compiles = 0, opts.intel_quick = 1;
-    opts.preset = 0;   // (Custom, Minimum's memory budgets kept: opts.budget)
+    opts.preset = 0;   // (Custom, Minimum's mip trimming kept: opts.budget)
     samplers_changed();   // (the upscalers' texture LOD bias follows the 3D's share)
     laptop_applied = true;
     menu_refresh = true;
@@ -2163,7 +2190,7 @@ void weak_laptop_apply() {
     }
     save();
     logf("menu: Set up for a weak laptop: Render resolution %d%%, the game's own upscaler, plain scale, handheld profile (after a "
-         "restart), Minimum's memory budgets", ur::percent(opts.resolution));
+         "restart), Minimum's mip trimming", ur::percent(opts.resolution));
 }
 std::string game_folder() {
     char exe[MAX_PATH];
@@ -2540,10 +2567,6 @@ void set_row(Row& r, int v, int dir, bool keep = true) {
         v = step_output_choice(*r.value, dir);
         if (v == *r.value) return;
     }
-    // (longshot) the VRAM budget row steps past 2.2 GB: the Minimum (4GB) preset's, too few textures on a bigger card (a 12 GB
-    // card's walk made 2-3 times as many textures again as at Auto, 1% lows of 5-7 fps; hckrman101, #dev-work). The preset still
-    // sets it, and the row shows it then
-    if (r.value == &opts.vram_budget && v == kVramMinimumOnly) v += dir;
     if (stops_at_ends(r)) v = std::min(std::max(v, r.lo), r.hi);   // (a scale: it stops at its ends)
     if (r.value == &opts.pad_layout) {
         if (v > 2) v = dir > 0 ? 0 : 2;
@@ -2561,13 +2584,8 @@ void set_row(Row& r, int v, int dir, bool keep = true) {
             const int out = output_for_aspect(*r.value);
             if (out != opts.output_res) opts.output_res = out, env_release(&opts.output_res);
         }
-        if (r.value == &opts.vram_budget) {   // (longshot: set on the row, the budget is the player's, on any card)
-            opts.budget = 0;
-            vram_budget_sync();
-        }
         if (!r.preset_exempt) {   // (rows no preset sets: the controls, the window, the counter...)
-            // (Custom, with the memory budgets of the preset it came from: they went with it, and Low (6GB) then a Resolution
-            // step left a 6 GB card without its texture cap, past its VRAM, and Streamline refused DLSS frames)
+            // (Custom, still the preset it came from in opts.budget: Minimum's mip trimming on a small card stays with it)
             opts.preset = 0; // Custom
         }
     }
@@ -3280,7 +3298,7 @@ void draw_debug_rows(ui::Ctx& c, float cx0, float cx1, float top, float bottom, 
 // report_default has the Aspect ratio's, the Game language's and Frame generation by's.
 bool report_default_depends_on_pc(const Row& r) {
     if (r.value == &opts.sharpness || r.value == &opts.pace || r.value == &opts.realtime ||
-        r.value == &opts.handheld || r.value == &opts.vram_budget)
+        r.value == &opts.handheld)
         return opts.preset != 0 || auto_for != 0;
     return r.value == &opts.output_res || r.value == &opts.resolution || r.value == &opts.dlss ||
            r.value == &opts.preset || r.value == &opts.upscale ||
@@ -3340,8 +3358,7 @@ void bug_report_save() {
     in.version = LONGSHOT_VERSION;
     in.gpu = device_report_text();
     in.options = changed_rows_text(in.pc_options);
-    const std::string ini = ini_path();
-    in.game_dir = ini.substr(0, ini.find_last_of("\\/") + 1);
+    in.game_dir = game_folder_path();   // (its logs/ and bug-reports/: vk_paths.h)
     in.log = [](const char* line) { logf("%s", line); };
     in.ask_picture = bug_report_picture;
     logf("menu: bug report asked for");
@@ -3375,7 +3392,7 @@ const char* bug_report_hint() {
     return text.c_str();
 }
 
-const char* const tab_titles[TAB_COUNT] = {"Graphics", "Audio", "Gameplay", "Controls", "Debug"};
+const char* const tab_titles[TAB_COUNT] = {"Graphics", "Audio", "Gameplay", "Controls", "Debug", "Performance"};
 inline const char* tab_title(int t) { return t >= 0 && t < TAB_COUNT ? tab_titles[t] : "Settings"; }
 inline bool cheat_is_toggle(int c) { return c == 0 || c == 1 || c == 7; }
 
@@ -4460,7 +4477,6 @@ void menu_init() {
     for (auto& count : item_counts) count.store(-1, std::memory_order_relaxed);
     bool has_options = false;
     bool has_output = false;   // (an output_res= line: the Output resolution chosen; none: hos_output_default, as the host)
-    bool has_vram_budget = false;   // (longshot: a file from before the VRAM budget row: its preset's, memory_budget's)
     bool has_memory_budget = false;   // (a file from before memory_budget: its preset's)
     const char* cheats = getenv("HOS_OOT_CHEATS");
     cheats_env = cheats && !strcmp(cheats, "1");
@@ -4500,6 +4516,7 @@ void menu_init() {
             if (!strcmp(line, "dynamic_resolution")) old_dynres = atoi(eq + 1);
             if (!strcmp(line, "menu_size") && atoi(eq + 1) == 0) menu_auto = true;
             if (!strcmp(line, "auto_for")) auto_for = strtoull(eq + 1, nullptr, 16);
+            if (!strcmp(line, "gpu_device_id")) gpu_saved_card.assign(eq + 1, strcspn(eq + 1, " \t\r\n"));   // (menu_set_gpu_count)
             if (!strcmp(line, "auto_tuned")) auto_tuned = strtoull(eq + 1, nullptr, 16);
             if (!strcmp(line, "auto_steps")) {
                 int steps = 0, down = 0;
@@ -4507,7 +4524,6 @@ void menu_init() {
                     auto_tuning.steps = std::max(steps, 0), auto_tuning.went_down = down != 0;
             }
             if (!strcmp(line, "memory_budget")) opts.budget = std::min(std::max(atoi(eq + 1), 0), 5), has_memory_budget = true;
-            has_vram_budget |= !strcmp(line, "vram_budget");
             if (!strcmp(line, "microphone_device")) {   // (longshot: the microphone, by its name)
                 mic_want = mic_key(eq + 1);
             }
@@ -4565,8 +4581,6 @@ void menu_init() {
     }
     if (opts.preset > 0 && !has_memory_budget) opts.budget = opts.preset;   // (a file from before memory_budget: its preset's)
     if (opts.preset == kAutoPreset && !has_memory_budget) opts.budget = 0;   // (Auto: its tier's, menu_auto_for_gpu)
-    if (!has_vram_budget) opts.vram_budget = preset_vram_budget(opts.budget);   // (a file from before the row)
-    vram_budget_sync();
     menu_debug_rows(opts.descriptor_reuse, opts.sampler_cache);   // (the Debug rows that apply in play: what was loaded)
     fps_level_now.store(fps_stats::level_of(opts.show_fps), std::memory_order_relaxed);
     output_field_show();   // (longshot: Custom output size, the size of the player's own, as the file has it)
@@ -4595,8 +4609,8 @@ void menu_init() {
 /// picks from the hardware. A first start (no options file yet) starts on it. With Auto on, the profile is applied when the
 /// hardware it was chosen for changes (another card, its memory, the screen's size, a build with or without DLSS or FSR 4):
 /// the fingerprint is kept in the options file (auto_for=). Changing a row yourself comes back to Custom, and then nothing here
-/// touches the settings; the rows no preset sets (the Output resolution, the VRAM budget) leave it on Auto, Auto never sets
-/// the Output resolution, and the VRAM budget the player set is kept when Auto chooses again (apply_auto keep_own). Before Auto,
+/// touches the settings; the rows no preset sets (the Output resolution) leave it on Auto, and Auto never sets the Output
+/// resolution. The VRAM budgets are no preset's: one rule by the card (texture_budget.h, mirror_budget.h). Before Auto,
 /// a first start chose Minimum or Low by the card's memory alone: an older or smaller card no longer starts with the full-size
 /// budget (a GTX 1050 lost the device at the first scene that way,
 /// Discord 2026-11-10). RX_VK_AUTO_PRESET=0: a first start keeps the defaults, as before Auto.
@@ -4617,11 +4631,14 @@ void menu_auto_for_gpu(const VkPhysicalDeviceProperties& props, ::auto_settings:
         logf("vk: Auto (this PC) would be: %s (%s)", auto_choice.why, hw_line);   // (for a bug report: what Auto would choose)
         return;
     }
+    // (an options file from the VRAM budget row, set under Auto: memory_budget=0, the preset Auto's tier is again, for Minimum's
+    // mip trimming: low_vram_texture_mips)
+    if (opts.budget == 0) opts.budget = auto_choice.tier;
     if (fp == auto_for) {
         logf("vk: Auto (this PC): the settings chosen for this PC before (%s)", hw_line);
         return;
     }
-    apply_auto(!first);   // (the hardware changed: the VRAM budget the player set stays theirs)
+    apply_auto();   // (the hardware changed)
     // (a row that takes a restart Auto sets, the Profile (docked), applies at the next start, a first start's too: host/hos_main.c
     // read it at boot, before the device, and this run keeps what menu_init recorded. It is Auto's, not the player's: closing the
     // menu does not ask to restart for it, as after Later. The row still says After restart, and a change of the player's own to
@@ -4688,7 +4705,20 @@ int resolution_scale() {
     return s > 0 ? (int)(twelfths(s) * 10000.0f / 12.0f + 0.5f) : 0;   // (the twelfth game_size labels)
 }
 
+/// The usable GPUs counted (vk_main.cpp pick_device, gpu_device_cards filled): the row offers them, and a card the options file
+/// saved (gpu_device_id=) is found where it is in this run's list, whatever its place was (gpu_choice.h). One not here (taken
+/// out, an eGPU unplugged) is Auto for the run, and stays saved (save) until the row is changed. A file from before the card
+/// was saved keeps its place (gpu_device=), and saves the card at its next save
 void menu_set_gpu_count(int count) {
+    if (!gpu_saved_card.empty()) {
+        const int at = gpu_choice::menu_of_card(gpu_device_cards, gpu_saved_card);
+        gpu_card_missing = at == 0;
+        if (at > 0 && at != opts.gpu_device)
+            logf("vk: GPU device: the saved card (%s) is %d: %s now, not %d", gpu_saved_card.c_str(), at - 1,
+                 gpu_device_names[at - 1].c_str(), opts.gpu_device - 1);
+        else if (!at) logf("vk: GPU device: the saved card (%s) is not here: Auto for this run, kept for when it is back", gpu_saved_card.c_str());
+        opts.gpu_device = at;
+    }
     for (Row& r : rows) {
         if (r.value == &opts.gpu_device) {
             r.hi = count;
@@ -4842,7 +4872,7 @@ void menu_option_set(int id, int value) {
 // its own thread: menu_mu keeps them apart from menu_tick (the present's thread) and from menu_option_set (the game's)
 bool bridge_row(int i) { return rows[i].value && !rows[i].heading && rows[i].cheat < 0 && row_shown(i); }
 void bridge_fill(int i, MkwVkSetting* out) {
-    static const char* const tabs[] = {"graphics", "audio", "gameplay", "controls", "debug", "motion", "controls"};
+    static const char* const tabs[] = {"graphics", "audio", "gameplay", "controls", "debug", "performance", "motion", "controls"};
     static_assert(sizeof tabs / sizeof tabs[0] == TAB_PAGE + 1, "a name for each MenuTab");
     const Row& r = rows[i];
     *out = MkwVkSetting{};

@@ -180,12 +180,18 @@ static float host_wide_menus(uint32_t keep_mask) {   /* (MkwVkHost.wide_menus) *
     static int looked;
     if (!looked) looked = 1, forced = getenv("HOS_WIDE_KEEP");
     hos_wide_keep_mask = forced ? (uint32_t)strtoul(forced, NULL, 16) : keep_mask;
+    extern volatile float hos_wide_ratio;   /* (narrower than 16:9: the menus fit its width whatever the Ultrawide menus row says,
+                                               never stretched up and down; the row is about wider screens) */
+    if (!forced && hos_wide_ratio > 0.0f && hos_wide_ratio < 16.0f / 9.0f * 0.999f) hos_wide_keep_mask &= ~2u;
+    void hos_wide_ui_tick(void);   /* (hos_wide_ui.c: the HUD's layout for the picture's shape, each present) */
+    hos_wide_ui_tick();
     return hos_wide_margin;
 }
 int hos_mouse_pointer(MkwVkPointer *out);   /* display.c, posix/display_sdl.c */
 int hos_sdl_gyro_status(void);   /* pad_sdl.c */
 extern const char *hos_romfs_dir;   /* nn_fs.c, set by hos_main.c */
 static const char *host_romfs_dir(void) { return hos_romfs_dir; }
+const char *hos_options_file(void);   /* options_path.c */
 
 #ifdef _WIN32
 static unsigned char menu_key_press[256];
@@ -264,7 +270,7 @@ static const MkwVkHost vk_host = {
     host_watch_guest_writes, hos_pad_raw, hos_binding, hos_bind, host_aspect_ratio, host_take_key_press,
     hos_mouse_pointer, hos_mic_count, hos_mic_name, hos_mic_select, hos_sdl_gyro_status, hos_log_flush, hos_prompts_face,
     host_romfs_dir, host_wide_menus, host_slept_ns, host_fps_timing, hos_prompts_live_parts, host_screen_size,
-    host_take_text,
+    host_take_text, hos_options_file,
 };
 
 static const MkwVkRenderer *vk;   /* the Vulkan back end, when it was chosen and started */
@@ -397,6 +403,10 @@ int rx_prepare_shaders(void) {
 /* (longshot) the window is being closed: a back end still preparing its shaders stops and keeps what it made first (a few
    seconds at most). One without the export (an older one) has nothing to keep */
 void rx_close_asked(void) {
+    /* (first, before anything that takes time: the player asked to quit, so however the process ends from here (a second
+       close of a window that stopped answering) the crash window says nothing; a crash still counts: host/hos_crash_dialog.h) */
+    void hos_crash_quit_asked(void);
+    hos_crash_quit_asked();
     if (!vk_module) return;
     void (*close_asked)(void) = (void (*)(void))(void *)GetProcAddress(vk_module, "mkwvk_close_asked");
     if (close_asked) close_asked();
@@ -599,6 +609,6 @@ void rx_nvn_vmap_changing(uint64_t gpu, uint64_t size) {
     if (vk && vk->nvn_vmap_changing) vk->nvn_vmap_changing(gpu, size);
     if (away) hos_vcore_back();
 }
-void rx_nvn_pool_created(uint64_t gpu, uint64_t size) {
-    if (vk && vk->nvn_pool_created) vk->nvn_pool_created(gpu, size);
+void rx_nvn_pool_created(uint64_t gpu, uint64_t size, uint32_t flags) {
+    if (vk && vk->nvn_pool_created) vk->nvn_pool_created(gpu, size, flags);
 }

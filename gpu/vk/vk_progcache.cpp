@@ -835,7 +835,8 @@ size_t program_cache_load_some(const std::unordered_set<uint64_t>& wanted, const
     return n;
 }
 
-/// (longshot) Program key's kept variants made for fn, then let go (modules and layouts): the records stay for play
+/// (longshot) Program key's kept variants made for fn, then let go (modules and layouts of their own: the shared layouts stay, other
+/// programs have them, vk_draw.cpp layouts_for): the records stay for play
 void program_cache_borrow(uint64_t key, const std::function<void(Program&)>& fn) {
     std::vector<std::unique_ptr<Program>> variants;
     program_cache_load(key, variants, true);
@@ -843,6 +844,7 @@ void program_cache_borrow(uint64_t key, const std::function<void(Program&)>& fn)
         fn(*p);
         for (Stage& st : p->stages)
             if (st.module) vkDestroyShaderModule(dev.device, st.module, nullptr);
+        if (p->layout_shared) continue;
         if (p->layout) vkDestroyPipelineLayout(dev.device, p->layout, nullptr);
         if (p->set_layout) vkDestroyDescriptorSetLayout(dev.device, p->set_layout, nullptr);
     }

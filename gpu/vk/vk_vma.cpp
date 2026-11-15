@@ -8,7 +8,11 @@
 #include <vk_mem_alloc.h>
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
 #include <cstdlib>
+#include <deque>
+#include <mutex>
+#include <thread>
 #include <vector>
 
 #ifndef LONGSHOT_ENV_H   // (env_on: the switches' one rule)
@@ -173,6 +177,9 @@ namespace {
 VmaDefragmentationContext compact_ctx = VK_NULL_HANDLE;
 VmaDefragmentationPassMoveInfo compact_pass{};
 bool compact_in_pass = false;
+// (the reaper's, destroy_image_later: its frees and a pass take turns; a pass waits for the one free in flight)
+std::mutex reap_mu;
+std::condition_variable reap_cv;
 bool compact_over(uint64_t* freed_bytes, uint32_t* freed_blocks) {
     VmaDefragmentationStats st{};
     vmaEndDefragmentation(vma, compact_ctx, &st);
@@ -194,6 +201,7 @@ bool image_compact_active() { return compact_ctx != VK_NULL_HANDLE; }
 bool image_compact_pass(std::vector<ImageMove>& moves, uint64_t* freed_bytes, uint32_t* freed_blocks) {
     moves.clear();
     if (!compact_ctx || compact_in_pass) return false;
+    std::unique_lock rk(reap_mu);   // (nothing freed by the reaper from here until the pass ends: image_compact_pass_end)
     const VkResult r = vmaBeginDefragmentationPass(vma, compact_ctx, &compact_pass);
     if (r != VK_INCOMPLETE) return compact_over(freed_bytes, freed_blocks);   // (VK_SUCCESS: nothing left to move; or an error)
     compact_in_pass = true;
@@ -210,9 +218,14 @@ void image_compact_ignore(size_t i) {
 }
 bool image_compact_pass_end(uint64_t* freed_bytes, uint32_t* freed_blocks) {
     if (!compact_ctx || !compact_in_pass) return false;
-    compact_in_pass = false;
-    if (vmaEndDefragmentationPass(vma, compact_ctx, &compact_pass) == VK_INCOMPLETE) return true;
-    return compact_over(freed_bytes, freed_blocks);
+    bool more;
+    {
+        std::lock_guard rk(reap_mu);   // (the pass ended before the reaper frees again)
+        compact_in_pass = false;
+        more = vmaEndDefragmentationPass(vma, compact_ctx, &compact_pass) == VK_INCOMPLETE;
+    }
+    reap_cv.notify_one();
+    return more || compact_over(freed_bytes, freed_blocks);
 }
 
 bool create_image(const VkImageCreateInfo& ci, VkImage& image, VmaAllocation& allocation, bool dedicated, bool target, bool textures) {
@@ -257,6 +270,67 @@ bool create_image(const VkImageCreateInfo& ci, VkImage& image, VmaAllocation& al
 void destroy_image(VkImage image, VmaAllocation allocation) {
     vmaDestroyImage(vma, image, allocation);
 }
+
+// ---- (longshot) Images destroyed on a thread of their own (destroy_image_later): on NVIDIA's Windows driver a vmaDestroyImage
+// is a kernel call of a millisecond and more, and texture_frame made them on the render thread, many in one present when the
+// camera turned (Project ReLink measured 2.4 ms of each frame over 25 ms there, against 0.1 ms of the others: 31689010,
+// 5224e821). The views, the buffer and the memory objects that go with an image go with it. VMA is thread-safe here (no
+// externally synchronized flag, vma_init); an image here is one nothing can use again (texture_frame: its last recorded
+// use has finished). The pool's compaction frees nothing while a pass is open (image_compact_pass): the reaper waits for
+// it, and a pass waits for the one free in flight. RX_VK_REAPER=0: destroyed where they were, as before ----
+namespace {
+struct Reaped {
+    VkImage image;
+    VmaAllocation allocation;
+    std::vector<VkImageView> views;
+    VkBuffer buffer;
+    VmaAllocation buffer_alloc;
+    std::vector<VkDeviceMemory> memory;
+};
+std::deque<Reaped> reap_queue;   // (under reap_mu)
+std::atomic<uint64_t> st_reaped{0};
+void reap(Reaped& r) {
+    for (VkImageView v : r.views) vkDestroyImageView(dev.device, v, nullptr);
+    if (r.image) vmaDestroyImage(vma, r.image, r.allocation);
+    if (r.buffer) vmaDestroyBuffer(vma, r.buffer, r.buffer_alloc);
+    for (VkDeviceMemory m : r.memory) vkFreeMemory(dev.device, m, nullptr);
+}
+void reaper() {
+    SetThreadDescription(GetCurrentThread(), L"mkw_vk reaper");
+    std::unique_lock lk(reap_mu);
+    for (;;) {
+        reap_cv.wait(lk, [] { return !reap_queue.empty() && !compact_in_pass; });
+        Reaped r = std::move(reap_queue.front());
+        reap_queue.pop_front();
+        reap(r);   // (under the lock: a pass that begins waits for this one)
+        st_reaped.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+bool reaper_on() {
+    static const bool on = [] { const char* e = getenv("RX_VK_REAPER"); return !e || !env_value_off(e); }();   // (longshot_env.h)
+    return on;
+}
+}  // namespace
+void destroy_image_later(VkImage image, VmaAllocation allocation, std::vector<VkImageView> views, VkBuffer buffer,
+                         VmaAllocation buffer_alloc, std::vector<VkDeviceMemory> memory) {
+    Reaped r{image, allocation, std::move(views), buffer, buffer_alloc, std::move(memory)};
+    if (!reaper_on()) {
+        reap(r);
+        return;
+    }
+    {
+        std::lock_guard lk(reap_mu);
+        static const bool started = [] {
+            std::thread(reaper).detach();   // (the device lives as long as the process: nothing to join)
+            logf("vk: images are destroyed on a thread of their own (RX_VK_REAPER=0: on the render thread)");
+            return true;
+        }();
+        (void)started;
+        reap_queue.push_back(std::move(r));
+    }
+    reap_cv.notify_one();
+}
+uint64_t images_reaped() { return st_reaped.load(std::memory_order_relaxed); }
 uint64_t allocation_size(VmaAllocation allocation) {
     VmaAllocationInfo info{};
     if (allocation) vmaGetAllocationInfo(vma, allocation, &info);
@@ -299,6 +373,11 @@ bool host_cached(VmaAllocation allocation) {
     VkMemoryPropertyFlags f = 0;
     if (allocation) vmaGetAllocationMemoryProperties(vma, allocation, &f);
     return (f & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != 0;
+}
+bool host_coherent(VmaAllocation allocation) {
+    VkMemoryPropertyFlags f = 0;
+    if (allocation) vmaGetAllocationMemoryProperties(vma, allocation, &f);
+    return (f & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
 }
 void flush_mapped(VmaAllocation allocation, uint64_t size) {
     if (size) vmaFlushAllocation(vma, allocation, 0, size);

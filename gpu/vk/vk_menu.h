@@ -1,4 +1,5 @@
-// The Insert menu (vk_menu.cpp): options that apply while the game runs, kept in longshot_options.ini beside the executable.
+// The Insert menu (vk_menu.cpp): options that apply while the game runs, kept in longshot_options.ini in the user folder
+// (vk_paths.h options_path, host/options_path.c).
 #pragma once
 #include "auto_settings.h"
 
@@ -98,14 +99,10 @@ struct Options {
     int intel_quick = 1;   // (longshot) Intel's one-at-a-time compute builds: a dispatch's pipeline first without the optimizer,
                            // the optimized one bound once made (vk_draw.cpp compute_optimize; RX_VK_COMPUTE_QUICK_FIRST over it)
     int preset = 0;       // quality preset: 0 Custom, 1 Minimum (4GB), 2 Low (6GB), 3 Balanced (8GB), 4 High (12GB), 5 Ultra (16GB+),
-                          // 6 Auto (this PC), kAutoPreset (its tier's budgets: budget)
-    int vram_mb = 0;      // dynamic texture cache budget limit in MB
-    int mirror_mb = 0;    // staging mirror limit in MB
-    int budget = 0;       // the preset whose memory budgets (vram_mb, mirror_mb) hold: kept when another row turns the preset
-                          // to Custom, so tuning Resolution after Low (6GB) keeps its cap. Saved as memory_budget; 0: none
-    // (longshot) the VRAM budget row: 0 Auto (the renderer's own rule), 1..7 a texture budget of 2.2, 3.6, 4.8, 6, 7.5, 9 or 11 GB
-    // and its mirrors (vram_mb, mirror_mb come from it). A preset sets it; set on the row it is the player's (budget 0)
-    int vram_budget = 0;
+                          // 6 Auto (this PC), kAutoPreset (its tier: budget)
+    int budget = 0;       // the preset the settings came from, kept when another row turns the preset to Custom: Minimum's (1)
+                          // trims the textures' mips on a small card (vk_texture.cpp low_vram_texture_mips). Saved as memory_budget;
+                          // 0: none. No preset or row sets the VRAM budgets: one rule by the card (texture_budget.h, mirror_budget.h)
     int audio_output = 0; // (longshot) the speakers the game mixes for: 0 Auto (the default output's), 1 Stereo, 2 5.1, 3 Mono; layout read at the start (host/nn_audio.c; HOS_AUDIO_CHANNELS)
     int discord = 1;   // (longshot) the Discord status (host/discord_rpc.c): 1 on, shown while a Discord client runs on this PC
     int debug_tools = 0;   // (longshot) the Debug tab's tools (#785: flight, free camera, teleport, inventory): 0 off; HOS_OOT_CHEATS=1 also turns them on
@@ -120,10 +117,6 @@ struct Options {
 };
 extern Options opts;
 constexpr int kAutoPreset = 6;   // (the Quality preset Auto (this PC): menu_auto_for_gpu, auto_settings.h)
-/// (vk_memory.cpp) true when the quality preset's memory budgets (vram_mb, mirror_mb) are to be used: the card has no more
-/// video memory than the preset is for. A 4GB preset on an 8 GB card kept 256 MB of mirrors and 2.2 GB of textures: the
-/// game's memory was read over PCIe and the textures made again every frame, 5 fps with the CPU idle (Discord, 11-08)
-bool preset_caps_memory();
 
 void menu_init();             // (the options from the file, once)
 void menu_auto_for_gpu(const VkPhysicalDeviceProperties& props, ::auto_settings::Hardware hw);   // (the card chosen: Auto's profile)

@@ -14,6 +14,7 @@
 #include "compat/longshot_env.h"
 #endif
 #include "vk_vendor.h"
+#include "gpu_choice.h"
 
 #if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
 #include <intrin.h>
@@ -30,6 +31,7 @@ typedef struct VmaAllocation_T* VmaAllocation;   // (vk_mem_alloc.h's handle)
 namespace mkwvk {
 
 extern std::vector<std::string> gpu_device_names;
+extern std::vector<gpu_choice::Card> gpu_device_cards;   // (the same GPUs' models, for the row's saved card: gpu_choice.h)
 extern const MkwVkHost* host;
 void logf(const char* fmt, ...);
 // (longshot) A line at another level than info, as host/hos.h's hos_log_at: "[trace] " leads its text, after the host's thread tag
@@ -204,6 +206,8 @@ struct UniformUpload {
 UniformUpload uniform_upload(uint64_t size);   // empty: no recording or no room; no history consumed
 /// Changes when a read binding remembered earlier must be looked up again (a pool left, a mirror was made, a new submission)
 uint64_t gpu_bind_stamp();
+/// (longshot) Changes when the game's pool table is replaced: where gpu_pool_end and gpu_pool_start put a pool's ends may move
+uint64_t guest_pools_stamp();
 /// Around each submission's recording: mirrors wanted since the last one are made (begin), what the GPU wrote into
 /// mirrors goes back to guest memory (end, outside any pass, before the closing barrier)
 void memory_begin_submission();
@@ -249,7 +253,7 @@ struct ParLock {
     ParLock(const ParLock&) = delete;
     ParLock& operator=(const ParLock&) = delete;
 };
-void memory_pool_created(uint64_t gpu, uint64_t size);
+void memory_pool_created(uint64_t gpu, uint64_t size, uint32_t flags);
 /// Whether guest memory in [lo, hi) is in an imported pool, live or retired (the GPU may read or write it)
 int memory_guest_imported(uint64_t lo, uint64_t hi);
 int memory_guest_contained(uint64_t lo, uint64_t hi);   // (whether one imported pool holds all of [lo, hi): vk_texture.cpp upload_unswizzle_gpu)
@@ -299,6 +303,7 @@ bool create_buffer_cached(uint64_t size, VkBufferUsageFlags usage, VkBuffer& buf
                           void** mapped, bool dedicated = false);   // (vk_vma.cpp: cached host memory, mapped)
 void flush_mapped(VmaAllocation allocation, uint64_t size);
 bool host_cached(VmaAllocation allocation);   // (its memory type has VK_MEMORY_PROPERTY_HOST_CACHED_BIT)
+bool host_coherent(VmaAllocation allocation);   // (its memory type has VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
 void flush_mapped_range(VmaAllocation allocation, uint64_t offset, uint64_t size);
 void invalidate_mapped(VmaAllocation allocation, uint64_t size);   // (the CPU is to read what the GPU wrote: a no-op in coherent memory)
 bool flush_mapped_checked(VmaAllocation allocation, uint64_t size);
@@ -372,6 +377,12 @@ void image_compact_ignore(size_t i);
 /// the last one; then *freed_bytes and *freed_blocks say what went back to the driver in all
 bool image_compact_pass_end(uint64_t* freed_bytes, uint32_t* freed_blocks);
 void destroy_image(VkImage image, VmaAllocation allocation);
+/// (longshot) An image nothing can use again destroyed on the reaper's thread (vk_vma.cpp), with its views, a buffer and memory
+/// objects that go with it: a vmaDestroyImage is a kernel call of a millisecond and more on NVIDIA's Windows driver. Never while
+/// the textures' compaction has a pass open. RX_VK_REAPER=0: at once, here
+void destroy_image_later(VkImage image, VmaAllocation allocation, std::vector<VkImageView> views = {}, VkBuffer buffer = VK_NULL_HANDLE,
+                         VmaAllocation buffer_alloc = nullptr, std::vector<VkDeviceMemory> memory = {});
+uint64_t images_reaped();   // (how many the reaper has destroyed so far)
 /// What an allocation really takes (VkMemoryRequirements.size: padding, alignment, the driver's metadata), 0 for none
 uint64_t allocation_size(VmaAllocation allocation);
 /// (dedicated: its own memory object, not a share of a 64 MB block: for the 16 to 32 MB ones that fit two to a block and leave
@@ -389,6 +400,8 @@ void destroy_sparse_buffer(VkBuffer buffer);
 /// Device-local memory this process uses and what the driver allows it now (VK_EXT_memory_budget), summed over the
 /// device-local heaps; false when unknown
 bool vram_usage(uint64_t* used, uint64_t* budget, uint64_t* block_free = nullptr);
+/// (vk_memory.cpp) the largest device-local heap's size: the card's video memory (0: none)
+uint64_t device_vram_bytes();
 /// vram_usage asked of the driver now (VMA asks again for a new frame index), for the status line; false when the driver
 /// gives no budget (VK_EXT_memory_budget): used is then the game's own allocations
 bool vram_usage_now(uint64_t* used, uint64_t* budget);
@@ -442,6 +455,9 @@ void prepare_guess(size_t out[3]);   // (the three parts' counts from the files,
 /// what is done kept (the program cache, the driver's) and not counted as a start that ended inside them
 void prepare_stop();
 bool prepare_stopped();
+/// (longshot, vk_draw.cpp) The pipeline cache is being written out before the game (precompile_warm, a GB and more): every
+/// pipeline is counted by then, and the start-up screen says what it waits on
+bool prepare_saving();
 int driver_faults();   // (longshot, vk_draw.cpp) the driver faults the pipeline compiles caught so far (guarded_graphics, guarded_compute)
 /// (longshot, vk_draw.cpp) the pipelines the driver refused for want of memory so far (VK_ERROR_OUT_OF_DEVICE_MEMORY or
 /// _HOST_MEMORY): texture_frame gives textures up when it grows

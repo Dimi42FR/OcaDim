@@ -75,6 +75,7 @@ struct ViewFast { unsigned long long key = ~0ull; };   // (the texture views' fr
 std::array<ViewFast, 4>& view_fast() { static std::array<ViewFast, 4> v; return v; }
 struct BankCache { uint64_t at=0; };
 std::array<std::array<BankCache,2>,2>& bank_cache() { static std::array<std::array<BankCache,2>,2> b;return b; }
+uint64_t desc_kept_part=0;   // (vk_draw.cpp: build_descriptors' kept stages last one part)
 void make_dummies() {}
 /* FLUSH */
 /* BEGIN */
@@ -124,6 +125,7 @@ void queue_flush_locked() {
     VkSubmitInfo2 si{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};si.commandBufferInfoCount=(uint32_t)pend.cbs.size();si.pCommandBufferInfos=pend.cbs.data();
     vkQueueSubmit2(dev.queue,1,&si,VK_NULL_HANDLE);pend.cbs.clear();
 }
+uint64_t occ_part_lo = UINT64_MAX, occ_part_hi = 0;   // (vk_replay.cpp, RX_VK_OCC_COPY: the recording's queries, forgotten at its submit)
 /* SUBMIT */
 struct Job { Recording* r;int inits=0;bool uploads=true; };
 void submit_segments(std::vector<Job>& jobs) {

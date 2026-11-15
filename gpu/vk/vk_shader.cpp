@@ -1826,6 +1826,7 @@ namespace {
 struct Pick {
     const Program* p = nullptr;
     std::vector<uint32_t> handles;   // (at its answers' descriptors: their slots and the slots' versions)
+    uint64_t gen = 0;                // (moved with p and handles: a kept pick (ProgFast) sees whether they are still what it was kept at)
 };
 thread_local std::unordered_map<uint64_t, Pick> picks;   // (each recording thread's: program_pick has its own lock)
 uint64_t pick_inputs(const NvnState& s, const uint8_t color_types[8]) {
@@ -1938,8 +1939,21 @@ struct ProgFast {
     const Program* p = nullptr;
     uint32_t amask = ~0u;           // (answer_stage_mask of p, ~0 for a compute program)
     uint64_t tex_gen[kNvnStages]{};   // (the stages' tex_gen it was kept at)
+    const Pick* pick = nullptr;       // (the entry of picks it was kept from, and that entry's gen then)
+    uint64_t pick_gen = 0;
 };
 thread_local ProgFast prog_fast[2];
+// (longshot) Whether the pick through `picks` would keep a kept pick's program as it is, for a program whose answers are read from c2
+// (answer_stage_mask) and whose stages' textures are the same: the entry still names the program with the handles it was kept at
+// (Pick::gen), and none of the slots those handles name was registered anew since (the versions beside them). Its handles are then
+// the same as those the pick would read, whatever else was registered and whatever uniforms were updated
+bool pick_slots_kept(const ProgFast& f) {
+    if (!f.pick || f.pick->gen != f.pick_gen) return false;
+    const std::vector<uint32_t>& h = f.pick->handles;
+    for (size_t i = 0; i + 1 < h.size(); i += 2)
+        if (texture_slot_version((int)h[i]) != h[i + 1]) return false;
+    return true;
+}
 
 const Program* program_for(const NvnState& s, ProgramKind kind, const uint8_t color_types[8]) {
     if (!s.has_prog) return nullptr;
@@ -1954,16 +1968,23 @@ const Program* program_for(const NvnState& s, ProgramKind kind, const uint8_t co
     }
     const bool compute = kind == ProgramKind::Compute;
     const bool mesh = kind == ProgramKind::Mesh;
-    static int64_t st_hit, st_none, st_differ, st_calls, st_by_tex;   // (logged now and then: how the cache does)
+    static int64_t st_hit, st_none, st_differ, st_calls, st_by_tex, st_by_slots;   // (logged now and then: how the cache does)
     if (++st_calls % 200000 == 0)
-        logf("vk: program picks: %lld kept (%lld by the last picks' textures, a uniform buffer bound since), %lld new, %lld with other textures (of %lld)",
-             (long long)st_hit, (long long)st_by_tex, (long long)st_none, (long long)st_differ, (long long)st_calls);
+        logf("vk: program picks: %lld kept (%lld by the last picks' textures, a uniform buffer bound since; %lld by their slots, a texture "
+             "registered or a uniform updated since), %lld new, %lld with other textures (of %lld)",
+             (long long)st_hit, (long long)st_by_tex, (long long)st_by_slots, (long long)st_none, (long long)st_differ, (long long)st_calls);
     const uint64_t stages = prog_stage_sig(s.prog);
     const uint64_t bind = s.bind_gen, reg = registrations_generation(), ub = ub_generation();
     // (longshot) the pair of the last picks stood only while nothing at all was bound anew, and OoT binds a uniform buffer for nearly every
     // draw: a draw of the same program with the same textures found its program through the full pick (the key, the answers' handles, a
     // compare). It stands now while the textures its answers are read from do (answer_stage_mask). RX_VK_PICK_BIND_GEN=1: as before
     static const bool by_bind = env_on("RX_VK_PICK_BIND_GEN");
+    // (longshot) and while no texture at all was registered and no uniform updated, which the game does between most draws as it
+    // streams: the draw went through the full pick for the same answer. One whose answers are read from c2 stands now while the slots
+    // its answers name are not registered anew (pick_slots_kept), and is kept again as the full pick keeps it. RX_VK_PICK_REG_GEN=1:
+    // as before
+    static const bool by_reg = env_on("RX_VK_PICK_REG_GEN");
+    const Pick* by_slots = nullptr;
     for (const ProgFast& f : prog_fast) {   // (the draw before this one, and the one that took turns with it)
         if (!(f.on && f.p && f.p->ready.load(std::memory_order_acquire) && !f.p->failed)) continue;
         uint64_t fbind = f.bind;
@@ -1974,8 +1995,15 @@ const Program* program_for(const NvnState& s, ProgramKind kind, const uint8_t co
                 if ((f.amask >> k & 1) && f.tex_gen[k] != s.tex_gen[k]) by_tex = false;
             if (by_tex) fbind = bind;
         }
+        // (its handles: c2's words, the same while fbind is; registrations and updates since change none of them)
+        const bool slots = !by_reg && !compute && f.amask != ~0u && fbind == bind && (f.reg != reg || f.ub != ub);
         if (prog_same((int)kind, s.prog.serial, stages, bind, reg, ub, s.nvattr, s.vattr, color_types, f.kind, f.serial,
-                      f.stages, fbind, f.reg, f.ub, f.nvattr, f.vattr, f.ct)) {
+                      f.stages, fbind, slots ? reg : f.reg, slots ? ub : f.ub, f.nvattr, f.vattr, f.ct)) {
+            if (slots) {
+                if (!pick_slots_kept(f)) continue;
+                by_slots = f.pick;
+                break;
+            }
             st_by_tex += by_tex && f.bind != bind;
             return st_hit++, f.p;
         }
@@ -1985,7 +2013,7 @@ const Program* program_for(const NvnState& s, ProgramKind kind, const uint8_t co
     const uint64_t in_hash = compute ? 0x5EEDull : mesh ? (0x4E58ull * 1099511628211ull ^ ct_bits) : pick_inputs(s, color_types);
     const uint64_t key = (in_hash * 1099511628211ull ^ stages) * 1099511628211ull ^ ((uint64_t)kind << 56 | s.prog.serial);
     Pick& pk = picks[key];
-    auto keep = [&](const Program* p) {
+    auto keep = [&](const Program* p, const Pick* from) {
         if (!p || !p->ready.load(std::memory_order_acquire) || p->failed) return p;
         if (!(prog_fast[0].on && prog_fast[0].p == p)) prog_fast[1] = prog_fast[0];
         ProgFast& f = prog_fast[0];
@@ -1995,17 +2023,20 @@ const Program* program_for(const NvnState& s, ProgramKind kind, const uint8_t co
         std::memcpy(f.tex_gen, s.tex_gen, sizeof f.tex_gen);
         std::memcpy(f.vattr, s.vattr, sizeof f.vattr);
         std::memcpy(f.ct, color_types, sizeof f.ct);
+        f.pick = from, f.pick_gen = from ? from->gen : 0;
         return p;
     };
+    if (by_slots) return st_by_slots++, st_hit++, keep(by_slots->p, by_slots);   // (the same answer and the same keep as below)
     if (pk.p && pk.p->ready.load(std::memory_order_acquire) && !pk.p->failed) {
-        if (pk.p->answers.empty()) return st_hit++, keep(pk.p);
+        if (pk.p->answers.empty()) return st_hit++, keep(pk.p, &pk);
         static thread_local std::vector<uint32_t> now;
         answer_handles(s, *pk.p, now);
-        if (now == pk.handles) return st_hit++, keep(pk.p);
+        if (now == pk.handles) return st_hit++, keep(pk.p, &pk);
         st_differ++;
         if (still_valid(s, *pk.p)) {   // (other textures of the same types: the same variant)
             pk.handles.swap(now);
-            return keep(pk.p);
+            pk.gen++;
+            return keep(pk.p, &pk);
         }
     } else {
         st_none++;
@@ -2017,8 +2048,10 @@ const Program* program_for(const NvnState& s, ProgramKind kind, const uint8_t co
     } else {
         pk.p = nullptr;
     }
-    if (picks.size() > 65536) picks.clear();
-    return keep(picked);
+    pk.gen++;
+    picked = keep(picked, &pk);
+    if (picks.size() > 65536) picks.clear(), prog_fast[0].pick = prog_fast[1].pick = nullptr;   // (the entries they were kept from)
+    return picked;
 }
 
 const Program* program_pick(const NvnState& s, ProgramKind kind, const uint8_t color_types[8]) {

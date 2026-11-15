@@ -63,6 +63,7 @@
 #include "shaders/clear_u_frag_spv.h"
 #include "shaders/clear_vert_spv.h"
 #include "shaders/taau_upscale_comp_spv.h"
+#include "shaders/taau_upscale_rgba_comp_spv.h"
 #include "shaders/shadow_stab_comp_spv.h"
 #include "shaders/movie_upscale_comp_spv.h"
 #include "shader_recompiler/backend/spirv/mma_layout.h"
@@ -130,7 +131,8 @@ const char* const kFineT[] = {"banks", "c1", "user uniform buffers", "storage bu
 enum FineC { FC_DRAWS, FC_BUILDS, FC_DESCS, FC_WRITES, FC_BANK_CALLS, FC_BANK_GEN, FC_BANK_FILLS, FC_BANK_FILL_BYTES, FC_BANK_SAME,
              FC_BANK_NEW, FC_BANK_NEW_BYTES, FC_C1_CALLS, FC_UBO_CALLS, FC_UBO_OVERLAY, FC_UBO_STREAM, FC_PUSH_FULL, FC_PUSH_DELTA,
              FC_PUSH_NONE, FC_PUSH_WRITES, FC_PUSH_DESCS, FC_BIND_PIPE, FC_DYN_FAST, FC_DYN_FULL, FC_DYN_CALLS, FC_VBIND, FC_IBIND,
-             FC_PUSHC, FC_PIPE_FAST, FC_PIPE_MAP, FC_POOL_SETS, FC_POOL_DESCS, FC_SSBO_DESCS, FC_COUNT };
+             FC_IBIND_CMDS, FC_PUSHC, FC_PIPE_FAST, FC_PIPE_MAP, FC_POOL_SETS, FC_POOL_DESCS, FC_SSBO_DESCS, FC_KEPT_UBOS, FC_KEPT_STORAGE,
+             FC_KEPT_TEX, FC_KEPT_TEX_HANDLES, FC_COUNT };
 const char* const kFineC[] = {"draws", "descriptor builds", "descriptors", "descriptor writes", "bank calls",
                                       "bank kept by its stage's generation", "bank fills", "bank bytes filled", "bank refills equal",
                                       "bank copies into the stream", "bank bytes copied", "c1 calls", "user uniform buffer calls",
@@ -138,8 +140,10 @@ const char* const kFineC[] = {"draws", "descriptor builds", "descriptors", "desc
                                       "full pushes", "pushes of changed writes only", "pushes of nothing (all as pushed)",
                                       "writes pushed", "descriptors pushed", "pipeline binds", "dynamic state from the draw before",
                                       "dynamic state worked out", "dynamic state commands", "vertex stream binds", "index buffer binds",
-                                      "push constants", "pipeline keys from the fast pair", "pipeline keys from the thread's map",
-                                      "sets allocated (over the push limit)", "descriptors in them", "storage buffer descriptors built"};
+                                      "index buffer bind commands", "push constants", "pipeline keys from the fast pair",
+                                      "pipeline keys from the thread's map", "sets allocated (over the push limit)", "descriptors in them",
+                                      "storage buffer descriptors built", "uniform buffers kept", "stages' storage buffers kept",
+                                      "stages' textures kept", "of them through new bindings, by their handles"};
 static_assert(std::size(kFineT) == FT_COUNT && std::size(kFineC) == FC_COUNT, "every section and count is named");
 const bool g_fine = env_on("RX_VK_PROF_FINE");
 int64_t fine_ns[FT_COUNT], fine_n[FC_COUNT];
@@ -666,6 +670,71 @@ VkFormat supported_vertex_format(VkFormat f) {
 // (+ the guest page table's address, a task draw's first, and the fallback's two buffer addresses)
 constexpr uint32_t kPushSize = Shader::Backend::SPIRV::MESH_FALLBACK_PUSH_END;
 
+/// (longshot) What a set layout and the pipeline layout over it are made from, as words: the set's flags (push descriptors) and
+/// each binding's number, type, count and stages, then the pipeline layout's flags and push constant ranges. Empty: not to be
+/// shared (immutable samplers, a pNext chain, a set count other than one). Two programs with the same words get the same layouts
+std::vector<uint64_t> layout_signature(const VkDescriptorSetLayoutCreateInfo& li, const VkPipelineLayoutCreateInfo& pi) {
+    std::vector<uint64_t> w;
+    if (li.pNext || pi.pNext || pi.setLayoutCount != 1) return w;
+    w.reserve(2 + 2 * (size_t)li.bindingCount + 2 * (size_t)pi.pushConstantRangeCount);
+    w.push_back((uint64_t)li.flags << 32 | li.bindingCount);
+    for (uint32_t i = 0; i < li.bindingCount; i++) {
+        const VkDescriptorSetLayoutBinding& b = li.pBindings[i];
+        if (b.pImmutableSamplers) return {};
+        w.push_back((uint64_t)b.binding << 32 | (uint32_t)b.descriptorType);
+        w.push_back((uint64_t)b.descriptorCount << 32 | b.stageFlags);
+    }
+    w.push_back((uint64_t)pi.flags << 32 | pi.pushConstantRangeCount);
+    for (uint32_t i = 0; i < pi.pushConstantRangeCount; i++) {
+        const VkPushConstantRange& r = pi.pPushConstantRanges[i];
+        w.push_back((uint64_t)r.stageFlags << 32 | r.offset);
+        w.push_back(r.size);
+    }
+    return w;
+}
+
+/// (longshot) The layouts made for each signature (layout_signature), shared by every program that has it and kept for the device's
+/// life: no program destroys them (Program::layout_shared), so none goes while another program, a pipeline or a recording uses it.
+/// One each, a program change at a bind point pushed every descriptor again (bind_descriptors: another layout, nothing known of
+/// what is pushed); shared, a program after another of the same signature pushes only the writes that changed.
+/// RX_VK_LAYOUT_EACH=1: each program its own, as before
+struct SharedLayouts {
+    VkDescriptorSetLayout set = VK_NULL_HANDLE;
+    VkPipelineLayout layout = VK_NULL_HANDLE;
+};
+std::mutex shared_layouts_mu;   // (the prepare's workers make programs' layouts at once, without the replay's lock)
+std::map<std::vector<uint64_t>, SharedLayouts> shared_layouts;
+size_t shared_layout_programs = 0;
+/// The set layout li and the pipeline layout pi over it (its pSetLayouts set here), into *set and *layout: the shared ones of their
+/// signature, made at its first program. True: they are shared, not the program's to destroy (false: its own, or nothing was made)
+bool layouts_for(const VkDescriptorSetLayoutCreateInfo& li, VkPipelineLayoutCreateInfo& pi, VkDescriptorSetLayout* set,
+                 VkPipelineLayout* layout) {
+    static const bool each = env_on("RX_VK_LAYOUT_EACH");
+    const auto make = [&] {
+        *set = VK_NULL_HANDLE, *layout = VK_NULL_HANDLE;
+        vkCreateDescriptorSetLayout(dev.device, &li, nullptr, set);
+        pi.pSetLayouts = set;
+        vkCreatePipelineLayout(dev.device, &pi, nullptr, layout);
+    };
+    std::vector<uint64_t> sig;
+    if (!each) sig = layout_signature(li, pi);
+    if (sig.empty()) return make(), false;
+    std::lock_guard lk(shared_layouts_mu);
+    const size_t programs = ++shared_layout_programs;
+    if (programs >= 1024 && !(programs & (programs - 1)))   // (a line at each power of two: the prepare makes ~13,000 a start)
+        logf("vk: %zu programs have %zu pipeline layouts between them (one a binding signature; RX_VK_LAYOUT_EACH=1: one each)",
+             programs, shared_layouts.size());
+    if (const auto it = shared_layouts.find(sig); it != shared_layouts.end()) {
+        *set = it->second.set, *layout = it->second.layout;
+        pi.pSetLayouts = set;
+        return true;
+    }
+    make();
+    if (!*set || !*layout) return false;   // (one the driver did not make is not kept: the program's own, as without sharing)
+    shared_layouts.emplace(std::move(sig), SharedLayouts{*set, *layout});
+    return true;
+}
+
 void ensure_layout(Program& p) {
     if (p.layout) return;
     std::vector<VkDescriptorSetLayoutBinding> bindings;
@@ -690,17 +759,15 @@ void ensure_layout(Program& p) {
     if (p.push) li.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
     li.bindingCount = (uint32_t)bindings.size();
     li.pBindings = bindings.data();
-    vkCreateDescriptorSetLayout(dev.device, &li, nullptr, &p.set_layout);
     VkShaderStageFlags stages = 0;
     for (const Stage& st : p.stages) stages |= st.vk_stage;
     const VkPushConstantRange range{stages, 0, kPushSize};
     VkPipelineLayoutCreateInfo pi{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     pi.setLayoutCount = 1;
-    pi.pSetLayouts = &p.set_layout;
     pi.pushConstantRangeCount = 1;
     pi.pPushConstantRanges = &range;
     VkPipelineLayout layout = VK_NULL_HANDLE;
-    vkCreatePipelineLayout(dev.device, &pi, nullptr, &layout);
+    p.layout_shared = layouts_for(li, pi, &p.set_layout, &layout);   // (the same as another program's with these bindings: shared)
     p.push_stages = stages;
     for (const Stage& st : p.stages) p.uses_render_area |= st.info.uses_render_area;
     p.uses_push = p.uses_render_area;
@@ -728,6 +795,7 @@ std::atomic<int64_t> pcache_built_since_save{0};
 // size: data the cache took in since. The pipeline creation feedback cannot tell the new ones apart: NVIDIA's driver reports
 // most precompiled pipelines as not found in the app's cache (~460 of ~12,900 here), which it then serves from its own.
 std::atomic<size_t> pcache_saved_size{0};
+bool pcache_no_save = false;   // (RX_VK_PCACHE_LOAD=0: pcache_init)
 /// A pipeline cache file's data, or nothing when it cannot be read or was made by another device or driver
 PipelineCacheFile pcache_file_read(const std::string& path) {
     return PipelineCacheFile::read(path, [](const uint8_t* head, uint64_t size) {
@@ -902,7 +970,7 @@ PlayCache* play_cache_make() {
 /// (the start-up done, vk_main's start) play begins: what is made from now on goes into the play generations
 void play_cache_begin() {
     static const bool off = getenv("RX_VK_PLAY_CACHE") && atoi(getenv("RX_VK_PLAY_CACHE")) == 0;
-    if (off || !pcache || !dev.vk13.pipelineCreationCacheControl || play_cache.load()) return;
+    if (pcache_no_save || off || !pcache || !dev.vk13.pipelineCreationCacheControl || play_cache.load()) return;
     if (PlayCache* g = play_cache_make()) {
         play_cache.store(g);
         logf("vk: pipeline cache: what play makes goes into play files (RX_VK_PLAY_CACHE=0: into the one cache)");
@@ -1022,7 +1090,6 @@ VkResult create_cached(VkResult (*create)(VkPipelineCache, const CI*, VkPipeline
 bool play_cache_in_use() { return play_cache.load() != nullptr; }
 // ---- (end of the play caches) ----
 
-bool pcache_no_save = false;   // (RX_VK_PCACHE_LOAD=0: pcache_init)
 // (RX_VK_PCACHE_LOAD=0, an A/B of what the file costs in memory: its 2.5 GB read whole and held by the driver. The cache
 // starts empty and is not saved; the driver's own shader cache is all there is)
 bool pcache_load_off() {
@@ -1066,7 +1133,7 @@ void pcache_init() {
     }
     logf("vk: pipeline cache %s (%zu KB)", pcache_path.c_str(), data.size() >> 10);
     data = {};
-    if (pcache) play_files_merge();
+    if (pcache && !off) play_files_merge();
     // (what it holds as read, the play files too: a save of data that size has nothing to add to the files)
     size_t held = 0;
     PcacheFetch fetch(-1);
@@ -3280,7 +3347,9 @@ thread_local uint64_t grid_patch_at = UINT64_MAX;
 thread_local VkBuffer grid_patch_buf = VK_NULL_HANDLE;   // (the stream c0 went to: PR 585's streams can move on)
 
 int desc_reuse_level();   // (below: RX_VK_DESC_REUSE and the Descriptor reuse row)
-VkDescriptorBufferInfo uniform_range(const NvnState& s, const Stage& st, uint32_t index) {
+/// keep (longshot, desc_kept): set when what is returned may be used again in this recording part while the range, the stream's
+/// uniform updates and the pools stand: c1, and a user uniform buffer bound where it is with no update over it
+VkDescriptorBufferInfo uniform_range(const NvnState& s, const Stage& st, uint32_t index, bool* keep = nullptr) {
     VkDescriptorBufferInfo bi{VK_NULL_HANDLE, 0, VK_WHOLE_SIZE};
     const uint64_t align = std::max<uint64_t>(dev.props.limits.minUniformBufferOffsetAlignment, 16);
     uint32_t used = index < Shader::Info::MAX_CBUFS ? st.info.constant_buffer_used_sizes[index] : 0;
@@ -3349,30 +3418,43 @@ VkDescriptorBufferInfo uniform_range(const NvnState& s, const Stage& st, uint32_
         const void* key = &st;
         auto it = cur->c1_at.find(key);
         const uint64_t n = std::max<uint64_t>((st.c1.size() + 15) & ~15ull, 16);
-        if (it != cur->c1_at.end()) return {it->second.first, it->second.second, n};
+        if (it != cur->c1_at.end()) {
+            if (keep) *keep = true;   // (longshot: in the part's stream for the part's life)
+            return {it->second.first, it->second.second, n};
+        }
         const uint64_t at = stream_alloc(n, align);
         if (at == UINT64_MAX) return bi;
         std::memset(cur->mapped + at, 0, n);
         std::memcpy(cur->mapped + at, st.c1.data(), st.c1.size());
         cur->c1_at[key] = {cur->stream, at};
+        if (keep) *keep = true;
         return {cur->stream, at, n};
     }
     if (index >= 3 && index < 3 + 16) {
         FINE_SCOPE(FT_UBO);
         FINE_N(FC_UBO_CALLS, 1);
         const nvn_p_bind_buf& u = s.ubo[std::clamp(st.nvn_stage, 0, kNvnStages - 1)][index - 3];
-        if (!u.addr) return bi;
+        if (!u.addr) {
+            if (keep) *keep = true;   // (longshot: nothing bound, while the binding stays so)
+            return bi;
+        }
         const uint64_t want = used ? std::max<uint64_t>(used, 16) : std::max<uint64_t>(u.size, 16);
         const uint64_t n = std::min<uint64_t>(std::min<uint64_t>(want, u.size ? std::max<uint64_t>(u.size, 16) : want),
                                               dev.props.limits.maxUniformBufferRange);
         // (updates the stream made to this range in this submission or ones still in flight: a copy with them in)
         // (room first: the overlay copies into the stream's mapping, which a move to a bigger stream in the middle would change)
-        if (stream_reserve(n, align))
-            if (const uint64_t at = ub_overlay(u.addr, n, cur->mapped, [&](uint64_t bytes) { return stream_alloc(bytes, align); });
-                at != UINT64_MAX) {
+        // (longshot) no update over the range (an overlap whose copy found no room is not that): what is bound then depends on the
+        // range and the pools alone, and may be kept (desc_kept)
+        bool gap = false;
+        if (stream_reserve(n, align)) {
+            bool asked = false;
+            const uint64_t at = ub_overlay(u.addr, n, cur->mapped, [&](uint64_t bytes) { return asked = true, stream_alloc(bytes, align); });
+            if (at != UINT64_MAX) {
                 FINE_N(FC_UBO_OVERLAY, 1);
                 return {cur->stream, at, n};
             }
+            gap = !asked;
+        }
         // (RX_VK_UB_SNAPSHOT=1: the contents as they are now, in the stream, not the pool the GPU reads later)
         // (on by default on Intel when the pools have no VRAM mirror (vk_memory.cpp mirror_on() off): the GPU then reads the
         // game's memory itself when it runs the frame, and by then the game has written the next frame's uniforms over the ones
@@ -3386,7 +3468,10 @@ VkDescriptorBufferInfo uniform_range(const NvnState& s, const Stage& st, uint32_
             return e ? env_on("RX_VK_UB_SNAPSHOT") : dev.props.vendorID == 0x8086 && !pools_mirrored();
         }();
         BufferRef b = snapshot ? BufferRef{} : gpu_buffer_bind(u.addr, n, false);
-        if (b && b.offset % align == 0) return {b.buffer, b.offset, n};
+        if (b && b.offset % align == 0) {
+            if (keep) *keep = gap;
+            return {b.buffer, b.offset, n};
+        }
         const uint64_t at = stream_alloc(n, align);   // (unaligned or outside the pools: copied into the stream)
         if (at == UINT64_MAX) return bi;
         FINE_N(FC_UBO_STREAM, 1);
@@ -3464,16 +3549,13 @@ bool slow_desc_timing() {
 }
 
 // (longshot) one switch read two ways, like the Robust buffers row of vk_main.cpp: the environment variable says it for test
-// runs (any value, 0 off); else the row's line in longshot_options.ini beside the game; else off.
+// runs (any value, 0 off); else the row's line in longshot_options.ini in the user folder; else off.
 /// (the row's value in longshot_options.ini, read before the menu has loaded it; the environment's switch first. def: no
 /// file, no line, or a file older than options_version since (one whose line was only ever the old default, vk_menu.cpp
 /// load))
 bool menu_env_on(const char* env_name, const char* ini_key_name, bool def = false, int since = 0) {
     if (const char* e = getenv(env_name)) return !env_value_off(e);   // (longshot_env.h: the switches' one rule)
-    char exe[MAX_PATH];
-    const DWORD n = game_module_path(exe, MAX_PATH);   // (the game folder, not bin beside the launcher: vk_paths.h)
-    std::string ini(exe, n);
-    ini = ini.substr(0, ini.find_last_of("\\/") + 1) + "longshot_options.ini";
+    const std::string ini = options_path();   // (vk_paths.h)
     const size_t klen = strlen(ini_key_name);
     int v = -1, version = 0;
     if (FILE* f = fopen(ini.c_str(), "r")) {
@@ -3645,6 +3727,122 @@ void desc_counts_unpack(uint64_t packed, size_t* nbuf, size_t* nimg, size_t* nvi
     *nbuf = (size_t)(packed & kMask), *nimg = (size_t)(packed >> 21 & kMask), *nview = (size_t)(packed >> 42 & kMask);
 }
 
+// (longshot) A stage's descriptors as the last build of its program in this recording part resolved them, kept for the next build
+// while what they were resolved from stands. OoT binds a uniform buffer for nearly every draw, which moves bind_gen: the draw's own
+// reuse (same_desc in draw()) seldom holds, and every build resolved every texture's handle, view and sampler and every storage
+// buffer's pool again for the same answers (9% of the replay thread in Kokiri Forest, docs/cpu-profile.md). Kept, each by its own:
+//   textures  (a stage whose texture handles are all words of its own c2) while its c2 bindings (tex_gen), the versions of the
+//             slots its handles name, the samplers' registrations, the texture destroy generation and the texture epoch (a texture
+//             is touched once an epoch, texture_view_of) stand
+//   storage   (a stage whose storage buffers are all read only and named in c0 or c1) while its c0 table (ssbo_gen), the pools
+//             (gpu_bind_stamp: a pool left, a mirror made, the next part) and the game's pool table (gpu_pool_end's) stand
+//   uniform   (each c1 bank and each user uniform buffer bound where it is) while its range, the stream's uniform updates and the
+//             pools stand
+// What a build does besides resolving is done again from what was kept: the handles noted for Descriptor reuse (desc_fp), the
+// rendered textures sampled (draw_sampled, by gpu_written as it is now), the dummy count. What has effects of its own is never kept:
+// written storage buffers (write-backs, stamps, hazards), storage images (texture_written), texel buffers, handles read through a
+// handle program or from uniform memory, compute, task and mesh stages, a uniform range copied into the stream (an update's
+// overlay, a snapshot). Nothing outlives its recording part (desc_kept_part): the stream and the pools' bookkeeping are a part's.
+// RX_VK_DESC_KEEP=0: every build resolves every descriptor, as before (so does RX_VK_DESC_REUSE=never)
+thread_local uint64_t desc_kept_part = 0;   // (draw_begin_recording counts the thread's recordings: what is kept lasts one)
+struct KeptTexKey {
+    const NvnState* s = nullptr;   // (a queue's state has counters of its own)
+    uint64_t part = 0, tex_gen = 0, dgen = 0, samp = 0, reg = 0;
+    uint32_t epoch = 0;
+    bool dummy = false;   // (a handle read 0: kept, as desc_slots_kept keeps one, only while no registration at all was made)
+};
+/// (all but tex_gen: while it stands the handles do, and when it moved build_descriptors reads them again and compares)
+bool kept_tex_holds(const KeptTexKey& kept, const KeptTexKey& now) {
+    return kept.s == now.s && kept.part == now.part && kept.dgen == now.dgen && kept.samp == now.samp && kept.epoch == now.epoch &&
+           (!kept.dummy || kept.reg == now.reg);
+}
+struct KeptBufKey {
+    const NvnState* s = nullptr;
+    uint64_t part = 0, ssbo_gen = 0, stamp = 0, pools = 0;
+};
+bool kept_buf_holds(const KeptBufKey& kept, const KeptBufKey& now) {
+    return kept.s == now.s && kept.part == now.part && kept.ssbo_gen == now.ssbo_gen && kept.stamp == now.stamp &&
+           kept.pools == now.pools;
+}
+struct KeptUboKey {
+    bool on = false;
+    uint64_t part = 0, addr = 0, size = 0, ub_gen = 0, ub_list = 0, stamp = 0;
+};
+/// (c1: the program's own constants, in the part's stream once; only the part matters, its addr and size are 0)
+bool kept_ubo_holds(const KeptUboKey& kept, const KeptUboKey& now, bool c1) {
+    return kept.on && kept.part == now.part && kept.addr == now.addr && kept.size == now.size &&
+           (c1 || (kept.ub_gen == now.ub_gen && kept.ub_list == now.ub_list && kept.stamp == now.stamp));
+}
+/// Whether every slot a kept stage's handles named holds what it did (desc_fp's entries: version << 20 | slot)
+bool kept_slots_hold(const std::vector<uint64_t>& fp) {
+    for (const uint64_t e : fp)
+        if (texture_slot_version((int)(e & 0xFFFFF)) != (uint32_t)(e >> 20)) return false;
+    return true;
+}
+/// Whether a stage's textures are resolved only from what KeptTexKey checks: a vertex to fragment stage whose every handle is a
+/// word of its own c2 (answer_stage_mask's rule, vk_shader.cpp), none through a handle program or from another bank
+bool desc_keep_textures(const Stage& st) {
+    if (st.nvn_stage < 0 || st.nvn_stage > 4 || st.info.texture_descriptors.empty()) return false;
+    for (const auto& d : st.info.texture_descriptors)
+        if (d.handle_program != ~0U || d.cbuf_index != 2 || (d.has_secondary && d.secondary_cbuf_index != 2)) return false;
+    return true;
+}
+/// Whether a stage's storage buffers are: read only (a written one notes its write-back, its stamp and its hazards at each build),
+/// named in c0 (its storage buffer table) or c1 (its constants), not RX_VK_MISS_LOG's
+bool desc_keep_storage(const Stage& st) {
+    if (st.nvn_stage < 0 || st.nvn_stage > 4 || st.info.storage_buffers_descriptors.empty()) return false;
+    for (const auto& d : st.info.storage_buffers_descriptors)
+        if (d.is_written || (d.cbuf_index != 0 && d.cbuf_index != 1) || (d.count == 1 && d.cbuf_index == 0 && d.cbuf_offset == 0xff0))
+            return false;
+    return true;
+}
+struct KeptStage {
+    bool tex_ok = false, buf_ok = false;   // (desc_keep_textures, desc_keep_storage: the stage's own, worked out once)
+    bool tex_on = false, buf_on = false;
+    KeptTexKey tex;
+    KeptBufKey buf;
+    std::vector<VkDescriptorImageInfo> imgs;   // (the textures' image infos, in order)
+    std::vector<uint32_t> handles;             // (each texture's handle, as read)
+    std::vector<uint64_t> fp;                  // (each handle's version << 20 | slot, as desc_fp has them)
+    std::vector<const Texture*> sampled;       // (the textures whose views resolved: draw_sampled takes the GPU-written ones)
+    int64_t dummies = 0;                       // (handles that resolved to no view: st_dummy_textures)
+    std::vector<VkDescriptorBufferInfo> sbufs; // (the storage buffers' infos, in order)
+    std::vector<KeptUboKey> ubo_keys;          // (each uniform buffer element's: c1, c3 and on)
+    std::vector<VkDescriptorBufferInfo> ubos;
+};
+struct KeptProgram {
+    const Program* p = nullptr;
+    uint64_t key = 0;
+    std::vector<KeptStage> stages;
+};
+TLS_OBJECT(desc_kept, std::array<KeptProgram, 1024>)   // (by the program's address: one taking another's place starts afresh)
+/// The thread's kept stages of p, or null: off, a diagnostic that reads each descriptor as it is resolved, or p not whole yet
+KeptProgram* kept_program(const Program& p) {
+    static const bool on = [] {
+        const char* e = getenv("RX_VK_DESC_KEEP");
+        // (the switches that log or dump each descriptor at its resolution, or that resolve storage buffers into stream copies)
+        const bool diag = getenv("RX_VK_TRACE_TEX") || getenv("RX_VK_LOG_IMG") || getenv("RX_VK_WATCH_PROG") ||
+                          getenv("RX_VK_DRAW_STATS") || getenv("RX_VK_PEEK_PROG") || env_on("RX_VK_LOG_TABLE") ||
+                          env_on("RX_VK_SLOW_DESC") || (getenv("RX_VK_ASYNC_IMPORT") && atoi(getenv("RX_VK_ASYNC_IMPORT")) != 0);
+        const bool v = (!e || !env_value_off(e)) && desc_reuse_level() != 0 && !diag;
+        logf("vk: descriptors kept by stage: %s", v ? "on (textures while their bindings and slots stand, read storage buffers "
+                                                      "and uniform buffers while their bindings and the pools do; RX_VK_DESC_KEEP=0: off)"
+                                                    : e && env_value_off(e) ? "off (RX_VK_DESC_KEEP=0)"
+                                                                            : "off (RX_VK_DESC_REUSE=never, or a descriptor diagnostic)");
+        return v;
+    }();
+    if (!on || dump_on() || !p.ready.load(std::memory_order_acquire)) return nullptr;
+    KeptProgram& k = desc_kept()[(size_t)(((uintptr_t)&p >> 4) * 0x9E3779B97F4A7C15ull >> 54)];
+    if (k.p != &p || k.key != p.key || k.stages.size() != p.stages.size()) {
+        k.p = &p, k.key = p.key;
+        k.stages.clear();
+        k.stages.resize(p.stages.size());
+        for (size_t i = 0; i < p.stages.size(); i++)
+            k.stages[i].tex_ok = desc_keep_textures(p.stages[i]), k.stages[i].buf_ok = desc_keep_storage(p.stages[i]);
+    }
+    return &k;
+}
+
 void build_descriptors(const NvnState& s, const Program& p) {
     // (longshot) the thread's writer asked for once: each dw() is a thread-local lookup, a call in a shared library, and a
     // build made dozens of them
@@ -3691,21 +3889,70 @@ void build_descriptors(const NvnState& s, const Program& p) {
         return w;
     };
     const uint64_t salign = storage_binding_align();   // (the translator's: vk_internal.h)
+    KeptProgram* const kp = kept_program(p);   // (longshot: what the last build of p in this part resolved, desc_kept)
     for (const Stage& st : p.stages) {
         const Shader::Info& info = st.info;
         const int ns = st.nvn_stage;
+        KeptStage* const ks = kp ? &kp->stages[(size_t)(&st - p.stages.data())] : nullptr;
+        size_t ui = 0;   // (the stage's uniform buffer elements in order: ks->ubo_keys)
         for (const auto& d : info.constant_buffer_descriptors) {
             VkWriteDescriptorSet w = write(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, d.count);
             const size_t first = out.bufs.size();
-            for (uint32_t k = 0; k < d.count; k++) {
+            for (uint32_t k = 0; k < d.count; k++, ui++) {
+                // (longshot) c1, or a user uniform buffer bound where it is, as the last build had it while its range, the stream's
+                // updates and the pools stand (desc_kept). The driver banks keep themselves (bank_cache)
+                const uint32_t index = d.index + k;
+                const bool c1 = index == 1, kept_kind = ks && (c1 || (index >= 3 && index < 3 + 16));
+                KeptUboKey now;
+                if (kept_kind) {
+                    if (ks->ubo_keys.size() <= ui) ks->ubo_keys.resize(ui + 1), ks->ubos.resize(ui + 1);
+                    now.part = desc_kept_part;
+                    if (!c1) {
+                        const nvn_p_bind_buf& u = s.ubo[std::clamp(ns, 0, kNvnStages - 1)][index - 3];
+                        now.addr = u.addr, now.size = u.size, now.ub_gen = ub_generation(), now.ub_list = ub_list_generation();
+                        now.stamp = gpu_bind_stamp();
+                    }
+                    if (kept_ubo_holds(ks->ubo_keys[ui], now, c1)) {
+                        FINE_N(FC_KEPT_UBOS, 1);
+                        out.bufs.push_back(ks->ubos[ui]);
+                        continue;
+                    }
+                }
+                bool keep = false;
                 const auto t0 = slow_desc_timing() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-                out.bufs.push_back(uniform_range(s, st, d.index + k));
-                if (slow_desc_timing()) slow_descriptor(t0, "uniform buffer", d.index + k, out.bufs.back().range);
+                out.bufs.push_back(uniform_range(s, st, index, kept_kind ? &keep : nullptr));
+                if (slow_desc_timing()) slow_descriptor(t0, "uniform buffer", index, out.bufs.back().range);
+                if (kept_kind) {   // (a pool that changed under the bind: not kept)
+                    now.on = keep && (c1 || gpu_bind_stamp() == now.stamp);
+                    ks->ubo_keys[ui] = now, ks->ubos[ui] = out.bufs.back();
+                }
             }
             w.pBufferInfo = &out.bufs[first];
             out.writes.push_back(w);
         }
+        // (longshot) the stage's storage buffers, all read only, as the last build had them while its c0 table and the pools stand
+        // (desc_kept). Read binds have no effect but the bind memo's, which the same stamp leaves as it is
+        const bool sb_keep = ks && ks->buf_ok;
+        KeptBufKey sb_now;
+        if (sb_keep) sb_now = {&s, desc_kept_part, s.ssbo_gen[ns], gpu_bind_stamp(), guest_pools_stamp()};
+        const bool sb_reused = sb_keep && ks->buf_on && kept_buf_holds(ks->buf, sb_now);
+        if (sb_reused) {
+            FINE_SCOPE(FT_STORAGE);
+            FINE_N(FC_KEPT_STORAGE, 1);
+            size_t at = 0;
+            for (const auto& d : info.storage_buffers_descriptors) {
+                VkWriteDescriptorSet w = write(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, d.count);
+                const size_t first = out.bufs.size();
+                out.bufs.insert(out.bufs.end(), ks->sbufs.begin() + at, ks->sbufs.begin() + at + d.count);
+                at += d.count;
+                w.pBufferInfo = &out.bufs[first];
+                out.writes.push_back(w);
+            }
+        }
+        bool sb_whole = sb_keep;   // (every buffer bound, in the guest window (a virtual pool's pages can be mapped anew): else not kept)
+        const size_t sb_first = out.bufs.size();
         for (const auto& d : info.storage_buffers_descriptors) {
+            if (sb_reused) break;   // (kept: above)
             FINE_SCOPE(FT_STORAGE);
             FINE_N(FC_SSBO_DESCS, d.count);
             VkWriteDescriptorSet w = write(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, d.count);
@@ -3915,6 +4162,7 @@ void build_descriptors(const NvnState& s, const Program& p) {
                              "%#llx%s", (unsigned long long)p.key, ns, (unsigned)d.cbuf_index, off,
                              (unsigned long long)addr, (unsigned long long)size, d.is_written ? " (written)" : "");
                 }
+                if ((addr && plausible && !b) || addr >= (1ull << 40)) sb_whole = false;   // (longshot: desc_kept)
                 out.bufs.push_back(b ? VkDescriptorBufferInfo{b.buffer, b.offset, n}
                                     : VkDescriptorBufferInfo{dev.null_descriptor ? VK_NULL_HANDLE : zero_buffer, 0,
                                                              dev.null_descriptor ? VK_WHOLE_SIZE : 16});
@@ -3939,6 +4187,10 @@ void build_descriptors(const NvnState& s, const Program& p) {
             w.pBufferInfo = &out.bufs[first];
             out.writes.push_back(w);
         }
+        if (sb_keep && !sb_reused) {   // (kept for the next build: only what was resolved under one stamp throughout)
+            ks->buf_on = sb_whole && gpu_bind_stamp() == sb_now.stamp && guest_pools_stamp() == sb_now.pools;
+            if (ks->buf_on) ks->buf = sb_now, ks->sbufs.assign(out.bufs.begin() + (ptrdiff_t)sb_first, out.bufs.end());
+        }
         auto texel_views = [&](const auto& list, VkDescriptorType type, bool storage) {
             for (const auto& d : list) {
                 VkWriteDescriptorSet w = write(type, d.count);
@@ -3962,7 +4214,58 @@ void build_descriptors(const NvnState& s, const Program& p) {
         };
         texel_views(info.texture_buffer_descriptors, VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, false);
         texel_views(info.image_buffer_descriptors, VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, true);
+        // (longshot) the stage's textures as the last build had them, while its c2 bindings, the slots they name, the samplers, the
+        // textures' views and the texture epoch stand (desc_kept). What resolving them does besides is done again from what was kept
+        const bool tx_keep = ks && ks->tex_ok;
+        KeptTexKey tx_now;
+        if (tx_keep)
+            tx_now = {&s, desc_kept_part, s.tex_gen[ns], texture_destroy_generation(), sampler_registrations_generation(),
+                      registrations_generation(), texture_epoch(), false};
+        // (Fritchii d603d98bb) A handle word where a storage buffer of the same program keeps its address is not a
+        // handle: OoT's water samples each light's texture with a handle loaded per pixel from the light buffer, and
+        // the translation falls back to the first constant word on its path, c0[0x520], the light buffer's address.
+        // Its low bits named an unrelated texture that changed with the double-buffered buffer: the water flickered
+        // every other frame. No texture there now. RX_VK_HANDLE_POINTER=1: the old handle
+        // (fragment stages only, the water's case: in other stages (the foliage culling's) the textures went missing and
+        // the foliage was culled whenever Link swung his sword. RX_VK_HANDLE_POINTER_ALL=1: every stage, as before)
+        // (Handle tables now give those samples their own textures: this is for what the translation still cannot
+        // compute per draw)
+        auto tex_handle = [&](const Shader::TextureDescriptor& d, uint32_t k) -> uint32_t {
+            static const bool all_stages = env_on("RX_VK_HANDLE_POINTER_ALL");
+            return ((all_stages || st.vk_stage == VK_SHADER_STAGE_FRAGMENT_BIT) && handle_is_storage_pointer(info, d, k))
+                       ? 0u : handle_of(s, st, d, k);
+        };
+        bool tx_reused = tx_keep && ks->tex_on && kept_tex_holds(ks->tex, tx_now) && kept_slots_hold(ks->fp);
+        if (tx_reused && ks->tex.tex_gen != tx_now.tex_gen) {   // (bound anew since, as another program's draw between does: the
+            size_t i = 0;                                       // same handles read, the same textures)
+            for (const auto& d : info.texture_descriptors)
+                for (uint32_t k = 0; k < d.count && tx_reused; k++)
+                    tx_reused = i < ks->handles.size() && tex_handle(d, k) == ks->handles[i++];
+            if (tx_reused) ks->tex.tex_gen = tx_now.tex_gen, FINE_X(FC_KEPT_TEX_HANDLES, 1);
+        }
+        if (tx_reused) {
+            FINE_SCOPE(FT_TEX);
+            FINE_N(FC_KEPT_TEX, 1);
+            size_t at = 0;
+            for (const auto& d : info.texture_descriptors) {
+                VkWriteDescriptorSet w = write(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, d.count);
+                const size_t first = out.imgs.size();
+                out.imgs.insert(out.imgs.end(), ks->imgs.begin() + at, ks->imgs.begin() + at + d.count);
+                at += d.count;
+                w.pImageInfo = &out.imgs[first];
+                out.writes.push_back(w);
+            }
+            if (desc_fp_on) desc_fp().insert(desc_fp().end(), ks->fp.begin(), ks->fp.end()), desc_fp_dummy |= ks->tex.dummy;
+            for (const Texture* t : ks->sampled)
+                if (t->gpu_written) draw_sampled().push_back(t);
+            st_dummy_textures += ks->dummies;
+        } else if (tx_keep) {
+            ks->tex_on = false, ks->handles.clear(), ks->fp.clear(), ks->sampled.clear(), ks->dummies = 0;
+        }
+        bool tx_whole = tx_keep;   // (every sampler made: a failed one is tried again at the next build)
+        const size_t tx_first = out.imgs.size();
         for (const auto& d : info.texture_descriptors) {
+            if (tx_reused) break;   // (kept: above)
             FINE_SCOPE(FT_TEX);
             VkWriteDescriptorSet w = write(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, d.count);
             const size_t first = out.imgs.size();
@@ -4001,6 +4304,11 @@ void build_descriptors(const NvnState& s, const Program& p) {
                 {
                     FINE_SCOPE(FT_TEXFP);
                     desc_fp_note(handle);   // (Descriptor reuse)
+                }
+                if (tx_keep) {   // (longshot: desc_kept. The version read before the handle resolves, as desc_fp_note reads it)
+                    const uint32_t slot = handle & 0xFFFFF;
+                    ks->handles.push_back(handle), tx_now.dummy |= handle == 0;
+                    ks->fp.push_back((uint64_t)texture_slot_version((int)slot) << 20 | slot);
                 }
                 Texture* tex = nullptr;
                 VkImageView view = VK_NULL_HANDLE;
@@ -4058,12 +4366,17 @@ void build_descriptors(const NvnState& s, const Program& p) {
                                tex ? tex->width : 0, tex ? tex->height : 0, tex ? tex->layers : 0, tex ? (void*)tex->image : nullptr,
                                (void*)view, view ? "" : " (dummy)");
                 if (view && tex && tex->gpu_written) draw_sampled().push_back(tex);
+                if (tx_keep && view && tex) ks->sampled.push_back(tex);
+                if (tx_keep && !view) ks->dummies += handle != 0;
                 if (!view) view = dummies.view[(int)vt], st_dummy_textures += handle != 0;
                 out.imgs.push_back({sampler_for((int)(handle >> 20), d.is_depth), view, VK_IMAGE_LAYOUT_GENERAL});
+                if (!out.imgs.back().sampler) tx_whole = false;
             }
             w.pImageInfo = &out.imgs[first];
             out.writes.push_back(w);
         }
+        if (tx_keep && !tx_reused && tx_whole)   // (kept for the next build)
+            ks->tex = tx_now, ks->imgs.assign(out.imgs.begin() + (ptrdiff_t)tx_first, out.imgs.end()), ks->tex_on = true;
         for (const auto& d : info.image_descriptors) {
             VkWriteDescriptorSet w = write(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, d.count);
             const size_t first = out.imgs.size();
@@ -4105,7 +4418,8 @@ void build_descriptors(const NvnState& s, const Program& p) {
 
 /// Binds the descriptors built: pushed, or a set from the recording's pool
 // (push descriptors keep what is not pushed again: a program drawn again pushes only the bindings that changed,
-// while nothing else was bound at its bind point in this command buffer)
+// while nothing else was bound at its bind point in this command buffer. (longshot) So does a program after another of the same
+// bindings: they share the layout (layouts_for), and the words compared are the writes' own, binding and type first)
 struct Pushed {
     VkCommandBuffer cmd = VK_NULL_HANDLE;
     VkPipelineLayout layout = VK_NULL_HANDLE;
@@ -5427,6 +5741,7 @@ void draw_begin_recording(int slot, VkCommandBuffer cmd, uint64_t value) {
     }
     for (auto& row : bank_cache())
         for (BankCache& c : row) c = BankCache{}, c.at = UINT64_MAX;
+    desc_kept_part++;   // (longshot: the stage descriptors build_descriptors kept were the last part's: its stream, its pools' state)
     if (!zero_buffer) {
         void* mapped = nullptr;
         create_buffer(65536, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
@@ -6934,10 +7249,23 @@ bool index_bind_same(uint64_t buffer, uint64_t offset, uint32_t type, uint64_t c
                      uint32_t cached_type, int on) {
     return on && buffer && buffer == cached_buffer && offset == cached_offset && type == cached_type;
 }
+/// (longshot) Where a direct indexed draw binds its index buffer, and its first index (*first): at the buffer's start, the
+/// draw's offset in it counted in indices as its first, so the submeshes of one pool keep one binding (each has an offset of
+/// its own: bound at it, nearly every draw was a vkCmdBindIndexBuffer). The same indices are read, start + first * unit
+/// being the offset; robust access's bounds run from the bound offset to the buffer's end, and no index read lies below
+/// the draw's offset, so none read in or out of bounds changes. At the offset, first 0, as before: an offset no multiple
+/// of the index size, a first index and count past 32 bits, or on 0 (RX_VK_INDEX_AT_OFFSET=1, the A/B)
+uint64_t index_bind_base(uint64_t offset, uint32_t unit, uint32_t count, int on, uint32_t* first) {
+    *first = 0;
+    if (!on || !unit || offset % unit || offset / unit > (uint64_t)(UINT32_MAX - count)) return offset;
+    *first = (uint32_t)(offset / unit);
+    return 0;
+}
 void bind_index(VkCommandBuffer cmd, VkBuffer buffer, VkDeviceSize offset, VkIndexType type) {
     const uint64_t b = (uint64_t)(uintptr_t)buffer;
     if (index_bind_same(b, (uint64_t)offset, (uint32_t)type, last_ib.buffer, last_ib.offset, last_ib.type, last_ib.on))
         return;
+    FINE_N(FC_IBIND_CMDS, 1);
     vkCmdBindIndexBuffer(cmd, buffer, offset, type);
     last_ib = {b, (uint64_t)offset, (uint32_t)type, true};
 }
@@ -7951,6 +8279,7 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
         if (d.indexed) {
             BufferRef ib = gpu_buffer_bind(d.ibuf, 4, false);
             if (!ib) SKIP_HERE();
+            // (at the address NVN was given: the records' first indices, written by the GPU, count from there)
             bind_index(cmd, ib.buffer, ib.offset, itype);
             occ.issue();
             if (cnt) vkCmdDrawIndexedIndirectCount(cmd, args.buffer, args.offset, cnt.buffer, cnt.offset, std::max(d.max, 1), ind_stride);
@@ -7963,16 +8292,18 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
     } else if (d.indexed) {
         const uint32_t unit = d.itype == 0 ? 1 : d.itype == 1 ? 2 : 4;
         BufferRef ib;
+        uint32_t first = 0;
         {
             FINE_SCOPE(FT_VERTEX);
             ib = gpu_buffer_bind(d.ibuf, (uint64_t)std::max(d.count, 1) * unit, false);
             if (!ib) SKIP_HERE();
             FINE_N(FC_IBIND, 1);
-            bind_index(cmd, ib.buffer, ib.offset, itype);
+            static const bool at_offset = env_on("RX_VK_INDEX_AT_OFFSET");   // (A/B: bound at each draw's offset, as before)
+            bind_index(cmd, ib.buffer, index_bind_base(ib.offset, unit, (uint32_t)d.count, !at_offset, &first), itype);
         }
         FINE_SCOPE(FT_DRAWCALL);
         occ.issue();
-        vkCmdDrawIndexed(cmd, (uint32_t)d.count, (uint32_t)std::max(1, d.instances), 0, d.base_vertex, (uint32_t)d.base_instance);
+        vkCmdDrawIndexed(cmd, (uint32_t)d.count, (uint32_t)std::max(1, d.instances), first, d.base_vertex, (uint32_t)d.base_instance);
     } else {
         FINE_SCOPE(FT_DRAWCALL);
         occ.issue();
@@ -8163,6 +8494,36 @@ bool upscale_stub(VkCommandBuffer cmd, const NvnState& s, uint64_t key) {
     // Failed upscales can receive RGB9E5 bits in a shared R11 image, including the 75% gameplay TAAU.
     // Match the observed base-level 2D case only; other fallbacks keep their existing blit.
     const bool gameplay_taau = key == 0xfd029a317a9a4b94ull;
+    if (gameplay_taau && scene_tonemap_on() &&
+        (src->format == VK_FORMAT_R16G16B16A16_SFLOAT || dst->format == VK_FORMAT_R16G16B16A16_SFLOAT)) {
+        if (src->format != VK_FORMAT_R16G16B16A16_SFLOAT || dst->format != VK_FORMAT_R16G16B16A16_SFLOAT ||
+            in.d.format != NVN_FORMAT_RGB9E5F || out.d.format != NVN_FORMAT_R11G11B10F ||
+            !(fd.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) ||
+            src->type != VK_IMAGE_TYPE_2D || dst->type != VK_IMAGE_TYPE_2D || src->depth != 1 || dst->depth != 1 ||
+            src->layers != 1 || dst->layers != 1 || src->levels != 1 || dst->levels != 1 || src->skip || dst->skip ||
+            in.d.swizzle_r != NVN_TEXTURE_SWIZZLE_R || in.d.swizzle_g != NVN_TEXTURE_SWIZZLE_G ||
+            in.d.swizzle_b != NVN_TEXTURE_SWIZZLE_B) return false;
+        nvn_tex selected_in{}, selected_out{};
+        nvn_view iv{}, ov{};
+        bool ihv = false, ohv = false;
+        if (texture_of((int)(in_h & 0xFFFFF), &selected_in, &iv, &ihv) &&
+            texture_of((int)(out_h & 0xFFFFF), &selected_out, &ov, &ohv) && !ihv && !ohv &&
+            selected_in.serial == in.serial && selected_out.serial == out.serial) {
+            VkFormat input_format = VK_FORMAT_UNDEFINED, output_format = VK_FORMAT_UNDEFINED;
+            const VkImageView input_view = texture_view(src, &in, nullptr, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Sample,
+                                                         &input_format, VK_FORMAT_R16G16B16A16_SFLOAT);
+            const VkImageView output_view = texture_view(dst, &out, nullptr, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Storage,
+                                                          &output_format, VK_FORMAT_R16G16B16A16_SFLOAT);
+            if (input_view && output_view && input_format == VK_FORMAT_R16G16B16A16_SFLOAT &&
+                output_format == VK_FORMAT_R16G16B16A16_SFLOAT &&
+                typed_upscale(cmd, input_view, output_view, dst, 0, key, "PsychoV35 TAAU fallback", true)) {
+                full_barrier(cmd);
+                texture_written(dst);
+                return true;
+            }
+        }
+        return false; // Do not blit perceptually encoded PsychoV35 input into a linear output.
+    }
     if ((!gameplay_network(key) || gameplay_taau) && in.d.format == NVN_FORMAT_RGB9E5F && out.d.format == NVN_FORMAT_R11G11B10F &&
         src->format == VK_FORMAT_B10G11R11_UFLOAT_PACK32 && dst->format == VK_FORMAT_B10G11R11_UFLOAT_PACK32 &&
         (fd.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) &&
@@ -8251,10 +8612,20 @@ bool taau_key(uint64_t key) {
 static bool typed_upscale(VkCommandBuffer cmd, VkImageView input_view, VkImageView output_view,
                           Texture* out, uint32_t level, uint64_t key, const char* keys, bool temporal) {
     if (!dev.push_descriptor || !vkCmdPushDescriptorSetKHR || !input_view || !output_view || !out) return false;
-    static VkPipeline pipe = VK_NULL_HANDLE;
-    static VkPipelineLayout layout = VK_NULL_HANDLE;
-    static VkSampler linear = VK_NULL_HANDLE;
-    static bool tried = false;
+    const bool rgba = out->format == VK_FORMAT_R16G16B16A16_SFLOAT;
+    if (out->format != VK_FORMAT_B10G11R11_UFLOAT_PACK32 && !(rgba && temporal && scene_tonemap_on())) return false;
+    struct Pipeline {
+        VkPipeline pipe = VK_NULL_HANDLE;
+        VkPipelineLayout layout = VK_NULL_HANDLE;
+        VkSampler linear = VK_NULL_HANDLE;
+        bool tried = false;
+    };
+    static Pipeline pipelines[2];
+    Pipeline& pipeline = pipelines[rgba ? 1 : 0];
+    auto& pipe = pipeline.pipe;
+    auto& layout = pipeline.layout;
+    auto& linear = pipeline.linear;
+    auto& tried = pipeline.tried;
     if (!tried) {
         tried = true;
         VkDescriptorSetLayoutBinding b[3] = {{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
@@ -8270,7 +8641,8 @@ static bool typed_upscale(VkCommandBuffer cmd, VkImageView input_view, VkImageVi
         pi.setLayoutCount = 1, pi.pSetLayouts = &set, pi.pushConstantRangeCount = 1, pi.pPushConstantRanges = &pr;
         vkCreatePipelineLayout(dev.device, &pi, nullptr, &layout);
         VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-        mi.codeSize = sizeof TAAU_UPSCALE_COMP_SPV, mi.pCode = TAAU_UPSCALE_COMP_SPV;
+        mi.codeSize = rgba ? sizeof TAAU_UPSCALE_RGBA_COMP_SPV : sizeof TAAU_UPSCALE_COMP_SPV;
+        mi.pCode = rgba ? TAAU_UPSCALE_RGBA_COMP_SPV : TAAU_UPSCALE_COMP_SPV;
         VkShaderModule m{};
         IntelDriverGate gate;
         if (guarded_shader_module(&mi, &m) != VK_SUCCESS) m = VK_NULL_HANDLE;
@@ -8284,7 +8656,7 @@ static bool typed_upscale(VkCommandBuffer cmd, VkImageView input_view, VkImageVi
         si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         si.maxLod = 0.25f;
         vkCreateSampler(dev.device, &si, nullptr, &linear);
-        logf("vk: typed upscale helper %s%s", keys,
+        logf("vk: typed upscale helper %s, %s output%s", keys, rgba ? "RGBA16F" : "packed",
              pipe ? "" : ": its pipeline was not made");
     }
     if (!pipe) return false;
@@ -8296,6 +8668,7 @@ static bool typed_upscale(VkCommandBuffer cmd, VkImageView input_view, VkImageVi
         VmaAllocation memory = nullptr;
         VkImageView view = VK_NULL_HANDLE;
         uint32_t width = 0, height = 0;
+        VkFormat format = VK_FORMAT_UNDEFINED;
         uint64_t frame = 0;
     };
     static History histories[2];
@@ -8320,12 +8693,12 @@ static bool typed_upscale(VkCommandBuffer cmd, VkImageView input_view, VkImageVi
         destroy_image(old_hist[i].image, old_hist[i].mem);
         old_hist.erase(old_hist.begin() + (ptrdiff_t)i);
     }
-    if (hist_w != size[0] || hist_h != size[1]) {
+    if (hist_w != size[0] || hist_h != size[1] || history.format != out->format) {
         // (the one before is kept for the while: work in flight may still use it)
         if (hist && !leak) old_hist.push_back({hist, hist_mem, hist_view, texture_frame_no()});
         hist = VK_NULL_HANDLE, hist_view = VK_NULL_HANDLE;
         VkImageCreateInfo ic{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-        ic.imageType = VK_IMAGE_TYPE_2D, ic.format = VK_FORMAT_B10G11R11_UFLOAT_PACK32;
+        ic.imageType = VK_IMAGE_TYPE_2D, ic.format = out->format;
         ic.extent = {size[0], size[1], 1}, ic.mipLevels = 1, ic.arrayLayers = 1, ic.samples = VK_SAMPLE_COUNT_1_BIT;
         ic.tiling = VK_IMAGE_TILING_OPTIMAL, ic.usage = VK_IMAGE_USAGE_STORAGE_BIT;
         if (!create_image(ic, hist, hist_mem)) { hist = VK_NULL_HANDLE; return false; }
@@ -8343,7 +8716,7 @@ static bool typed_upscale(VkCommandBuffer cmd, VkImageView input_view, VkImageVi
         VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
         di.imageMemoryBarrierCount = 1, di.pImageMemoryBarriers = &ib;
         vkCmdPipelineBarrier2(cmd, &di);
-        hist_w = size[0], hist_h = size[1], hist_frame = 0;
+        hist_w = size[0], hist_h = size[1], history.format = out->format, hist_frame = 0;
     }
     // (bounded when the history is last frame's or so: a pause of the TAAU, a menu, starts again unbounded)
     const uint64_t now_frame = texture_frame_no();
@@ -8392,7 +8765,12 @@ bool fsr3_stand_in(VkCommandBuffer cmd, const NvnState& s, const Program& p) {
     uint32_t level = 0;
     const uint32_t out_handle = handle_of(s, st, od, 0);
     if (out_handle) texture_view_of(out_handle, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Storage, image_format(od.format), &out, &level);
-    return fsr3_upscale(cmd, p.key, gameplay_network(p.key), in, dw().imgs[0].imageView, out, dw().imgs[ntex].imageView, level);
+    VkImageView input_view = dw().imgs[0].imageView, output_view = dw().imgs[ntex].imageView;
+    if (in && out && fsr3_inputs::colour_pair(in->format, out->format) && out->format == VK_FORMAT_R16G16B16A16_SFLOAT) {
+        input_view = texture_view_of(in_handle, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Sample, VK_FORMAT_R16G16B16A16_SFLOAT);
+        output_view = texture_view_of(out_handle, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Storage, VK_FORMAT_R16G16B16A16_SFLOAT);
+    }
+    return fsr3_upscale(cmd, p.key, gameplay_network(p.key), in, input_view, out, output_view, level);
 }
 /// (longshot) A temporal upscaler (NVIDIA DLSS, AMD FSR 4: vk_temporal.cpp) in place of the gameplay upscale network, when
 /// one is on and its inputs are as expected: the network's input as it samples it, its output's storage view
@@ -8439,7 +8817,8 @@ static bool temporal_rejected_network(VkCommandBuffer cmd, uint64_t key, Texture
     end_pass(cmd);
     VkFormat in_format = VK_FORMAT_UNDEFINED, out_format = VK_FORMAT_UNDEFINED;
     const VkImageView in_view = texture_view(src, in, nullptr, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Sample, &in_format);
-    const bool rgba_pair = temporal_colour_pair(src->format, dst->format) && dst->format == VK_FORMAT_R16G16B16A16_SFLOAT;
+    const bool rgba_pair = (temporal_colour_pair(src->format, dst->format) || fsr3_inputs::colour_pair(src->format, dst->format)) &&
+                           dst->format == VK_FORMAT_R16G16B16A16_SFLOAT;
     const VkImageView out_view = texture_view(dst, out, nullptr, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Storage, &out_format,
                                               rgba_pair ? VK_FORMAT_R16G16B16A16_SFLOAT : VK_FORMAT_B10G11R11_UFLOAT_PACK32);
     // (the gameplay networks' own formats: their input is the square root of the scene colour, which the fixed shares' networks
@@ -8447,7 +8826,8 @@ static bool temporal_rejected_network(VkCommandBuffer cmd, uint64_t key, Texture
     // both are what the temporal upscaler's prep pass takes. The movies' (RGBA8) are not the scene)
     const bool packed_pair = out_format == VK_FORMAT_B10G11R11_UFLOAT_PACK32 &&
                              (in_format == VK_FORMAT_B10G11R11_UFLOAT_PACK32 || in_format == VK_FORMAT_E5B9G9R9_UFLOAT_PACK32);
-    if (!in_view || !out_view || (!packed_pair && !temporal_colour_pair(in_format, out_format)))
+    if (!in_view || !out_view || (!packed_pair && !temporal_colour_pair(in_format, out_format) &&
+                                !fsr3_inputs::colour_pair(in_format, out_format)))
         return false;
     // (FSR 3.1 first, as fsr3_stand_in comes before temporal_stand_in: its upscale, or its frame interpolation's inputs while
     // another upscaler draws. Without it, on a card that leaves these networks out, FSR 3.1's own Render resolution steps
@@ -8482,9 +8862,22 @@ bool taau_stand_in(VkCommandBuffer cmd, const NvnState& s, const Program& p) {
     const uint32_t handle = handle_of(s, st, od, 0);
     if (!handle) return false;
     texture_view_of(handle, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Storage, image_format(od.format), &out, &level);
-    if (!out || out->format != VK_FORMAT_B10G11R11_UFLOAT_PACK32) return false;
+    if (!out) return false;
+    VkImageView input_view = dw().imgs[0].imageView, output_view = dw().imgs[ntex].imageView;
+    if (out->format == VK_FORMAT_R16G16B16A16_SFLOAT && scene_tonemap_on()) {
+        const uint32_t input_handle = handle_of(s, st, st.info.texture_descriptors[0], 0);
+        Texture* input = nullptr;
+        if (!input_handle) return false;
+        texture_view_of(input_handle, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Sample, VK_FORMAT_UNDEFINED, &input);
+        if (!input || input->format != VK_FORMAT_R16G16B16A16_SFLOAT) return false;
+        input_view = texture_view_of(input_handle, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Sample, VK_FORMAT_R16G16B16A16_SFLOAT);
+        output_view = texture_view_of(handle, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Storage, VK_FORMAT_R16G16B16A16_SFLOAT);
+        if (!input_view || !output_view) return false;
+    } else if (out->format != VK_FORMAT_B10G11R11_UFLOAT_PACK32) {
+        return false;
+    }
     const char* keys = getenv("RX_VK_TAAU_KEYS") ? getenv("RX_VK_TAAU_KEYS") : "fd029a317a9a4b94";
-    return typed_upscale(cmd, dw().imgs[0].imageView, dw().imgs[ntex].imageView, out, level, p.key, keys, true);
+    return typed_upscale(cmd, input_view, output_view, out, level, p.key, keys, true);
 }
 
 bool precompile_wanted() {
@@ -8498,9 +8891,11 @@ bool precompile_wanted() {
 }
 namespace {
 std::atomic<bool> prepare_halt{false};
+std::atomic<bool> prepare_saving_now{false};   // (precompile_warm: the pipeline cache written out, prepare_saving)
 }
 void prepare_stop() { prepare_halt.store(true); }
 bool prepare_stopped() { return prepare_halt.load(std::memory_order_relaxed); }
+bool prepare_saving() { return prepare_saving_now.load(std::memory_order_relaxed); }
 std::string prepared_path() { return cache_path("longshot_prepared.bin"); }
 // (longshot) What the last prepare here was made for, in longshot_prepared.bin: the translator (program_cache_stamp), and since the
 // seed grows apart from it (4221050d: networks, the movie upscaler, the particle sets, 19 compute programs more) the seed it went
@@ -8672,7 +9067,9 @@ bool prepare_is_update() {
 /// before the stamp says they are: a start that ended before the save would otherwise find them cold for good)
 bool pcache_saved_now() {
     size_t before = 0;
-    if (!pcache) return false;
+    // (RX_VK_PCACHE_LOAD=0: the save does nothing, and the file left from before, read against the cache that started empty,
+    // would pass for it: the record is not written as done)
+    if (!pcache || pcache_no_save) return false;
     {
         PcacheFetch fetch(-1);
         if (vkGetPipelineCacheData(dev.device, pcache, &before, nullptr) != VK_SUCCESS) return false;
@@ -8864,8 +9261,11 @@ bool prepare_run(void (*progress)(size_t done, size_t total), bool background, b
             libs++;
             pcache_built_since_save++;
         }
-        if (p.layout) vkDestroyPipelineLayout(dev.device, p.layout, nullptr), p.layout = VK_NULL_HANDLE;
-        if (p.set_layout) vkDestroyDescriptorSetLayout(dev.device, p.set_layout, nullptr), p.set_layout = VK_NULL_HANDLE;
+        if (!p.layout_shared) {   // (shared ones stay: other programs have them)
+            if (p.layout) vkDestroyPipelineLayout(dev.device, p.layout, nullptr);
+            if (p.set_layout) vkDestroyDescriptorSetLayout(dev.device, p.set_layout, nullptr);
+        }
+        p.layout = VK_NULL_HANDLE, p.set_layout = VK_NULL_HANDLE, p.layout_shared = false;
     };
     const auto worker = [&] {
         ub_thread_off();   // (a background thread: see ub_thread_off)
@@ -9010,6 +9410,10 @@ void precompile_warm(void (*progress)(size_t done, size_t total)) {
         list.push_back(&r);
     }
     const size_t total = refs.size();
+    // (the compute pipelines after them, every kept compute program's, counted in the progress from the start: reported as the
+    // notes' total once those were done, the screen read "32,623 / 32,623", 100%, "a few seconds left" while they were built, #714)
+    const std::vector<uint64_t> computes = program_cache_compute_keys();
+    const size_t all_n = total + computes.size();
     std::atomic<size_t> done{0}, built{0}, failed{0}, no_program{0};
     const std::string notes_path = pipe_notes_path();
     auto log_at = std::chrono::steady_clock::now() + std::chrono::seconds(10);
@@ -9034,16 +9438,15 @@ void precompile_warm(void (*progress)(size_t done, size_t total)) {
         no_program += list.size() - std::min(found, list.size());
         done += list.size();
     }, [] { return prepare_stopped(); }, [&](size_t) {
-        if (progress) progress(done.load(), total);
+        if (progress) progress(done.load(), all_n);
         prepare_progress_log("noted pipelines", done.load(), total, t0, log_at);
     });
     // (the compute pipelines too, every kept compute program's: a first start in start mode makes them all, and a load at a
     // create call only asks the caches, so on a new install a first dispatch found none (666 in one first session). Built
-    // into the cache and let go, as the noted ones)
-    const std::vector<uint64_t> computes = done == total && !prepare_stopped() ? program_cache_compute_keys() : std::vector<uint64_t>{};
+    // into the cache and let go, as the noted ones; only once those are all done)
     std::atomic<size_t> computes_done{0}, computes_built{0}, computes_failed{0};
     const auto c0 = std::chrono::steady_clock::now();
-    warm_bounded::run(computes.size(), threads, [&](size_t i) {
+    warm_bounded::run(done == total && !prepare_stopped() ? computes.size() : 0, threads, [&](size_t i) {
         static thread_local bool off = (ub_thread_off(), true);
         (void)off;
         program_cache_borrow(computes[i], [&](Program& p) {
@@ -9061,13 +9464,20 @@ void precompile_warm(void (*progress)(size_t done, size_t total)) {
         });
         computes_done++;
     }, [] { return prepare_stopped(); }, [&](size_t) {
-        if (progress) progress(total, total);
+        if (progress) progress(total + computes_done.load(), all_n);
         prepare_progress_log("compute pipelines", computes_done.load(), computes.size(), c0, log_at);
     });
     const bool all = done == total && computes_done == computes.size();
     static const bool prepare_only = env_on("LONGSHOT_PREPARE_ONLY");   // (a --prepare-shaders run: vk_main.cpp)
     if (all && !prepare_stopped()) {
+        // (the whole cache written, a GB and more, with every pipeline counted: the start-up screen says so, not "a few seconds
+        // left", #714)
+        const auto s0 = std::chrono::steady_clock::now();
+        prepare_saving_now.store(true, std::memory_order_relaxed);
         pipeline_cache_save(true);   // (in the file before the marker says they are there)
+        prepare_saving_now.store(false, std::memory_order_relaxed);
+        logf("vk: precompile: the pipeline cache written out in %.1f s",
+             std::chrono::duration<double>(std::chrono::steady_clock::now() - s0).count());
         // (not by the preparation's own process: warm_bounded.h leaves_marker)
         if (warm_bounded::leaves_marker(prepare_only, all, prepare_stopped())) precompile_built_write(total);
         remove(warming.c_str());
@@ -9404,8 +9814,9 @@ bool predict_pending() {
     fclose(f);
     return true;
 }
-// (longshot) Compile shaders, the Builder's, make_game.py's and the launcher's choice (compile_shaders= in longshot_options.ini:
-// 0 Most, the default; 1 All; any other number is Most). All builds the predicted pipelines too: about 50,000 for the driver's own cache, over 40 % more time (a full preparation on an RTX
+// (longshot) Compile shaders, the Builder's, make_game.py's and the launcher's choice (compile_shaders= in the game folder's
+// longshot_options.ini, where make_game.py writes it: the build's, not the player's settings in the user folder, vk_paths.h
+// options_path; 0 Most, the default; 1 All; any other number is Most). All builds the predicted pipelines too: about 50,000 for the driver's own cache, over 40 % more time (a full preparation on an RTX
 // 3090 with 24 threads: 415 and 413 s against 292 s without them), for pipelines play almost never draws ("vk: predicted
 // pipelines met in play"). RX_VK_COMPILE_SHADERS=all or most over the file (the game's --compile-shaders sets it, host/hos_main.c).
 // Asked only where a prediction would run: on Most it says so in the log, and takes away what an earlier preparation on All left

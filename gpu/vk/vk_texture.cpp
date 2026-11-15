@@ -40,6 +40,7 @@
 #include "vk_gprof.h"
 #include "vk_dump.h"
 #include "vk_jobs.h"
+#include "texture_budget.h"
 
 #include <span>
 
@@ -342,9 +343,10 @@ bool pool_take(uint64_t key, VkImage& image, VmaAllocation& allocation, std::uno
     return true;
 }
 void pool_destroy(Pooled& p) {
+    std::vector<VkImageView> views;
     for (auto& kv : p.views)
-        if (kv.second) vkDestroyImageView(dev.device, kv.second, nullptr);
-    destroy_image(p.image, p.allocation);
+        if (kv.second) views.push_back(kv.second);
+    destroy_image_later(p.image, p.allocation, std::move(views));   // (on the reaper's thread: vk_vma.cpp)
     st_pool_destroyed++;
 }
 /// (texture_frame) a dead render target's image the GPU is done with, into the pool
@@ -455,6 +457,19 @@ uint64_t completed_value = 0;
 // (GPU writes into guest memory by buffers: GPU address -> (end, the submission that wrote it last))
 std::map<uint64_t, std::pair<uint64_t, uint64_t>> gpu_wrote;
 std::mutex gpu_wrote_mu;
+// (longshot) A storage buffer a program writes is noted at every descriptor build that binds it (most draws rebuild theirs,
+// and the culling dispatches bind the same written ranges one after another): each note took the lock and a map lookup to
+// set the submission the range already had. A thread's last notes by range, with the map's count of changes (bumped under
+// the lock by every note that changed the map) as the note left it: the same range again in the same recording, with no
+// change to the map since, would only set what is there. RX_VK_WRITTEN_EACH=1: each note under the lock, as before
+std::atomic<uint64_t> gpu_wrote_changes{0};
+struct GpuWroteSeen {
+    uint64_t lo = 0, hi = 0, value = 0, changes = 0;
+};
+thread_local GpuWroteSeen gpu_wrote_seen[64];
+bool gpu_wrote_seen_hit(const GpuWroteSeen& s, uint64_t lo, uint64_t hi, uint64_t value, uint64_t changes) {
+    return s.hi && s.lo == lo && s.hi == hi && s.value == value && s.changes == changes;
+}
 }  // namespace
 bool gpu_wrote_into(Texture& tex);
 namespace {
@@ -2096,7 +2111,7 @@ bool low_vram_texture_mips() {
     // Windows paged the game out (3-6 fps). With 16 GB of RAM or less it counts as small whatever the driver allows
     static const bool shared = dev.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU && system_ram_bytes() &&
                                system_ram_bytes() <= (16ull << 30);
-    // (Minimum's budgets, opts.budget 1: Minimum, Auto (this PC) at Minimum's tier, or Custom after either, which keeps them: the
+    // (Minimum's settings, opts.budget 1: Minimum, Auto (this PC) at Minimum's tier, or Custom after either, which keeps them: the
     // Debug tab's Set up for a weak laptop leaves the preset on Custom)
     return !disabled && (small || shared) && (opts.preset == 1 || opts.budget == 1);
 }
@@ -3819,16 +3834,22 @@ void texture_gpu_wrote(uint64_t gpu, uint64_t size) {
                  (unsigned long long)lo, (unsigned long long)size, (unsigned long long)wlo, (unsigned long long)whi,
                  (unsigned long long)frame_no, (unsigned long long)tl_watch_prog);
     }
+    static const bool each = env_on("RX_VK_WRITTEN_EACH");
+    GpuWroteSeen& seen = gpu_wrote_seen[((lo ^ size * 0x9E3779B97F4A7C15ull) * 0x9E3779B97F4A7C15ull) >> 58];
+    if (!each && gpu_wrote_seen_hit(seen, lo, hi, rec_value, gpu_wrote_changes.load(std::memory_order_acquire))) return;
     std::lock_guard lk(gpu_wrote_mu);
     auto it = gpu_wrote.find(lo);
     if (it != gpu_wrote.end() && it->second.first >= hi) {
-        it->second.second = rec_value;
+        if (it->second.second != rec_value) it->second.second = rec_value, gpu_wrote_changes.fetch_add(1, std::memory_order_release);
+        seen = {lo, hi, rec_value, gpu_wrote_changes.load(std::memory_order_relaxed)};
         return;
     }
     for (auto e = gpu_wrote.lower_bound(lo); e != gpu_wrote.end() && e->first < hi;)   // (ranges it covers)
         e = e->second.first <= hi ? gpu_wrote.erase(e) : std::next(e);
     gpu_wrote[lo] = {hi, rec_value};
     if (gpu_wrote.size() > 65536) gpu_wrote.erase(gpu_wrote.begin());
+    gpu_wrote_changes.fetch_add(1, std::memory_order_release);
+    if (gpu_wrote.count(lo)) seen = {lo, hi, rec_value, gpu_wrote_changes.load(std::memory_order_relaxed)};   // (unless the bound took it)
 }
 /// A finished GPU write into the texture's storage it was not uploaded after (and notes it as seen)
 bool gpu_wrote_into(Texture& tex) {
@@ -4306,17 +4327,6 @@ Texture* texture_for_present(const nvn_tex* t) {
     return best ? best : tex;
 }
 
-/// (longshot) The texture budget a quality preset sets, or the card's own (tests/test_preset_texture_budget.py). The preset's
-/// replaced `own` outright, and `own` is where RX_VK_VRAM_MB and an integrated GPU's cap are applied: with a preset on, the
-/// documented RX_VK_VRAM_MB did nothing (the mirrors' RX_VK_MIRROR_MB wins over the preset), and an integrated GPU on Low or
-/// Balanced got 3.6 or 4.8 GB of textures past the 2.5 GB that keeps a 16 GB laptop from running out of RAM. Now
-/// RX_VK_VRAM_MB wins over a preset, and on an integrated GPU the preset's budget is at most `own`
-uint64_t preset_texture_budget(uint64_t preset_mb, bool preset_applies, bool vram_env, bool integrated, uint64_t own) {
-    if (!preset_mb || !preset_applies || vram_env) return own;
-    const uint64_t b = preset_mb << 20;
-    return integrated ? std::min(b, own) : b;
-}
-
 int64_t texture_readback_wait_ns() { return st_readback_wait_ns.load(std::memory_order_relaxed); }
 int64_t texture_frame_ns() { return st_texture_frame_ns.load(std::memory_order_relaxed); }
 
@@ -4414,10 +4424,9 @@ void texture_frame(uint64_t completed) {
             it = dead.erase(it);
             continue;
         }
-        for (VkImageView v : it->views) vkDestroyImageView(dev.device, v, nullptr);
-        destroy_image(it->image, it->allocation);
-        if (it->buffer) destroy_buffer(it->buffer, it->buffer_alloc);
-        for (VkDeviceMemory m : it->memory) vkFreeMemory(dev.device, m, nullptr);
+        // (longshot: on the reaper's thread, vk_vma.cpp; a vmaDestroyImage is a millisecond and more on NVIDIA's Windows
+        // driver, and a turn of the camera let go of many in one present)
+        destroy_image_later(it->image, it->allocation, std::move(it->views), it->buffer, it->buffer_alloc, std::move(it->memory));
         it = dead.erase(it);
     }
     pool_trim();
@@ -4428,15 +4437,19 @@ void texture_frame(uint64_t completed) {
     if (frame_no % 10) return;
     uint64_t used = 0, allowed = 0, block_free = 0;
     const bool known = vram_usage(&used, &allowed, &block_free);
-    if (!own)   // (RX_VK_VRAM_MB, else 70% of what the driver allows the process at the first look)
+    // (longshot) RX_VK_VRAM_MB=<MB> for a test, else the one rule by what the driver allows at the first look: texture_budget.h.
+    // No menu row or Quality preset sets it
+    if (!own) {
+        const bool igpu = dev.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
+        const uint64_t a = known ? allowed : 0;
         own = getenv("RX_VK_VRAM_MB") ? (uint64_t)atoi(getenv("RX_VK_VRAM_MB")) << 20
-              : known                ? std::min<uint64_t>(allowed / 100 * (allowed <= (8704ull << 20) ? 45 : 70), 6144ull << 20)
-                                     : 4096ull << 20;
-    // (longshot: at most 6 GB: a 16 GB card's 10.8 GB filled up, read as a leak: 105, 106. On a card of 8 GB or less, 45% of what the
-    // driver allows, not 70%: the game's other VRAM (render targets, the pools' mirrors and imports, buffers, pipelines) is ~3.5-3.8 GB
-    // in Hyrule Field, so 70% (5.1 GB of an 8 GB card's 7.3) put the whole past what the card holds. The driver paged VRAM to system
-    // memory and the GPU time went from ~13 to 55 ms a frame for good: an RTX 3060 Ti at 14 fps ten seconds into play, #1400's
-    // RTX 4050 at 5 fps. RX_VK_VRAM_MB=<MB>: the old size, or any)
+              : igpu                 ? texture_rule::integrated_bytes(a, device_vram_bytes())
+                                     : texture_rule::dedicated_bytes(a, device_vram_bytes(), system_ram_bytes());
+        if (!igpu)   // (the integrated GPUs' own line follows, with their caps by the system's RAM)
+            logf("vk: texture budget: %llu MB (driver allows %llu MB, the card has %llu MB, RAM %llu MB%s)",
+                 (unsigned long long)(own >> 20), (unsigned long long)(a >> 20), (unsigned long long)(device_vram_bytes() >> 20),
+                 (unsigned long long)(system_ram_bytes() >> 20), getenv("RX_VK_VRAM_MB") ? ", RX_VK_VRAM_MB" : "");
+    }
     {   // (longshot) an integrated GPU's "VRAM" is the system's RAM, dynamically calculated based on system RAM
         static bool told;
         if (!getenv("RX_VK_VRAM_MB") && dev.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) {
@@ -4472,7 +4485,7 @@ void texture_frame(uint64_t completed) {
             if (reserved < 8ull << 30) reserved = 8ull << 30;
 
             uint64_t available = system_ram > reserved ? system_ram - reserved : 0;
-            uint64_t driver_budget = own;  // (the dedicated cards' share of the allowance above: 45% of it up to 8.5 GB, else 70%)
+            uint64_t driver_budget = own;  // (its share of the allowance: texture_budget.h integrated_bytes)
             uint64_t budget = std::min(available, driver_budget);
 
             // Hard caps based on system RAM
@@ -4507,15 +4520,7 @@ void texture_frame(uint64_t completed) {
             }
         }
     }
-    // (a smaller preset on a bigger card: the card's own; RX_VK_VRAM_MB and an integrated GPU's cap: preset_texture_budget)
-    const bool vram_env = getenv("RX_VK_VRAM_MB") != nullptr;
-    const bool preset_budget = opts.vram_mb > 0 && !vram_env && preset_caps_memory();
-    uint64_t budget = preset_texture_budget((uint64_t)std::max(opts.vram_mb, 0), preset_budget, vram_env,
-                                            dev.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, own);
-    if (preset_budget && known) {
-        // Safety clamp: do not exceed 75% of driver-allowed memory on constrained VRAM (prevents VK_ERROR_DEVICE_LOST)
-        budget = std::min(budget, (allowed / 4) * 3);
-    }
+    uint64_t budget = own;
     // (near what the driver allows, the budget shrinks by the excess. The excess of what the process holds less the
     // free space in VMA's blocks, which new images take before VMA makes a block: measured by the blocks alone, the
     // textures evicted freed space inside them that the driver still counted, so 10 frames later the budget shrank
