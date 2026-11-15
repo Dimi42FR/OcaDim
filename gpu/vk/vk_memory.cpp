@@ -35,6 +35,7 @@
 #include "mirror_budget.h"   // (mirror_budget's rule, by the card)
 #include "mirror_trim.h"
 #include "wb_learn.h"
+#include "wb_pool_flags.h"
 #include "mirror_inherit.h"
 #include "retired_give_back.h"
 #include "sparse_mirror.h"
@@ -3791,9 +3792,27 @@ uint64_t wb_cap() {
     }();
     return v;
 }
+// (longshot) The game's pools' NVN flags by guest address (memory_pool_created): a binding is left out only where the CPU cannot
+// read the GPU's writes without an invalidate, which the table hears (wb_pool_flags.h). In an uncached pool the CPU reads them
+// with no call, and a left-out write-back there was found stale with nothing to learn from. RX_VK_WB_ANY_POOL=1: in any pool, as
+// before. Its own mutex, taken under pools_mu and before none
+std::mutex pool_flags_mu;
+wb_pool_flags::Map pool_flags;
+int64_t st_wb_access_bytes[4], st_wb_refused, st_wb_refused_bytes;   // (written back by the pools' CPU access; leave-outs refused)
+bool wb_any_pool() {
+    static const bool v = env_on("RX_VK_WB_ANY_POOL");
+    return v;
+}
 // (a written binding [lo, hi): false, write it all back; true, only the guest ranges in keep, the parts the CPU has touched)
 bool wb_leave_out(uint64_t lo, uint64_t hi, std::vector<std::pair<uint64_t, uint64_t>>& keep) {
     if (!wb_cap()) return false;
+    if (!wb_any_pool() && hi - lo > wb_cap()) {   // (one the cap could leave out: in a pool the CPU reads uncached it never is)
+        std::lock_guard pk(pool_flags_mu);
+        if (!pool_flags.may_leave_out(lo, hi)) {
+            st_wb_refused++, st_wb_refused_bytes += (int64_t)(hi - lo);
+            return false;
+        }
+    }
     std::lock_guard lk(wb_learn_mu);
     if (!wb_table.plan(lo, hi, wb_cap(), mirror_epoch, keep)) return false;   // (mirror_epoch: the submission)
     uint64_t kept = 0;
@@ -3826,9 +3845,30 @@ static void wb_learn_report() {   // (memory_end_submission, every 600 submits)
     if (!wb_cap()) return;
     std::lock_guard lk(wb_learn_mu);
     logf("vk: write-backs left out (600 submits): %lld, %.1f MB; %zu bindings followed, %zu ranges the CPU read, %llu resets; CPU reads "
-         "or writes of one left out: %lld so far", (long long)st_wb_left, st_wb_left_bytes / 1048576.0, wb_table.seen(), wb_table.reads(),
-         (unsigned long long)wb_table.resets(), (long long)st_wb_stale);
-    st_wb_left = st_wb_left_bytes = 0;
+         "or writes of one left out: %lld so far; kept for pools the CPU reads uncached: %lld, %.1f MB (RX_VK_WB_ANY_POOL=1: left out too)",
+         (long long)st_wb_left, st_wb_left_bytes / 1048576.0, wb_table.seen(), wb_table.reads(), (unsigned long long)wb_table.resets(),
+         (long long)st_wb_stale, (long long)st_wb_refused, st_wb_refused_bytes / 1048576.0);
+    st_wb_left = st_wb_left_bytes = st_wb_refused = st_wb_refused_bytes = 0;
+}
+// (longshot) The bytes written back by the CPU access of the pools they lie in (wb_pool_flags.h), every 600 submits: how much of
+// the write-back the CPU could read without an invalidate (uncached, or in no pool the game made, such as a virtual pool's pages)
+static void wb_access_note(uint64_t lo, uint64_t size) {   // (pools_mu held: the write-back's runs)
+    std::lock_guard pk(pool_flags_mu);
+    st_wb_access_bytes[pool_flags.range(lo, lo + size)] += (int64_t)size;
+}
+static void wb_access_report() {   // (memory_end_submission, every 600 submits)
+    int64_t b[4];
+    size_t pools;
+    {
+        std::lock_guard pk(pool_flags_mu);
+        std::memcpy(b, st_wb_access_bytes, sizeof b);
+        std::memset(st_wb_access_bytes, 0, sizeof st_wb_access_bytes);
+        pools = pool_flags.size();
+    }
+    if (!(b[0] | b[1] | b[2] | b[3])) return;
+    logf("vk: written back by the pools' CPU access (600 submits): uncached %.1f MB, CPU-cached %.1f MB, no CPU access %.1f MB, in no "
+         "pool known %.1f MB (%zu pools known)", b[wb_pool_flags::kUncached] / 1048576.0, b[wb_pool_flags::kCached] / 1048576.0,
+         b[wb_pool_flags::kNoAccess] / 1048576.0, b[wb_pool_flags::kUnknown] / 1048576.0, pools);
 }
 // (longshot, diagnostics) RX_VK_LOG_WB_SKIPS=1: the written bindings left out, by guest range, every 600 submits
 struct WbSkip { uint64_t hi, n, bytes; };
@@ -4008,7 +4048,11 @@ BufferRef gpu_buffer(uint64_t gpu, uint64_t size) {
     return {p->buffer, guest - p->lo, size, p->address + (guest - p->lo)};
 }
 
-void memory_pool_created(uint64_t gpu, uint64_t size) {
+void memory_pool_created(uint64_t gpu, uint64_t size, uint32_t flags) {
+    if (size && gpu < (1ull << 40)) {   // (its flags, by guest address: a physical pool's GPU address is its storage's)
+        std::lock_guard pk(pool_flags_mu);
+        pool_flags.add(gpu, gpu + size, flags);
+    }
     // (RX_VK_BG_IMPORT=1 only: imported eagerly, every pool the game made, most never used by the GPU, the thread's
     // page locking stalled the game's threads (3-7 fps); chunked imports at first use are the default)
     static const bool on = env_on("RX_VK_BG_IMPORT");
@@ -5726,6 +5770,7 @@ void memory_end_submission(VkCommandBuffer cmd, uint64_t part) {
         static int64_t n, l_live, l_cap;
         if (++n % 600 == 0) {
             wb_learn_report();
+            wb_access_report();
             if (wb_skips_log()) wb_skips_report();
             static int64_t l_old;
             logf("vk: mirror syncs (600 submits): %lld dirty pages from their submits' captures, %lld from earlier ones', "
@@ -5926,7 +5971,7 @@ void memory_end_submission(VkCommandBuffer cmd, uint64_t part) {
                     late_snap_whole(cmd, *p, r.dstOffset, r.size);
                 }
             }
-            for (const VkBufferCopy& r : runs) st_wb_bytes += (int64_t)r.size, gp.bytes += r.size;
+            for (const VkBufferCopy& r : runs) st_wb_bytes += (int64_t)r.size, gp.bytes += r.size, wb_access_note(p->lo + r.dstOffset, r.size);
             gp.items += (int)runs.size();
             for (const VkBufferCopy& r : runs) wb_pages_note(p->lo + r.dstOffset, p->lo + r.dstOffset + r.size, mem_rec_value, part);   // (EvilBoyce)
             {   // (longshot) RX_VK_LOG_WRITEBACK=1: the pools written back the most, every 600 write-back submissions

@@ -251,7 +251,7 @@ struct ParLock {
     ParLock(const ParLock&) = delete;
     ParLock& operator=(const ParLock&) = delete;
 };
-void memory_pool_created(uint64_t gpu, uint64_t size);
+void memory_pool_created(uint64_t gpu, uint64_t size, uint32_t flags);
 /// Whether guest memory in [lo, hi) is in an imported pool, live or retired (the GPU may read or write it)
 int memory_guest_imported(uint64_t lo, uint64_t hi);
 int memory_guest_contained(uint64_t lo, uint64_t hi);   // (whether one imported pool holds all of [lo, hi): vk_texture.cpp upload_unswizzle_gpu)

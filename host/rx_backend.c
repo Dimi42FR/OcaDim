@@ -609,6 +609,6 @@ void rx_nvn_vmap_changing(uint64_t gpu, uint64_t size) {
     if (vk && vk->nvn_vmap_changing) vk->nvn_vmap_changing(gpu, size);
     if (away) hos_vcore_back();
 }
-void rx_nvn_pool_created(uint64_t gpu, uint64_t size) {
-    if (vk && vk->nvn_pool_created) vk->nvn_pool_created(gpu, size);
+void rx_nvn_pool_created(uint64_t gpu, uint64_t size, uint32_t flags) {
+    if (vk && vk->nvn_pool_created) vk->nvn_pool_created(gpu, size, flags);
 }

@@ -1174,7 +1174,11 @@ once, and is written back from then on; the log names each one (`in a binding wh
 Unset or `0`, every written binding is copied back whole. It is off by default because, measured so far (an RTX 3060 Ti
 on Windows, an RX 580 on Linux with its mirror forced on), it copies back ~50 MB a frame less at the same frame rate:
 results from laptops and other slow PCIe links are wanted. `RX_VK_LOG_WB_SKIPS=1` lists the bindings left out every
-600 submits.
+600 submits. A binding is left out only in the game's CPU-cached pools and its pools with no CPU access (their NVN flags,
+`gpu/vk/wb_pool_flags.h`): the CPU reads a cached pool only after an invalidate, which the renderer hears and learns from,
+and an uncached one with no call at all, so nothing there is left out. In Kokiri Forest most of the write-back is in cached
+pools. `RX_VK_WB_ANY_POOL=1` leaves out in any pool, as before. The log's `written back by the pools' CPU access` line
+splits the write-back by pool kind every 600 submits, with the cap on or off.
 
 `RX_VK_PROGRAM_CACHE_ZSTD=1` keeps the translated shader programs in `longshot_programs.zst.bin`, each record
 compressed with zstd and unpacked when it is read. The uncompressed cache is about 6.9 GB; in the reference cache
