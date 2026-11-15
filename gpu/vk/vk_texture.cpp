@@ -343,9 +343,10 @@ bool pool_take(uint64_t key, VkImage& image, VmaAllocation& allocation, std::uno
     return true;
 }
 void pool_destroy(Pooled& p) {
+    std::vector<VkImageView> views;
     for (auto& kv : p.views)
-        if (kv.second) vkDestroyImageView(dev.device, kv.second, nullptr);
-    destroy_image(p.image, p.allocation);
+        if (kv.second) views.push_back(kv.second);
+    destroy_image_later(p.image, p.allocation, std::move(views));   // (on the reaper's thread: vk_vma.cpp)
     st_pool_destroyed++;
 }
 /// (texture_frame) a dead render target's image the GPU is done with, into the pool
@@ -4423,10 +4424,9 @@ void texture_frame(uint64_t completed) {
             it = dead.erase(it);
             continue;
         }
-        for (VkImageView v : it->views) vkDestroyImageView(dev.device, v, nullptr);
-        destroy_image(it->image, it->allocation);
-        if (it->buffer) destroy_buffer(it->buffer, it->buffer_alloc);
-        for (VkDeviceMemory m : it->memory) vkFreeMemory(dev.device, m, nullptr);
+        // (longshot: on the reaper's thread, vk_vma.cpp; a vmaDestroyImage is a millisecond and more on NVIDIA's Windows
+        // driver, and a turn of the camera let go of many in one present)
+        destroy_image_later(it->image, it->allocation, std::move(it->views), it->buffer, it->buffer_alloc, std::move(it->memory));
         it = dead.erase(it);
     }
     pool_trim();
