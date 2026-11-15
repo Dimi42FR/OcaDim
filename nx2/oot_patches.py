@@ -347,6 +347,25 @@ def patch_zstd_stream(source):
     return (source[:at] + ZSTD_CALL + source[at:]).replace('#include "a64.h"\n', '#include "a64.h"\nint hos_zstd_stream(Ctx *c);\n', 1)
 
 
+ZSTD_FRAMES_HEAD = "void f_8010b380(Ctx *__restrict A64_NOESC c) {\n"
+ZSTD_FRAMES_CALL = ("    if (hos_zstd_frames(c)) return;   /* (nx2/oot_patches.py: HOS_NATIVE_ZSTD_FRAMES, the host's libzstd) */\n")
+
+
+def patch_zstd_frames(source):
+    """f_8010b380, zstd's decompressMultiFrame in the game (x0 the context, x1 and x2 the output and its room, x3 and x4 the
+    frames, x5 and x6 a raw dictionary, x7 the DDict or 0; the resource loaders' whole-buffer decode), returns at once when
+    hos_zstd_frames did the call: with HOS_NATIVE_ZSTD_FRAMES on, the host's libzstd decodes the frames (host/hos_zstd.c);
+    off, the function runs as lifted"""
+    start = source.find(ZSTD_FRAMES_HEAD)
+    if start < 0:
+        return None
+    if ZSTD_FRAMES_CALL in source:   # (made before: a lift patched again)
+        return source
+    at = start + len(ZSTD_FRAMES_HEAD)
+    return (source[:at] + ZSTD_FRAMES_CALL + source[at:]).replace('#include "a64.h"\n',
+                                                                  '#include "a64.h"\nextern int hos_zstd_frames(Ctx *c);\n', 1)
+
+
 TEXT_HEAD = "void f_80b1e140(Ctx *__restrict A64_NOESC c) {"
 # (the letters' block: past the early returns, the auto-advance timer and the hidden / no-text checks; reached once a call)
 TEXT_OLD = ("L_80b1e1b4:;\n"
@@ -817,7 +836,7 @@ def patch_heap_retry(s):
 # (the wait action's start and tick, code_033.c; the anchors carry call-return PC literals, so each is once in its function)
 OC_DECL = ("extern volatile int hos_oc_wait;\nextern volatile int hos_oc_last_kind;\n"
            "extern volatile unsigned hos_oc_beat;\n"
-           "#define HOS_OC_BUTTONS(k) ((k) == 1 || (k) == 2 || (k) == 3 || (k) == 10 || (k) == 11)\n")
+           "#define HOS_OC_BUTTONS(k) ((k) == 1 || (k) == 2 || (k) == 3 || (k) == 7 || (k) == 10 || (k) == 11)\n")
 OC_ENTRY_HEAD = "void f_828a9190(Ctx *__restrict A64_NOESC c) {"
 OC_ENTRY_OLD = ("    c->x[1]=recomp_load32(c,c->x[19] + 32);\n"
                 "    { uint64_t _r = ((uint64_t)0 | ((c->x[0]) << 0)); c->x[20] = _r; }\n"
@@ -825,7 +844,8 @@ OC_ENTRY_OLD = ("    c->x[1]=recomp_load32(c,c->x[19] + 32);\n"
 OC_ENTRY_NEW = ("    c->x[1]=recomp_load32(c,c->x[19] + 32);\n"
                 "    hos_oc_last_kind = (int)c->x[1], hos_oc_wait = HOS_OC_BUTTONS(c->x[1]) ? 1 : 2, hos_oc_beat++;"
                 "   /* (nx2/oot_patches.py: the note wait began; 1 and 3 are the field ocarina, 2 a song lesson, "
-                "10 the scarecrow's recording, 11 the scarecrow's recall of it, 13 a dialogue's, which stays the game's) */\n"
+                "7 the Lost Woods skull kids' songs, 10 the scarecrow's recording, 11 the scarecrow's recall of it, "
+                "13 a dialogue's, which stays the game's) */\n"
                 "    { uint64_t _r = ((uint64_t)0 | ((c->x[0]) << 0)); c->x[20] = _r; }\n"
                 "c->x[30] = 0x828a91e4ULL; f_832b35d0(c);")
 OC_TICK_HEAD = "void f_828a9280(Ctx *__restrict A64_NOESC c) {"
@@ -934,6 +954,12 @@ def patch_file(s, name, protect_hearts=False):
             lines.append("oot_patches: the zstd stream decode's host hook in " + name)
         out = zs
         counts["zstd stream hook"] += 1
+    zf = patch_zstd_frames(out) if protect_hearts else None
+    if zf is not None:
+        if zf != out:
+            lines.append("oot_patches: the zstd whole-buffer decode's host hook in " + name)
+        out = zf
+        counts["zstd frames hook"] += 1
     layout = patch_text_layout(out) if protect_hearts else None
     if layout is not None:
         out = layout
@@ -1068,6 +1094,7 @@ def report(paths, counts, protect_hearts=False):
         done["disable camera centering"] = 0
         done["scene format"] = 0
         done["zstd stream hook"] = 0
+        done["zstd frames hook"] = 0
     total = collections.Counter()
     for c in counts:
         total.update(c)

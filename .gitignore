@@ -41,9 +41,13 @@ build-linux/
 
 # ---- NVIDIA's DLSS SDK (scripts/ngx_sdk.py): NVIDIA's files, never committed ----
 ngx-sdk/
+test-results/
+_deps/
+
+# ---- a link to <build>/compile_commands.json (nx2/build.py write_compdb), for clangd and clang-tidy ----
+/compile_commands.json
 
 # ---- the OcaDim setup's parcel and dotnet's outputs ----
 setup/dist/
 setup/OcaDimSetup/bin/
 setup/OcaDimSetup/obj/
-

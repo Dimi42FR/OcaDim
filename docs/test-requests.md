@@ -29,16 +29,18 @@ You can take part with an agent (Claude Code or another) doing the work, or by h
 1. **Build the game from source.** Follow [CONTRIBUTING.md](../CONTRIBUTING.md#development-setup): your own dump,
    Python and a compiler, then a first build. Testing a PR is the same build on the PR's branch. If you can build and
    play `main`, you're ready.
-2. **Sign in with Discord**, from the repository folder (one sign-in for git.magicbean.dev, where results go on the PR as
-   your comment, and the team chat):
+2. **Get the team's tooling and sign in with Discord**, from the repository folder (one sign-in for git.magicbean.dev,
+   where results go on the PR as your comment, and the team chat). The scripts are
+   [MagicBeanDev/Tooling](https://git.magicbean.dev/MagicBeanDev/Tooling)'s, cloned beside your checkout:
 
    ```
-   python -I scripts/forge.py login
+   git clone https://git.magicbean.dev/MagicBeanDev/Tooling.git ../Tooling
+   python -I ../Tooling/scripts/forge.py login
    ```
 
    It opens git.magicbean.dev: click **Sign in with Discord** and approve. The first time creates your account. The
    sign-in stays in your config folder (Linux `~/.config/longshot/`, Windows `%APPDATA%\Longshot\`), never in the
-   repository. ([docs/forge.md](forge.md) has the rest of what it sets up.)
+   repository. ([Tooling's docs/forge.md](https://git.magicbean.dev/MagicBeanDev/Tooling/src/branch/main/docs/forge.md) has the rest of what it sets up.)
 3. **Check it works:**
 
    ```
@@ -74,11 +76,11 @@ python -I scripts/test_requests.py done T-7KQ2 --result pass --comment <link to 
 
 Between `claim` and `done`:
 
-1. Check out the PR in its own folder (`python -I scripts/forge.py pr checkout <number>`, then a worktree of the branch `pr/<number>`), build it as usual and
+1. Check out the PR in its own folder (`python -I ../Tooling/scripts/forge.py pr checkout <number>`, then a worktree of the branch `pr/<number>`), build it as usual and
    note the commit.
 2. Do what the request's notes ask (`show` prints them); if they compare against `main`, build `main` the same way and
    run both under the same conditions.
-3. Comment on the PR (`python -I scripts/forge.py pr comment <number> --body-file <file>`, or on git.magicbean.dev),
+3. Comment on the PR (`python -I ../Tooling/scripts/forge.py pr comment <number> --body-file <file>`, or on git.magicbean.dev),
    starting with the request's ID:
 
    ```
@@ -128,7 +130,7 @@ and Linux) are clearer as separate requests.
 
 ## If something goes wrong
 
-- `not signed in` or `no longer valid`: run `python -I scripts/team_chat.py login` again.
+- `not signed in` or `no longer valid`: run `python -I ../Tooling/scripts/team_chat.py login` again.
 - `refused: you already tested ...`: pick another, or `claim --again` if the PR changed since.
 - `cannot reach`: the server is down; try later.
 - The messages in the room are one line each, led by the ID and the action (`🧪 T-7KQ2 claim: until 2026-11-12

@@ -97,6 +97,10 @@ Longshot's first version will be **v3.0.0**; the launcher's first will be **v1.0
 **Your game copy:** program `0400486024DEC000` · update **v131072** · build `e0f3ccfa`.
 Use a `.nup` file, or the `romfs` and `exefs` folders. Other game versions are not supported.
 
+**Check your copy before building:** choose your own game file or folders in the launcher. Its game-file check
+reports whether the build is supported; if it reports another build, compare that message with `e0f3ccfa` above.
+The launcher version (such as `v1.0.0-rc.4`) is separate from the game update and build identifiers.
+
 These are estimates from the [tested configurations catalogue](https://longshot.magicbean.dev/tested-configurations/), not a promise of a particular
 frame rate: the game runs on more than this, and performance depends on the resolution and settings you choose.
 
@@ -310,7 +314,7 @@ line with the video memory in use against what the driver allows, and DLSS's det
 | "Your antivirus removed part of the build tools" | A false alarm on unsigned programs. Restore the files from Windows Security's Protection history, and add `%LOCALAPPDATA%\LongshotLauncher` and `%LOCALAPPDATA%\Programs\LongshotLauncher` to its exclusions, then build again ([common problems](docs/common-issues.md#your-antivirus-removed-part-of-the-build-tools)). |
 | **Starting** | |
 | The game opens and closes, or the log says "device lost" | Update your graphics driver. AMD cards have known crashes ([#708](https://github.com/NotRexed/Hookshot/issues/708), [#614](https://github.com/NotRexed/Hookshot/issues/614)). |
-| Windows, Intel: the game closes in the first scene, and the log names `igvk64.dll` | Keep the Debug tab's **Intel shader compiles** row on **One at a time** (the default) and update the graphics driver. See [Intel laptops](#intel-laptops). |
+| Windows, Intel: the game closes in the first scene, and the log names `igvk64.dll` | Set the Debug tab's **Intel shader compiles** row to **One at a time** (it is what **Auto**, the default, means on every Intel GPU but the Arc B-series) and update the graphics driver. See [Intel laptops](#intel-laptops). |
 | The build said "the GPU driver stopped responding", or the log says `the shaders' preparation was skipped at the build` | The game then builds every shader when it is first drawn, and stutters or leaves things out for a long time. Delete `longshot_prepare_skipped` from the game folder's `cache` folder so that the next start prepares them, or build again with **Prepare shaders now** ticked. |
 | Linux: the game doesn't start, or the picture is broken | The game needs a Vulkan 1.3 driver, ideally with mesh shaders: `vulkaninfo \| grep mesh` should list `VK_EXT_mesh_shader`. Update Mesa or the NVIDIA driver. |
 | Linux: low-memory warning, or the whole desktop becomes unresponsive while loading | Close other programs and check `free -h`: the `Mem` and `Swap` rows are separate. Below 10 GiB of physical RAM the game warns even with plenty of swap; absence of that warning does not mean a run will fit. Do not keep retrying a load that locks up the PC. After restarting, keep the failed session's log before launching again, and check `journalctl -k -b -1` for an out-of-memory kill or a GPU reset (if the previous boot's journal was saved). |
@@ -359,8 +363,8 @@ It has not been tested on an Intel GPU yet. On such a PC:
 
 1. Build with **Prepare shaders now** ticked. If the game folder's `cache` folder has a `longshot_prepare_skipped` file
    from an earlier build, delete it first.
-2. Keep the Debug tab's **Intel shader compiles** row on **One at a time** (the default). Side by side builds faster on a
-   CPU with many cores, but Intel's driver can crash the game then.
+2. Keep the Debug tab's **Intel shader compiles** row on **Auto** (the default: one at a time on these laptops) or **One
+   at a time**. Side by side builds faster on a CPU with many cores, but Intel's driver can crash the game then.
 3. A shader the driver faulted on is listed in `longshot_driver_faults.txt` (in the `cache` folder) and left out, with
    its draws, on later starts on the same driver. After a driver update the list starts again; delete the file to try
    them all again sooner.
@@ -428,9 +432,9 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | Output resolution | The Aspect ratio's sizes: your screen's resolutions and the common ones (1440p, 4K, 5K at 16:9; 1920x1200, 2560x1600 at 16:10; 3440x1440 at 21:9; ...), and 2048x1152 (the game's own reduced size, 80% of its 2560x1440, marked "(reduced)") at 16:9; your screen's own size is marked "(native)" (after a restart) | 2560x1440, the game's own picture, or your screen's size where it is smaller (a Steam Deck's 1280x800, a 1080p monitor), at its own shape (a 2560x1080 ultrawide starts at 2560x1080, a 2256x1504 laptop at 2256x1504); Auto (this PC) leaves it as it is |
 | | Custom output size | A size of your own, typed as `<width>x<height>` (after a restart) | None |
 | | Profile | Docked, Handheld (after a restart) | Docked; a quality preset sets it |
-| | Upscaler | Game's own, NVIDIA DLSS (only in builds with NVIDIA's DLSS SDK, below, on NVIDIA RTX GPUs), AMD FSR 3.1 (every build, on GPUs it runs on, below), AMD FSR 4 (only in builds with FSR 4, below, on GPUs AMD's files cover), Off (no upscaling). NVIDIA DLAA and AMD FSR 4 Native AA are DLSS's and FSR 4's Native, chosen on the Render resolution row | Game's own; Auto (this PC) chooses DLSS or FSR 4 where they run |
+| | Upscaler | Game's own, NVIDIA DLSS (only in builds with NVIDIA's DLSS SDK, below, on NVIDIA RTX GPUs), AMD FSR 3.1 (every build, on GPUs it runs on, below), AMD FSR 4 (only in builds with FSR 4, below, on GPUs AMD's files cover), Off (no upscaling), Intel XeSS (Windows, with Intel's `libxess.dll` beside the game, below). NVIDIA DLAA, AMD FSR 4 Native AA and Intel XeSS Native AA are DLSS's, FSR 4's and XeSS's Native, chosen on the Render resolution row | Game's own; Auto (this PC) chooses DLSS or FSR 4 where they run, never XeSS |
 | | DLSS model | Transformer (K), Transformer 2 (M), Transformer 2 (L), NVIDIA default (shown where DLSS runs; used by DLSS and DLAA) | Transformer (K) |
-| | Render resolution | Auto (the game's own dynamic resolution), 100%, 75%, 67%, 50% (each with its size). With DLSS or FSR 4: Auto, Native (DLAA or FSR 4 Native AA: the 3D at full size), 92%, 83%, 75%, Quality (67%), Balanced (58%), Performance (50%), Ultra Performance (33%). With FSR 3.1: Auto, 100% (its native AA), then the same as DLSS from 92%. With Off: Auto, 100%, 75%, 67%, 50%, 33% | Auto; a quality preset sets it |
+| | Render resolution | Auto (the game's own dynamic resolution), 100%, 75%, 67%, 50% (each with its size). With DLSS or FSR 4: Auto, Native (DLAA or FSR 4 Native AA: the 3D at full size), 92%, 83%, 75%, Quality (67%), Balanced (58%), Performance (50%), Ultra Performance (33%). With Intel XeSS the same stops, named by the XeSS mode each runs under: Native (XeSS Native AA), Ultra Quality Plus (92%, 83%), 75%, Ultra Quality (67%), Balanced (58%, 50%), Ultra Performance (33%). With FSR 3.1: Auto, 100% (its native AA), then the same as DLSS from 92%. With Off: Auto, 100%, 75%, 67%, 50%, 33% | Auto; a quality preset sets it |
 | | Sharpness | 0 to 100%, in steps of 10 | 0%; a quality preset sets it |
 | | Frame generation | Off, Auto, 2x to 8x | Off |
 | | Frame generation by | Auto (NVIDIA DLSS Frame Generation where it runs: RTX 40 and newer, with a temporal Upscaler; else the built-in one; with frame generation on, the row shows who makes the frames, as Auto: DLSS FG, and why not DLSS FG when another does), Built-in FG. Changes at once | Auto |
@@ -441,6 +445,8 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | Fullscreen | Off, On (the same as <kbd>F11</kbd>) | Off |
 | | V-Sync | Auto, On, Off | Auto |
 | | Window scaling filter | Off, Catmull-Rom, Lanczos (shows "Not needed (window = output)" while the window is the Output resolution's size) | Off; a quality preset sets it |
+| | CRT filter | Off, Lottes aperture grille, Lottes consumer TV, Hyllian Fast, zfast CRT (changes at once; Native HDR bypasses it) | Off |
+| | CRT lines | 240, 480, 720 virtual lines (changes at once; capped at half the destination height) | 240 |
 | | Ultrawide menus | Full width; Centred, blurred sides; Centred, black bars (with the Aspect ratio at the monitor's shape) | Centred, blurred sides |
 | | HDR | Off, Expanded, Native (the game's) | Off |
 | | HDR paper white | 80 to 400 nits, in steps of 10 (while HDR is on) | 200 nits |
@@ -498,7 +504,7 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | Developer: Sampler cache | Off, On (changes at once) | Off |
 | | Developer: Robust buffers | Auto, Off, On (after a restart) | Auto |
 | | Developer: ASTC as RGBA8 | Off, On (after a restart) | Off |
-| | Developer: Intel shader compiles | One at a time, Side by side (after a restart; Intel graphics on Windows only) | One at a time |
+| | Developer: Intel shader compiles | Auto, Side by side, One at a time (after a restart; Intel graphics on Windows only) | Auto |
 
 - **Quality preset** sets Render resolution, Window scaling filter, Sharpness, Frame pacing, Game speed and Profile
   for a card with that much memory; how much video memory the textures use comes from the card itself. It leaves the
@@ -608,6 +614,15 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 - **Window scaling filter** matters only when your window's size differs from the Output resolution: for the sharpest
   picture, set the Output resolution to your screen's, and the row shows "Not needed (window = output)". It and
   **Sharpness** also work when Frame generation is Off.
+- **CRT filter** adds scanlines and a phosphor mask to the finished SDR picture, including the game's HUD, after
+  window scaling and sharpening. Longshot's menu and overlays stay clean. Lottes aperture grille is a flat PVM-style
+  look, not a calibrated Sony model; Lottes consumer TV adds curved glass, a shadow mask and beam bloom. Hyllian Fast
+  uses cubic reconstruction and a magenta/green mask; zfast CRT has softer scanlines and a monochrome aperture mask.
+  **CRT lines** chooses a virtual raster, independent of Render resolution: 240, 480 or 720 lines, capped at half the
+  destination height (at least one line), with width following its aspect. Exact integer multiples give the most regular
+  lines; non-integer scaling can cause moire. Neither option forces 4:3 or integer scaling. Both apply at once and
+  quality presets, including Auto, preserve them. Expanded HDR expands the filtered SDR picture; Native HDR (PQ)
+  bypasses CRT and keeps the choice for SDR. **Off**, the default, adds no CRT passes or GPU images.
 - **Anisotropic filtering** keeps textures sharp on surfaces seen at a slant: the paths and floors ahead of Link. The game
   asks for 1x or 2x, which at a PC's resolutions smears the ground a few metres off; 16x costs little on most cards, and
   Game's is the console's own. `RX_VK_ANISO=<n>` sets it for one run (0: the game's).
@@ -651,27 +666,35 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 - **Robust buffers** (Debug tab, Developer): a read past a buffer's end is dropped instead of stopping the GPU. Auto is
   on, on every card; Off can be faster on some NVIDIA cards.
 - **ASTC as RGBA8** (Debug tab, Developer): the AMD texture workaround below.
-- **Intel shader compiles** (Debug tab, Developer; Intel graphics on Windows only): One at a time, the default, lets one
-  thread at a time into Intel's shader compiler; Side by side is faster on many cores but can crash in the driver. See
+- **Intel shader compiles** (Debug tab, Developer; Intel graphics on Windows only): One at a time lets one thread at a
+  time into Intel's shader compiler; Side by side is faster on many cores but can crash in the driver. Auto, the default,
+  is side by side on the Arc B-series with driver 101.9154 or newer, where it was measured, and one at a time elsewhere. See
   [Intel laptops](#intel-laptops). It applies after a restart.
 - **Game speed:** with Per frame, the game runs slower whenever it is below 60 fps. Real time keeps it at normal speed
   down to 15 fps.
 - **FPS counter** shows in a corner (**FPS counter position**; at the top right while the menu is open), at one of
   five levels. **FPS** is the number alone (an options file's old On); with frame generation on, it also shows the
-  game's own rate and who makes the frames: `Base 60, DLSS FG` (NVIDIA DLSS Frame Generation), `FSR 3.1 FG` or `Built-in FG`. **Frame time** adds the game's frame time and its 1% low (the rate of the slowest 1% of frames over
-  the last 10 seconds). From this level on, the number and the frame time are green at the Game frame rate cap's rate,
+  game's own rate and who makes the frames: `Base 60, DLSS FG` (NVIDIA DLSS Frame Generation), `FSR 3.1 FG` or `Built-in FG`. **Frame time** adds the game's frame time and its 1% low (the mean time of the slowest 1% of frames
+  over the last 10 seconds). From this level on, the number and the frame time are green at the Game frame rate cap's rate,
   amber under it and red under two thirds of it. (The cap's rate is the display's refresh instead with V-Sync On when
   that is slower; with Uncapped and V-Sync not On there is no line, and the colours are against 60.) **Graph** adds
   the frame times of the last 4 seconds (each point the slowest frame of its span, so no stutter is missed), with a
   dashed line at the Game frame rate cap's frame time and a red mark over frames that took more than twice it; its
-  scale follows the usual frame, so a spike is drawn at the top rather than flattening the rest. **Breakdown** adds
-  where the frame's time went on the game's presenting thread, as a bar and in numbers: the game's own code (Game),
-  recording and submitting the GPU's work (Renderer), waiting for the GPU (GPU wait), and waiting for the frame's turn
-  (Pacing: the frame rate cap, vsync, Reflex); then the GPU's own time per frame, and the shaders built and draws left
-  out in the last 4 seconds (red marks on the graph where they happened, the usual cause of a stutter). **Dev** adds the
+  scale follows the usual frame, so a spike is drawn at the top rather than flattening the rest. **Breakdown** draws
+  each of the graph's frames as the parts its time went to, stacked, with their values under the graph; the values add up
+  to the frame time: the game's own code (Game), the renderer's part on the game's thread (Renderer: handing
+  over the frame's work, or all of its recording with Threaded rendering off), then the waits under
+  Waiting on: for work the render thread had not recorded yet (Render thread), for the GPU to finish work the game waits
+  on (GPU fence) and for the GPU at the present (GPU present), and last the frame's turn (Pacing: the frame rate cap,
+  vsync, Reflex). The colours keep one meaning: blue the game's work, red the GPU, purple the render thread, grey pacing
+  and idle. With Threaded rendering on, a second lane under the graph shows the render thread's own frame in parallel,
+  on the same scale: recording, waiting for the parallel replay's workers and for a GPU slot, and idle. Then the GPU's
+  own time per frame and its share of the frame (it runs in parallel too), and the shaders built and draws left out in
+  the last 4 seconds (red marks on the graph where they happened, the usual cause of a stutter). **Dev** adds the
   renderer's own numbers, for debugging and bug reports: video memory used of what the driver allows (red past it), the
   textures held and their memory, draws, dispatches and render passes a frame, draws skipped a frame (red when any),
-  texture uploads a second and the pipelines built since the start.
+  texture uploads a second and the pipelines built since the start, and under the frame time three lines: the CPU, the
+  GPU and its driver.
 - **Volume** scales the game's whole sound, on top of the game's own sound settings and Windows' volume. Its steps
   follow a curve so they sound about even: 50% is a quarter of the level (-12 dB). **Mute in background** silences the
   game while another window has the focus; an overlay such as Steam's or Discord's does not count as another window
@@ -683,8 +706,9 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
   Auto never applies the mono average. Saved `audio_output` values remain 0 Auto, 1 Stereo, 2 5.1; Mono is 3.
   For one run, `HOS_AUDIO_CHANNELS=2` or `6` chooses the channel layout over the menu (6 leaves Mono inactive).
 - **Microphone** is what the ocarina hears when the game's own microphone option is on (an instrument, or humming).
-  Default follows Windows' default recording device; the list shows each microphone by name, and a change applies at
-  once. A chosen microphone that is unplugged stays chosen (shown as not connected): Default stands in until it is
+  Default follows Windows' default recording device; the list shows up to 64 recording devices by name, and a change
+  applies at once. Physical and virtual inputs share that limit; devices after the first 64 reported by the audio backend
+  are not listed. A chosen microphone that is unplugged stays chosen (shown as not connected): Default stands in until it is
   back. On Linux (SDL2) two microphones with the same name cannot be told apart: the first is used. Windows must allow desktop apps to use the microphone
   (Settings, Privacy & security, Microphone). `HOS_MIC_LOG=1` logs what the game reads, a line a second.
 - **Game language** is the game's own text, `language.txt` in the game folder: the row writes it once you leave the row,
@@ -730,8 +754,9 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
   a button yourself sets it to Custom.
 - **Button prompts** (on the Controls page): the button icons in the game's texts, hints and menus. Auto shows the first
   controller's; with no controller connected, the keyboard's. Keyboard shows the key or mouse button your controls put each
-  action on (the first of its two), and WASD and the mouse for the sticks; the ocarina's notes and the pause menu's
-  controller keep the Switch's buttons.
+  action on (the first of its two), and your movement keys and the mouse for the sticks; the ocarina's notes and the pause
+  menu's controller keep the Switch's buttons. A prompt for several directions at once shows W A S D while those are the
+  movement keys, and the stick's own icon with other keys.
 - **Save my pipeline list** (Debug tab, under Developer): see [Send your pipeline list](#send-your-pipeline-list).
 - **Walk mode** and **Walk speed:** on the keyboard the movement keys push the stick all the way, so Link runs. While the
   Walk key is held (<kbd>Caps Lock</kbd> unless you change it on the Controls page), they tilt it only Walk speed of the
@@ -869,7 +894,6 @@ You need:
   - `tools\cpm`: the Vulkan headers and FFmpeg. Set `RX_CPM` to this folder. Without it (and without system
     Vulkan / SPIR-V / VMA headers or `LONGSHOT_*_HEADERS`), the standalone build stops instead of shipping a
     game with no renderer.
-  - `tools\wgpu-native`: set `WGPU_NATIVE` to this folder.
   - `tools\third_party`: the prebuilt files a clone lacks (`a64emit`, `lld-link`, `zbic` and SDL2). Copy its `.dll`,
     `.exe`, `.lib` and `.sha1` files to the same places under `third_party\`.
   - `tools\work`: copy it to `work\`. It holds the hot-function list, the link order, the profile and the icon;
@@ -1069,6 +1093,49 @@ never an older FSR in its place), and why not when it did not start. Tested on a
 </details>
 
 <details>
+<summary>Intel XeSS (optional, Windows, Intel's DLL not included)</summary>
+
+Every Windows build offers **Intel XeSS** and **Intel XeSS Native AA** in the Graphics tab's **Upscaler** row once Intel's
+`libxess.dll` is beside the game: XeSS Super Resolution, Intel's machine-learned temporal upscaler, through its Vulkan
+API, in place of the game's own, on the same inputs as DLSS and FSR 4 (the scene's colour and depth, the camera's and the
+characters' motion, and the camera jitter). Native AA draws the 3D at full size and smooths its edges. It runs on Intel
+Arc and Iris Xe GPUs, and on other GPUs whose Vulkan driver has what XeSS asks for (storage image writes without a format,
+`VK_EXT_mutable_descriptor_type`). With HDR on **Native**, it takes the game's HDR colour as linear light, with XeSS's own
+exposure (`RX_VK_XESS_HDR=0`: cut at the paper white, as with the other upscalers before).
+Choose it in the menu (`dlss=7` or `8` in `longshot_options.ini`, `RX_VK_XESS=1` or `2` for one run, `RX_VK_XESS=0` to
+leave it out: then the library is not even loaded). The Auto (this PC) preset never chooses it; it says in the log when
+the DLL is there.
+
+- **Intel's file:** Longshot includes only Intel's MIT-licensed XeSS API headers (`third_party/xess`). `libxess.dll` is
+  Intel's, under the Intel Simplified Software License, and Longshot does not ship it. Take it from the
+  `bin` folder of a recent [Intel XeSS SDK](https://github.com/intel/xess/releases) release (one whose `inc` folder has
+  `xess_vk.h`: the Vulkan path), or from a game that ships it, and put it beside the game's exe (`bin\longshot.exe`) or in the game folder.
+  (`RX_VK_XESS_DIR` names another folder, for testing: set it in the environment or a `HOS_ENV_FILE` file;
+  `longshot_env.txt` takes no paths.) Without it the Upscaler row does not offer XeSS and its hint says why.
+- **Or fetched for you:** RecompLauncher's **Intel XeSS** tick (Windows; off until you accept Intel's license, which it
+  shows), or `make_game.py --fetch-xess-runtime --accept-intel-license`, downloads `libxess.dll` 2.0.2.68 (78 MB, signed
+  by Intel) with Intel's license and third-party notices from Intel's XeSS SDK repository, at the commit
+  `third_party/xess`'s headers come from, checks each against its SHA-256, and puts them in the game folder
+  (`LONGSHOT_XESS_SDK=<folder>` keeps them between builds, default `work/xess-sdk`).
+  `python -I scripts/xess_sdk.py --accept-intel-license --game <game folder>` does the same for a game built already.
+  Without `--accept-intel-license` nothing is downloaded (the script asks when run by hand), as with AMD's and NVIDIA's
+  licenses. A `libxess.dll` already in the game folder that is not this one (a newer SDK's, put there by hand) is left
+  alone, and the build says so. It is Intel's, under the
+  [Intel Simplified Software License](https://github.com/intel/xess/blob/de0fb9c1c510661c571164e1418ceca8101dab69/LICENSE.txt)
+  (`LICENSE-INTEL-XESS-SDK.txt` beside it). On Linux the flag does nothing but say so.
+- **Windows only.** Intel makes no XeSS library for Linux, so a Linux build has no XeSS, and the row says so. XeSS Frame
+  Generation and Intel's latency reduction (XeLL) are Direct3D 12 only and are not in Longshot.
+
+The Render resolution row's stops run under the XeSS mode whose range holds them (since XeSS 1.3 each mode takes any size
+from its own ratio up to the output: Ultra Quality Plus 1.3x, Ultra Quality 1.5x, Quality 1.7x, Balanced 2x, Performance
+2.3x, Ultra Performance 3x), so the game's dynamic resolution at Auto runs under one mode too. The log's
+`vk: Intel XeSS:` lines say which DLL it loaded and its version, the extensions and features it asked of the Vulkan
+driver, the mode it was made with, and why not when it did not start. Not yet run in the game: reports from Intel GPUs
+are welcome.
+
+</details>
+
+<details>
 <summary>Switches for testing (longshot_env.txt)</summary>
 
 Switches to test (`RX_VK_NOOPT=1` and the others) go in `longshot_env.txt` in the game folder, one `NAME=VALUE` a
@@ -1151,9 +1218,11 @@ the build. If a build's preparation stopped ("the GPU driver stopped responding"
 `longshot_prepare_skipped` file in its `cache` folder and every start after that builds shaders only when first drawn.
 Build again with **Prepare shaders now** ticked, or delete that file, to prepare them with this fix.
 The Debug tab's **Intel shader compiles** row (Developer section, shown on Intel graphics on Windows) chooses: **One at
-a time**, the default and the safe choice on a CPU with 4 cores or fewer, or **Side by side**, faster builds on a CPU
-with many cores, but Intel's driver can crash the game while building them. It applies after a restart.
-`RX_VK_NO_INTEL_SERIAL=1` is Side by side for a run, whatever the row says. NVIDIA, AMD, and Intel on other systems are
+a time**, the safe choice on a CPU with 4 cores or fewer; **Side by side**, faster builds on a CPU with many cores, but
+Intel's driver can crash the game while building them; or **Auto**, the default: side by side on the Arc B-series with
+driver 101.9154 or newer (on a B580 a new area's first visit froze the picture for four to seven minutes one at a time,
+and not at all side by side, with no fault in ten areas), one at a time on every other Intel GPU. It applies after a
+restart. `RX_VK_NO_INTEL_SERIAL=1` is Side by side for a run and `=0` One at a time, whatever the row says. NVIDIA, AMD, and Intel on other systems are
 unchanged.
 
 `RX_VK_SKIP_CODE=<prefix,...>` leaves out the draws of every program with a stage whose native code key starts with one

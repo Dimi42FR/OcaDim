@@ -52,6 +52,7 @@
 
 #include "vk_paths.h"
 #include "vk_internal.h"
+#include "flat_map.h"
 #include "vk_jobs.h"
 #include "vk_draw.h"
 #include "vk_progcache.h"
@@ -211,16 +212,22 @@ Code parse_code(const uint8_t* ctl, const std::vector<uint8_t>& area) {
     using Shader::Ampere::Instruction;
     std::vector<Instruction> native;
     Shader::Ampere::ProgramCaptureState capture;
+    // (longshot) A word the capture reads as a branch that would leave every program (to before its start, between two
+    // instructions, or past the largest program, 16 MiB: program_address_map.h) is no instruction of this one. The
+    // capture's end rules are narrower than the lowering's (a loop left only by predicated EXITs, a library function that
+    // ends the shader), so it can read on past the program's end into what follows it there. The program ends before
+    // that word: the lowering, which takes a program only to its own end with every branch inside it (an indirect one's
+    // targets when it translates), says whether it does, and only if it does not is the program refused, naming the word
+    // as before.
+    uint32_t outside = ~0u;   // (that word's instruction number)
     for (uint32_t i = 0; hdr + (i + 1) * sizeof(Instruction) <= len; i++) {
         Instruction& insn = native.emplace_back();
         std::memcpy(&insn, area.data() + hdr + i * sizeof(Instruction), sizeof insn);
         const auto r = capture.Observe(insn, i);
         if (r == Shader::Ampere::ProgramCaptureState::Result::InvalidTarget) {
-            char why[96];
-            snprintf(why, sizeof why, "the branch at instruction %u (+%#x) goes outside the program", i,
-                     (unsigned)(i * sizeof(Instruction)));
-            c.why = why;
-            return c;
+            native.pop_back();
+            outside = i;
+            break;
         }
         if (r == Shader::Ampere::ProgramCaptureState::Result::Complete) break;
     }
@@ -324,10 +331,24 @@ Code parse_code(const uint8_t* ctl, const std::vector<uint8_t>& area) {
                 }
             }
         }
-        char why[160];
-        snprintf(why, sizeof why, "does not lower at +%#x: %s", lowered.error_offset, std::string(lowered.error).c_str());
+        char why[256];
+        if (outside != ~0u)   // (the code before the word the capture stopped at does not lower: refused for that word, as before)
+            snprintf(why, sizeof why, "the branch at instruction %u (+%#x) goes outside the program (%#x code bytes), and the "
+                     "code before it does not lower at +%#x: %s", outside, (unsigned)(outside * sizeof(Instruction)),
+                     len - hdr, lowered.error_offset, std::string(lowered.error).c_str());
+        else
+            snprintf(why, sizeof why, "does not lower at +%#x: %s", lowered.error_offset, std::string(lowered.error).c_str());
         c.why = why;
         return c;
+    }
+    if (outside != ~0u) {   // (longshot: each program once, up to 64: it ended before the word the capture stopped at)
+        static std::mutex mu;
+        static std::unordered_set<uint64_t> seen;
+        std::lock_guard lk(mu);
+        if (seen.size() < 64 && seen.insert(c.key).second)
+            logf("vk: NVN2 program %016llx (stage %u) ends at +%#x, before the word at +%#x that would branch outside it "
+                 "(%#x code bytes)", (unsigned long long)c.key, st, lowered.source_size,
+                 (unsigned)(outside * sizeof(Instruction)), len - hdr);
     }
     c.texture_bound = lowered.required_texture_buffer;
     c.code.assign(sizeof(Shader::ProgramHeader) / 8, 0);
@@ -623,6 +644,13 @@ Shader::Profile make_profile() {
     p.support_scaled_attributes = false;   // (*_UI2F / *_I2F read as integers, converted in the shader: R32 has no scaled format)
     p.support_multi_viewport = true;
     p.support_sampled_image_array_nonuniform_indexing = true;
+    // (storage images, image buffers and texture buffers picked by an index that can differ between invocations: NonUniform on the
+    // index and what it reaches, as for sampled images, where the GPU indexes that kind of array nonuniformly (Vulkan 1.2's
+    // descriptor indexing; vk_main.cpp creates the device with every feature it reports). Without the feature the index is taken
+    // as the same in every invocation, as before: there an index that differs is undefined. In the cache's stamp)
+    p.support_storage_image_array_nonuniform_indexing = dev.vk12.shaderStorageImageArrayNonUniformIndexing;
+    p.support_uniform_texel_buffer_array_nonuniform_indexing = dev.vk12.shaderUniformTexelBufferArrayNonUniformIndexing;
+    p.support_storage_texel_buffer_array_nonuniform_indexing = dev.vk12.shaderStorageTexelBufferArrayNonUniformIndexing;
     // Unpinned SPIR-V 1.6 stages can use any supported subgroup size, even when the default is 32.
     // The stage-specific profiles below keep the short path only where pin_subgroup actually pins 32 lanes.
     p.warp_size_potentially_larger_than_guest = dev.subgroup_max > 32;
@@ -1301,6 +1329,15 @@ uint64_t translator_stamp() {
     // without it, nor one made with RX_VK_NATIVE_FADD=0's loop wanted back once it is native again)
     const uint32_t float_add = profile().support_float32_atomic_add ? 1u : 0u;
     add(&float_add, sizeof float_add);
+    // (and which descriptor arrays the GPU indexes nonuniformly (make_profile): a program made with NonUniform on a storage image,
+    // image buffer or texture buffer array and that kind's capability is no use to a GPU without the feature, nor one made
+    // without them to a GPU that has it. Only when one is missing, so the GPUs that have all three keep one cache)
+    if (const uint32_t missing = (profile().support_storage_image_array_nonuniform_indexing ? 0u : 1u) |
+                                 (profile().support_uniform_texel_buffer_array_nonuniform_indexing ? 0u : 2u) |
+                                 (profile().support_storage_texel_buffer_array_nonuniform_indexing ? 0u : 4u)) {
+        const uint32_t no_nonuniform[] = {0x6e6e7561u, missing};   // ("nnua", and which)
+        add(no_nonuniform, sizeof no_nonuniform);
+    }
     // (RX_VK_GP_, not RX_VK_GP: that took RX_VK_GPL with it, which changes no translation, and switching the stage libraries on
     // threw the whole program cache away. What the libraries are good for is the prepare's second stamp, vk_draw.cpp warmed_stamp)
     // (and every other switch the translation reads: the storage buffer pass's (RX_VK_NO_CBUF_LOAD_RULE, RX_VK_PTR_SPLIT_FALLBACK,
@@ -1828,7 +1865,7 @@ struct Pick {
     std::vector<uint32_t> handles;   // (at its answers' descriptors: their slots and the slots' versions)
     uint64_t gen = 0;                // (moved with p and handles: a kept pick (ProgFast) sees whether they are still what it was kept at)
 };
-thread_local std::unordered_map<uint64_t, Pick> picks;   // (each recording thread's: program_pick has its own lock)
+thread_local FlatMap<uint64_t, Pick> picks;   // (each recording thread's: program_pick has its own lock)
 uint64_t pick_inputs(const NvnState& s, const uint8_t color_types[8]) {
     uint64_t h = 0x9E37;
     for (int i = 0; i < 16; i++) h = h * 1099511628211ull ^ (uint64_t)s.vattr[i];
@@ -2012,6 +2049,9 @@ const Program* program_for(const NvnState& s, ProgramKind kind, const uint8_t co
     if (!compute) std::memcpy(&ct_bits, color_types, 8);
     const uint64_t in_hash = compute ? 0x5EEDull : mesh ? (0x4E58ull * 1099511628211ull ^ ct_bits) : pick_inputs(s, color_types);
     const uint64_t key = (in_hash * 1099511628211ull ^ stages) * 1099511628211ull ^ ((uint64_t)kind << 56 | s.prog.serial);
+    // (held across program_pick below and written through after it, though an insert into the FlatMap picks would move it
+    // (flat_map.h): nothing in between inserts into this thread's picks. program_pick takes shader_mu, which is not recursive,
+    // so it cannot reach program_for again; a callback from it into the draw path would have to look pk up anew)
     Pick& pk = picks[key];
     auto keep = [&](const Program* p, const Pick* from) {
         if (!p || !p->ready.load(std::memory_order_acquire) || p->failed) return p;
@@ -2177,6 +2217,7 @@ size_t seed_open() {
         fclose(f);
     }
     if (seed.blob.empty()) return 0;
+    static const bool seed_check = env_on("RX_VK_SEED_CHECK");
     disk_init();
     disk_listing = true;
     size_t at = 16;
@@ -2205,7 +2246,9 @@ size_t seed_open() {
             continue;
         }
         st.key = code_key(seed.blob.data() + st.control, seed.blob.data() + st.code, st.end);
-        seed_keys.insert(st.key);
+        // (only for RX_VK_SEED_CHECK, whose miss_note reads it: a seed opened in play (prepare_background) filled it while the
+        // replay's misses read it, an unordered_set rehashed under a reader)
+        if (seed_check) seed_keys.insert(st.key);
         seed.index.emplace(st.key, (uint32_t)(&st - seed.stages.data()));
         std::memcpy(st.sph, seed.blob.data() + st.code, std::min<size_t>(sizeof st.sph, st.end));
     }

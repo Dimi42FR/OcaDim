@@ -57,7 +57,9 @@ Run everything with `python -I` from this folder.
 | `python -I nx2/test_leaf.py [--count 3000 --states 4] [--calls]` | random whole functions (or call trees), Unicorn vs recompiled native code on the real image |
 | `python -I nx2/lift.py --standalone --write` then `python -I nx2/build.py --standalone --jobs 4` | the standalone game: `work/sa/build/longshot.exe` + `longshot_vk.dll` |
 | `powershell -File scripts/run-vk.ps1 [-Window] [-Seconds 120] [-Name x]` | a muted test run on Vulkan, with screenshots in `work/runs/<name>/shots` |
+| `python -I scripts/memtour.py <game folder> --save <save folder> [--dests 13,1,2 \| all] [--dwell 40]` | a memory tour (Linux): the game folder started headless through the control bridge, the save loaded, a teleport through areas with a walk in each, and the game's resident + swapped memory, `MemAvailable` and swap sampled every 2 s: `mem.csv`, `marks.csv` and `summary.md` (peaks and each area's numbers) in a new folder. For "the game outgrows my RAM" reports, and for A/B runs of a change that should move it ([control.md](control.md)) |
 | `python -I scripts/prof.py <stacks file>` | a profile sampled with `HOS_PROFILE=<seconds>` + `HOS_SAMPLE=<thread>` + `HOS_SAMPLE_FILE=<stacks file>` (the sampler runs only with `HOS_PROFILE` set), named from the linker maps |
+| `python -I scripts/coverage/cover.py run <game folder> [--gen <lifted C folder>]` | which lifted functions a play session runs, and when each first ran (Windows; a DLL loaded into the built game marks each `f_` function once; Ctrl+Alt+M marks the title screen, being in play and later moments): `report` (their share of the lifted C and its compile cost, how many had run by each mark, a hot list's cover) and `compare` (one session's functions as a list, another session played against it) read the run folder on any OS. Results go to `%LOCALAPPDATA%\LongshotCover`: offsets, names and times, nothing from the game |
 | `python -I scripts/tested_configurations.py [--output work/tested-configurations.md]` | Read the [tested configurations](tested-configurations.md), combining new run files with the frozen table; UTF-8 stdout by default, or a local Markdown file that is not committed |
 
 The recorder's game-free regression is `python -I -B tests/test_recorder_sync.py --headers <Vulkan-Headers/include>`.
@@ -98,6 +100,78 @@ A log line is info unless it says otherwise: `hos_log` and the renderer's `logf`
 Launcher's build log shows info and above unless its level picker asks for more; a builder or launcher that doesn't read the tag
 shows the line with it. Per-item lines a player can't act on (one per program or pipeline, a decoder's details) are debug or
 trace; `HOS_TRACE`'s calls are trace. `tests/test_log_levels.py` checks the tags.
+
+### Stopping a windowless game
+
+`HOS_HEADLESS=1` draws offscreen. **Quitting is not saving:** neither the control command nor a normal window close
+asks the guest game to save, waits for its pending save writes, or proves that a save is complete. Save from the game
+first and wait for it to finish. Do not use a process exit or a `quitting:true` reply as a save receipt.
+
+On Windows, prefer the opt-in [control bridge](control.md). For a game started with `HOS_CONTROL=longshot-owned`,
+run `python -I scripts/longshot_ctl.py --sock longshot-owned quit`. The reply acknowledges the request, not the
+process's exit. The owner must wait for that particular process to end; a client timeout is not permission to report
+a successful stop or retry against another process.
+
+After the offscreen renderer has started, a windowless Windows game also installs a console handler and a hidden
+top-level window. The window is never shown or activated, receives no gameplay input, and is not the render surface.
+Installation is after renderer startup because creating/freeing its preparation console resets console handlers.
+During startup, use the control bridge; console/window stop support is not ready yet. Failure to start this
+best-effort helper leaves the game running and logs `stop: windowless stop route unavailable; use the control bridge`.
+
+| Route | What it does |
+|---|---|
+| Control `quit` | Flushes its reply, closes the bridge, runs the renderer close hooks and shared log tail, then calls `ExitProcess(0)`. It has no forced deadline and never honours a pending menu restart or claims a window closed. |
+| Ctrl+C or Ctrl+Break in the game's attached console | Requests close once on a separate host worker, with **no forced deadline**. Repeats do not repeat the work. It creates/attaches no console. The launching terminal, debugger and console input mode can affect delivery; a detached process may have no console. |
+| Close the console | Requests the same work and arms a **four-second deadline**. The handler waits only for the shared remaining time instead of returning immediately (which lets Windows terminate the process). Windows can end it sooner. |
+| `taskkill /PID <owned-game-pid>` without `/F` | The hidden top-level window handles a delivered `WM_CLOSE`, with **no forced deadline**. This is separate from console control events. Actual `taskkill` delivery still needs Windows testing; target the game PID, not the launcher, and inspect the game exit. |
+| Logoff/shutdown | The hidden window accepts `WM_QUERYENDSESSION`, but only confirmed `WM_ENDSESSION` requests a stop and arms a **four-second deadline**; a cancelled session end leaves the game running. Console logoff/shutdown events also arm that deadline if delivered. Windows may impose a shorter limit or terminate without delivery. |
+| `taskkill /F`, an external `TerminateProcess`, or other forced termination | Bypasses the close work. No save, cache or co-op leave guarantee. |
+
+The Windows-event worker first logs `stop: requested by ...`, calls `rx_close_asked`, then `hos_close_finish`.
+Those are the explicit close hooks also used by the ordinary window and control routes: they keep renderer caches,
+request that shader preparation stop, release frame-generation resources, and flush the host log. They do **not**
+drain arbitrary GPU jobs or guest saves. An older renderer without the close export cannot do that renderer work.
+The returning tail also marks a clean end for crash-record bookkeeping, after flushing the log, on the control,
+window/restart and completed windowless-event routes. The timeout route does not mark a clean end itself; until
+the common clean-end call is reached, the running marker remains for unclean-end recovery. This is not a save barrier.
+After these hooks and the log flush return, **only the Windows-event worker** ends with
+`TerminateProcess(GetCurrentProcess(), 0)`, skipping DLL detach. `ExitProcess` would terminate the watchdog before
+DLL detach, so a driver hanging in detach could not be bounded by that watchdog. Normal window/restart and control
+exits still use `ExitProcess` and do not acquire this detach guarantee.
+
+Windows sets no close deadline for `WM_CLOSE`, Ctrl+C or Ctrl+Break, and neither does this helper. The normal close
+can wait ten seconds for preparation and two more for frame-generation teardown, besides cache writes and other
+driver work with no combined bound. A four-second kill on those routes would cut short valid work. Observe their
+process exit; a client/observer timeout is not a reason to label the stop successful or to force it automatically.
+
+Only an **OS-ending event** (console close/logoff/shutdown or confirmed `WM_ENDSESSION`) starts the four-second
+budget, shorter than Windows' usual five-second console-close allowance. Such an event may follow an ordinary
+close already in progress: it arms the budget and wakes the monitor without asking for the close work again.
+Later events never extend it. If explicit close work is still running at the deadline, the monitor terminates this
+process with code **124**. A console handler returning first can instead produce **0xC000013A**
+(`STATUS_CONTROL_C_EXIT`). Both are incomplete stops and may interrupt cache writes. OS scheduling, a shorter
+system deadline, or external termination can preempt this work.
+
+Only `stop: close work done (the game's saves are not waited for)` **together with observed process exit 0** means
+the explicit close hooks returned before exit. It is not a completed-save receipt or proof every cache write
+succeeded. Exit 124, 0xC000013A, any other nonzero exit, a missing marker, or no exit is incomplete/unknown.
+The timeout path deliberately avoids logger locks: if logging is blocked or Windows kills the process first,
+there may be no final timeout line. A log alone cannot prove a clean process exit.
+
+Co-op is not on main. [Pull request 68](https://git.magicbean.dev/MagicBeanDev/Longshot/pulls/68) adds a bounded
+BYE/LEAVE and hosted relay/session stop. When integrating it, put its `coop_shutdown` call once in `hos_close_finish`
+before the marker and log flush, so all three routes reach it; do not leave it only in the window-exit wrapper.
+That preserves an attempt, not a delivery guarantee: the relay must actually log the leave. Pending reliable events
+are not drained. Windows delivery, co-op leave/hosted-relay shutdown and the OS-deadline path still need game tests.
+
+The Windows contract is documented by Microsoft: [console handler lifetime and timeouts](https://learn.microsoft.com/en-us/windows/console/handlerroutine),
+[the user32/logoff caveat](https://learn.microsoft.com/en-us/windows/console/setconsolectrlhandler), and
+[message-only windows](https://learn.microsoft.com/en-us/windows/win32/winmsg/window-features#message-only-windows).
+A message-only window would not suffice: it cannot be enumerated and does not receive broadcasts.
+
+On Linux, windowless SDL input disables its own SIGTERM/SIGINT-to-quit-event handlers. Those signals therefore end
+the process with the default signal action, **without** the control/window close hooks. Use control `quit` there too
+when those hooks are needed. SIGKILL always bypasses them.
 
 ## Switches for testing and debugging
 
@@ -172,12 +246,13 @@ meter read late is the white flashes the wait is there for. `RX_VK_LOG_READBACK_
 every 3,000 calls (calls, waits and their time, how many had the newest submission as their writer, how many were read
 late), which is how the ranges worth a rule are found on a PC.
 
-Native HDR PsychoV35 automatically enables the compatible RGBA16F scene path for DLSS/DLAA, AMD FSR 4 (and its Native AA), and FSR 3.1 on the shared chain.
+Native HDR PsychoV35 automatically enables the compatible RGBA16F scene path for DLSS/DLAA, AMD FSR 4 (and its Native AA), Intel XeSS (and its Native AA), and FSR 3.1 on the shared chain.
 `RX_VK_PSYCHOV35_DLSS=0` disables that route for troubleshooting; unset, empty or nonzero enables it. The value is read
 once per process, so restart after changing `longshot_env.txt`. The existing flag name is retained for existing
 configurations. The successful upscale supplies NVIDIA frame generation with depth, camera and actor
 motion as usual. It requires the engine's native-HDR context: DLSS's HDR feature (`RX_VK_DLSS_HDR=0` prevents this
-path), FSR 4's HDR context (`RX_VK_FSR4_HDR=0` prevents it), or FSR 3.1's already-HDR-capable passes. FSR 3.1 keeps
+path), FSR 4's HDR context (`RX_VK_FSR4_HDR=0` prevents it), XeSS's (`RX_VK_XESS_HDR=0` prevents it), or FSR 3.1's
+already-HDR-capable passes. FSR 3.1 keeps
 Vanilla's existing colour path; its linear HDR path is limited to Native PsychoV35. Its legacy own-input route
 (`RX_VK_FSR3_CHAIN=0`) is not enabled by this switch. Off and the TAAU replacement have independent format support.
 See [the format and history rules](temporal-history.md#psychov35-with-temporal-upscalers) for validation and shader regeneration.
@@ -223,7 +298,6 @@ format, tone mapper, encoding and luminance changes reset the corresponding hist
 | `RX_VK_DEVICE=<n>` | The graphics card listed as `vk: device <n>` in the log, over the menu's GPU device |
 | `HOS_TRACE=1` | Every Horizon call logged, as `--trace` does |
 | `HOS_CV_SIGNAL_ALWAYS` (set) | SignalConditionVariable takes its lock and wakes even when no thread waits, as before it returned at once for no waiter (`host/nn_os_sync.c`); a control for a hang or a movie stutter |
-| `RX_BACKEND=<name>` | Unset or `vulkan`: `longshot_vk.dll`; any other value: the WebGPU renderer, when the exe was built with one |
 | `HOS_GPU_ALLOC_RETRY=0` | A model's material-block allocations from a full heap (the OptimizeChangeBank thread's two CPU buffers and two GPU-memory calls in f_804566e0) not tried in the heap's parents, as shipped (`host/oot_heap_retry.c`, issue 1697) |
 | `HOS_GPU_ALLOC_TEST_FAIL=<n>` or `<gpu>,<cpu>` | A test: the first n of those allocations of each kind (or that many of the GPU memory and of the CPU buffers) refused by the heap they name, as a full heap would, so the retry runs |
 | `HOS_MEMINFO_OLD=1` | The used memory the game is told (`QueryMemoryInfo`, svc `GetInfo` 7 and 22) is the program and the system's share alone, as before. By default it adds the heap and the pages the game mapped through `AllocateMemoryPages`, at most the console's total (`hos_used_memory`, `host/hos_mem.c`): told less, the game kept mapping pages for its caches (7.9 GB in a long session). For A/B |
@@ -384,9 +458,10 @@ checks the decisions game-free, and on Linux runs the real helper against real p
 | Switch | What it does |
 |---|---|
 | `HOS_INPUT_SCRIPT=<presses>` | Presses timed from the game's first controller read |
-| `HOS_INPUT_LIVE=<file>` | A file the test appends lines of presses to, read every 30 ms; each line's times count from when it is read. A line `!cheat <n>` sends a Cheats page action, `!synclog` logs the NVN syncs (`!dump`, `!shots`, `!rdoc` and `!flasharm` are the WebGPU renderer's) |
+| `HOS_INPUT_LIVE=<file>` | A file the test appends lines of presses to, read every 30 ms; each line's times count from when it is read. A line `!cheat <n>` sends a Cheats page action, `!synclog` logs the NVN syncs (`!dump`, `!shots`, `!rdoc` and `!flasharm` were the WebGPU renderer's: the build has none, and they only log so) |
 | `HOS_INPUT_FRAME_CLOCK=1` | The script's time runs at 60 game frames a second instead of the wall clock |
-| `HOS_INPUT_EXCLUSIVE`, `HOS_INPUT_BACKGROUND`, `HOS_INPUT_SCRIPT_BACKGROUND` (set) | As above; the last lets every device count while the window is behind another one |
+| `HOS_INPUT_EXCLUSIVE`, `HOS_INPUT_BACKGROUND` (set) | As above |
+| `HOS_INPUT_SCRIPT_BACKGROUND` (set) | No longer needed, only said in the log: scripted and control-bridge presses count with the window behind another one anyway, and the player's keyboard and mouse never do (it used to let them through, so typing in another window reached a test run) |
 | `RX_VK_MENU_SCRIPT=<seconds>:<key>,...` | Timed Insert menu keys: `INS`, `UP`, `DOWN`, `LEFT`, `RIGHT`, `ESC`, `ENTER`, `TABL`, `TABR`, the pad's face buttons `PADS`, `PADE`, `PADW`, `PADN`; and for a text field, `TYPE:<text>` (typed as the keyboard would, up to the next comma) and, while it has the keyboard, `HOME`, `END`, `BACK`, `DEL` besides `LEFT`, `RIGHT`, `ENTER`, `ESC` |
 | `RX_VK_UI_PROMPTS=pad` or `keys` | The menu's button prompts for a controller or the keys, whatever was used last (screenshots) |
 | `RX_VK_UI_GAME_FONT=0` | The menu, the counter and the start-up screen in the included Libertinus, not the game's own font |
@@ -469,12 +544,13 @@ Pipeline-cache file ownership, temporary storage and failure behavior are descri
 | `RX_VK_MODULE_IDS=0` | Shader module identifiers off (`VK_EXT_shader_module_identifier`). With them a compute program's module is learned by its identifier when it is first made from its code (`longshot_module_ids.bin`, for one program cache and one driver), and in a later run the load at the program's create call makes that variant's pipeline from the caches without reading its code or making a module; where no cache has the pipeline the code is read as before |
 | `RX_VK_COMPILE_SHADERS=all` or `most` | What a preparation builds, over `compile_shaders` in `longshot_options.ini` (the game's `--compile-shaders` sets it): `all` the predicted pipelines too (`predict_run`), `most` without them. The log's `vk: Compile shaders:` line says which and why. Most also removes what an earlier preparation on All left (`longshot_pipelines.bin.predicting`, `.predicted`, `.predicted_keys`) |
 | `RX_VK_PRECOMPILE=0` or `1` | The shader preparation before the title off or on (on in builds made with `RX_RELEASE=1`, as the builders' are) |
+| `RX_VK_SEED_CHECK=1` | Keeps the shaders seed open after the start and marks each of the replay's program misses with the seed stages it holds (`miss_note`'s `+`), to check a seed against what play asks for. Development only: its key set is filled only then, and filling it in play races the marks' reads |
 | `RX_VK_MESH_SHADERS=native` or `compute` | How task and mesh programs run, read as the device is made (`gpu/vk/mesh_mode.h`; it was the Graphics tab's Mesh shaders row). Unset or any other value: Automatic, the GPU's own mesh shaders where it has them; the compute fallback where it has not, on Linux AMD (RADV, issue 2245), and for the task + mesh draws of the GPUs `RX_VK_TASK_MESH_FALLBACK`'s default names. `native`: the GPU's own for every draw (a GPU without them still gets the fallback). `compute`: the fallback on every GPU. `RX_VK_FORCE_MESH_FALLBACK=1` is `compute` over it. The log's `vk: mesh shaders:` line says which and where it came from. A change translates the programs again, as the program cache's stamp holds the GPU's mesh path (and every `RX_VK_MESH*` switch's text). The old `mesh_shaders=` line in `longshot_options.ini` is no longer read: the log names it, and the menu's next save drops it |
 | `RX_VK_TASK_MESH_FALLBACK=0` or `1` | Task + mesh draws through the compute fallback (1) or the driver's mesh shaders (0). By default the fallback is on for AMD's Navi 21 (RX 6800, 6800 XT, 6900 XT, 6950 XT, Radeon Pro W6800, W6900X, V620), Navi 22 (RX 6700, 6700 XT, 6750 XT, 6700M to 6850M XT) and Navi 23 (RX 6600, 6600 XT, 6650 XT, their mobile models, Radeon Pro W6600, W6600M) on Windows: each chip's every ID that pci-ids or amdgpu.ids name a card for, where the native path timed out the driver ([Hookshot #996](https://github.com/NotRexed/Hookshot/issues/996)). Navi 24 (RX 6300, 6400, 6500 XT, Radeon Pro W6300 to W6500M) is not on by default: no report yet; `RX_VK_TASK_MESH_FALLBACK=1` to try. The device IDs: `mesh_rule::task_mesh_fallback_default` in `gpu/vk/mesh_mode.h` |
 | `RX_VK_FALLBACK_LOADED=0` | Where mesh programs are drawn through the compute fallback: the start makes the compute pipelines only of the fallback programs it reads in for that, as before, and not of those read in earlier in the same start (the state lists' programs, in the start that prepares the shaders), whose first draws are then left out until their pipelines are compiled in play |
 | `RX_VK_FALLBACK_PHI_LIMIT=<n>` | RADV on GCN 1-4 cards (RX 400/500, R9 2xx/3xx/Fury): a mesh fallback compute stage with more than this many phis is not built and its draws are left out (default 50000; `0`: no limit; anything but decimal digits is ignored with a warning; the limit in use is logged). Its compiler did not finish the two biggest mesh programs (80,000 phis) and grew past 25 GB (`gpu/vk/fallback_size_policy.h`) |
 | `RX_VK_DRIVER_FAULTS=0` or `2` | 0: programs the driver's compiler faulted on are asked of it again. By default they are left out for the rest of the run and, through `longshot_driver_faults.txt` in the game folder's `cache`, on later runs with the same driver, and on AMD one program's builds go to the driver one at a time (issue 996). 2: one at a time on every driver |
-| `RX_VK_NO_INTEL_SERIAL=1` | On Windows, Intel's compiler (UHD and Arc) is entered by one thread, and a fault creating a shader or pipeline leaves that one out. This builds them side by side, as on every other GPU and on Intel elsewhere, for the run: the Debug tab's Intel shader compiles row shows it and is not changed (`longshot_options.ini` keeps the row's own, `intel_shader_compiles=`). The log says which |
+| `RX_VK_NO_INTEL_SERIAL=1` or `0` | On Windows, Intel's compiler (UHD and Arc) is entered by one thread, and a fault creating a shader or pipeline leaves that one out; on the Arc B-series from driver 101.9154 it is entered side by side by default (the row's Auto, `gpu/vk/intel_compiles.h`: a first visit to an area froze the picture for 4 to 7 minutes one at a time on a B580 and not at all side by side). 1 builds them side by side, as on every other GPU and on Intel elsewhere, 0 one at a time, for the run: the Debug tab's Intel shader compiles row shows it and is not changed (`longshot_options.ini` keeps the row's own, `intel_shader_compiles=`). The log says which |
 | `RX_VK_COMPUTE_QUICK_FIRST=0` | With Intel's compute pipelines built one at a time on Windows (Intel's own driver; not on Linux, where Mesa's ANV ignores the optimizer flag), a dispatch's pipeline is built first without the driver's optimizer (seconds where the optimizer took up to minutes on a UHD Graphics) and the optimized one is bound once it is built behind the others. This builds the optimized one only, as before, for the run: the Debug tab's Intel quick compute builds row shows it (`longshot_options.ini` keeps the row's own, `intel_quick_compute_builds=`) |
 | `HOS_VIDEO_NO_CATCHUP=1` | A movie does not skip pictures that are behind its sound. By default, pictures already decoded are skipped, and a decoder that keeps up decodes ahead to skip a late one (at most one picture's time in a frame). A decoder slower than the gap between pictures, timed over its recent pictures, shows the late one instead of decoding the next in order to drop it |
 | `HOS_VIDEO_ACQUIRE_TRIES=1` | The movie waits for a picture by 50 sleeps of 2 ms, as before. By default the wait is by the clock: about 100 ms for each picture, the first too, and none after a Stop or Flush with nothing submitted since |
@@ -489,6 +565,7 @@ Pipeline-cache file ownership, temporary storage and failure behavior are descri
 | `RX_VK_NATIVE_FADD=0` or `1` | The shaders' float adds to storage buffers: 1 the GPU's own atomic where it has `VK_EXT_shader_atomic_float`'s `shaderBufferFloat32AtomicAdd`, 0 a compare-exchange loop on every GPU, the extension not enabled. By default the GPU's own on NVIDIA's driver, on Intel's Windows driver from 101.9175 with the Meteor Lake and Arrow Lake iGPUs (PCI device 0x7Dxx), and from 101.9154 with the Arc B-series cards (Battlemage, 0xE2xx; the loop lost the device on entering Kokiri Forest on a B580): what it was tried on in the game. Changing it, or the first start after an update that changes it, empties the whole program cache and `mkw_vk_pipelines.bin` (the translator's stamp holds it): everything is translated and prepared again, one long start on an iGPU. Elsewhere (AMD, Mesa's Intel driver, Intel's other GPUs and older drivers on Windows) the loop until runs there show the native add works (the log's `vk: float atomic add on storage buffers:` line says which, and why). The loop gives up after 1024 attempts, and an add that gives up is lost |
 | `RX_VK_UB_WORD_HASH=0` | A/B test: use the old low-address-bit index for cached uniform words (default: mix upper address bits to reduce aligned-buffer collisions) |
 | `RX_VK_SPLIT_UBFLUSH=0` or `1` | A submission cut into parts (`RX_VK_CHUNK`): 1 each part writes the uniform updates recorded so far into game memory at its end, as before; 0 only the last part writes them all, as an unsplit submission does. Default 0 on Intel without VRAM mirrors, the iGPUs (white blocks and flashes in Kokiri Forest otherwise, https://github.com/NotRexed/Hookshot/issues/999), 1 elsewhere, Arc discrete included (mirrors on), where it was not measured |
+| `RX_VK_SPLIT_BEFORE_DRAW=0` or `1` | A submission cut into parts (`RX_VK_CHUNK`): 1 a part ends only right before a plain draw (one with a vertex stage), so no cut leaves a part beginning with a mesh draw or a dispatch; 0 it ends after its 120th draw or dispatch, whatever follows, as before. Default 1 on Intel: on an Arc B580 (Windows, driver 32.0.101.9154) a command buffer that begins with mesh draws drew the plain draws after them as exploded triangles (white shards in Kokiri Forest while moving, ~2% of the frames); 0 elsewhere, where it was not measured |
 | `RX_VK_MIRROR=0`, `RX_VK_MIRROR_MB=<MB>` | No VRAM mirrors of the game's memory pools (on for discrete cards); their budget (a quarter of the card, at most 2 GB under 15 GB and 3 GB from there, and at most 256 MB on cards of 4.5 GB or less: `gpu/vk/mirror_budget.h`; no menu row or Quality preset sets it) |
 | `RX_VK_MIRROR_SPARSE=0` | Whole VRAM mirrors, as before. By default they are sparse (`gpu/vk/sparse_mirror.h`): memory only for a mirror's 64 KB blocks that one of the game's pools is in, and blocks the game's pools have left given back. A block with none is reached in guest memory (the page table, and a binding until the next submission gives it memory); a binding whose blocks with none are all outside every game pool (a guessed size run past a pool's end) is served from the mirror. The log's `vk: sparse mirrors:` line counts them every 1200 submissions. Needs strict sparse residency for buffers: off on its own where the device lacks it, and the log says so (`vk: sparse VRAM mirrors (RX_VK_MIRROR_SPARSE): not on this device`). Off follows the on/off rule above (`0`, `false`, `off`, `no`) |
 | `RX_VK_SPARSE_WAIT=1` | Each bind of the sparse mirrors' blocks waited for on the CPU, as before. By default the binds signal a timeline semaphore that the submissions of recordings wait for on the GPU (`sparse_bind_infos`, `gpu/vk/vk_memory.cpp`); waited for on the CPU, an area change's longest frame was 1.2 s against 0.9 |
@@ -501,7 +578,9 @@ Pipeline-cache file ownership, temporary storage and failure behavior are descri
 | `RX_VK_REAPER=0` | The images the renderer lets go of (`texture_frame`'s dead ones, the render-target pool's trimmed ones) destroyed on the render thread, as before, not on a thread of their own (`gpu/vk/vk_vma.cpp` `destroy_image_later`): on NVIDIA's Windows driver a `vmaDestroyImage` is a kernel call of a millisecond and more, many in one present when the camera turns. The reaper frees nothing while the textures' compaction has a pass open. The log's `vk: images are destroyed on a thread of their own` says it is on |
 | `RX_VK_COMPACT=0`, `RX_VK_COMPACT_PCT=<50..90>`, `RX_VK_COMPACT_MB=<MB>` | VRAM compaction (on by default; `=0` turns it off): the textures that are not render targets in a pool of their own, moved out of sparsely used blocks a few a present so that the blocks go back to the driver, and the texture budget holding the driver's count at that share of what it allows (85) by letting go of the render targets drawn over since and of textures unused for ten seconds, with a reserve five points under it (80) where those unused for thirty seconds go (what the budget's size, the 90% rule and the driver's limit ask for on their own still goes from textures unused for a second, as with it off); the free space that starts a run (512; 192 while the count is over 90%) |
 | `RX_VK_EVICT_EXCESS=0` | The 90% rule and the driver's limit cut the texture cache to 7/8 of their budget again, as before; by default they let go of their excess and 64 MB more (`vram_compact::rule_target`), so a cache a few MB over the line does not lose an eighth of its textures |
-| `RX_VK_COMMIT_RESERVE_MB=<MB>` | Windows only: the commit the texture cache leaves free before Windows' commit limit (RAM plus the page file; default 2560, `0` turns the rule off). Every VRAM block counts against the process's commit, so below that much headroom (`GlobalMemoryStatusEx`'s `ullAvailPageFile`) the shortfall comes off the textures' budget and eviction and compaction give blocks back; the log says `vk: commit limit near:` at most every 600 frames while it is on. At the limit itself, `hos_commit` and the first-touch handler wait up to 5 s for commit (error 1455) before giving up |
+| `RX_VK_COMMIT_RESERVE_MB=<MB>` | The commit or memory-plus-swap headroom the texture cache leaves free (default 2560, `0` turns the rule off). On Windows (`GlobalMemoryStatusEx`'s `ullAvailPageFile`, and what the page files can still grow by: `RX_VK_COMMIT_GROWTH`), every VRAM block counts against the process's commit, so below that much headroom the shortfall comes off the textures' budget and eviction and compaction give blocks back (`vk: commit limit near:` at most every 600 frames); at the limit itself, `hos_commit` and the first-touch handler wait up to 5 s for commit (error 1455) before giving up. On Linux (`MemAvailable + SwapFree` in `/proc/meminfo` when swap is enabled, `gpu/vk/linux_pressure.h`), combines with `RX_VK_AVAIL_RESERVE_MB` below |
+| `RX_VK_COMMIT_GROWTH=0` | Windows only: the commit rule's headroom is what is left under the commit limit as it is now, as before. Unset, what the page files can still grow by counts as room too (each file up to its maximum, from `NtQuerySystemInformation`'s `SystemPageFileInformationEx`, and no further than its drive has free): a page file Windows manages grows as the commit nears the limit, so the limit of the moment is not where a commit fails. The log says `vk: commit: ... the page files can grow by ... MB more` at most every 3600 frames while that growth is what keeps the rule off or eases it |
+| `RX_VK_AVAIL_RESERVE_MB=<MB>`, `RX_VK_DROP_MODULES=0/1`, `RX_VK_KEEP_MODULES=1` | Linux only (`gpu/vk/linux_pressure.h`): the physical RAM (`MemAvailable` in `/proc/meminfo`, sampled every 30 presents) the renderer leaves free before `earlyoom` or direct reclaim acts (default 1536, `0` turns the `MemAvailable` check off). Below `RX_VK_AVAIL_RESERVE_MB` of `MemAvailable` or `RX_VK_COMMIT_RESERVE_MB` of `MemAvailable + SwapFree` (when `SwapTotal > 0`), `PressureHold` cuts the textures' budget on an integrated GPU from the texture total at entry (with a 512 MB floor) and steps it back up by 256 MB per sample once both reserves clear by 256 MB, drains the render-target pool, runs VRAM compaction at its pressed thresholds, frees idle staging arenas (at entry and after 5 s idle) and spare capture buffers (above 32 MB), gives back idle unmirrored guest-pool imports once per sample, no more over one episode of pressure than its deepest shortfall (`imports_give_back`, logged as `vk: memory pressure on Linux: N idle imports given back`), and checks `malloc_trim` every 600 presents while trims still return memory (`vk: memory pressure on Linux:` at most every 600 frames). After the start-up precompile finishes on Linux with `<= 20 GB` of RAM (16 GB handhelds and PCs) or under memory pressure, `pipeline_cache_play` also lets go of the `VkShaderModule` handles of ready programs whose pipelines were built in the precompile (`RX_VK_LOAD=start`, the default on GPUs without mesh shaders such as the Steam Deck; remade from `longshot_programs.bin` on a per-thread file handle if play builds a new pipeline state for one; 32-64 GB desktops keep them by default, `RX_VK_DROP_MODULES=1` drops them on any RAM size, and `RX_VK_KEEP_MODULES=1` or `RX_VK_DROP_MODULES=0` keeps all) and trims glibc's arenas |
 | `RX_VK_IMPORT_HIGH=<percent>`, `RX_VK_IMPORT_LOW=<percent>`, `RX_VK_IMPORT_CAP_MB=<MB>` | The valve that gives idle imports of the game's memory back to the driver (`imports_give_back`, `gpu/vk/vk_memory.cpp`): past HIGH percent (85) of the system heap's budget the imports bound least lately go, down to LOW percent (75); at a 12 GB budget and above the budget is capped at `RX_VK_IMPORT_CAP_MB` (4500; `0`: no cap; setting HIGH or LOW without it uses the full budget). On by default on Linux and on Windows NVIDIA; off by default on Windows AMD and Intel (device losses there, issues 17, 309 and 571), where `RX_VK_IMPORT_HIGH=85` turns it on and its pools wait `RX_VK_RETIRE_SECS` before they are freed. `RX_VK_IMPORT_HIGH=0`: off everywhere. HIGH and LOW also set the retired imports' valve's watermarks |
 | `RX_VK_RETIRE_SECS=<s>`, `RX_VK_RETIRE_MIN_SECS=<s>` | Windows AMD and Intel: how long a retired pool's import (and, with the valve above on there, an idle pool given back) is held after it leaves the page table before its memory is freed (30); under pressure past `RX_VK_IMPORT_HIGH` a retired pool waits `RX_VK_RETIRE_MIN_SECS` (2) instead. Not read elsewhere |
 | `RX_VK_IMAGE_PREALLOC=<blocks>` | Initial 128 MiB image blocks: by default 15% of the real device-local heap, from 2 to 24 blocks (9 on an 8 GiB card); `0` makes them only as needed. They belong to the sampled-texture pool, or the images' pool with `RX_VK_COMPACT=0`, never both. A failed initial allocation retries with no initial blocks. VMA keeps these blocks even when empty: compaction counts only space it can return, and the 97% squeeze waits while only kept texture blocks remain. This avoids charging an unused utility-image pool against the texture budget ([Hookshot issue 2690](https://github.com/NotRexed/Hookshot/issues/2690)); it does not lower the driver's actual memory count in a scene with few textures |
@@ -509,15 +588,20 @@ Pipeline-cache file ownership, temporary storage and failure behavior are descri
 | `RX_VK_REACTIVE=1`, `RX_VK_REACTIVE_SCALE=<0..64>`, `RX_VK_REACTIVE_MAX=<0..1>`, `RX_VK_REACTIVE_DEBUG=1` | A reactive mask for DLSS and FSR 3.1 only, not FSR 4 (`gpu/vk/vk_reactive.h`, off by default: not yet checked in the game): the scene's colour is copied before its blended draws that test depth without writing it (water, smoke, fire, glows), and where the scene differs from the copy at the upscale the upscaler leans on the current frame, so they smear and ghost less. The mask is the difference times the scale (1), at most the maximum (0.9); the debug switch shows it in the picture in magenta. The mask is the whole difference since the copy, so a blended draw after the last transparent run (a full-screen fade) is in it too. The log's `vk: reactive mask:` lines say whether one is made |
 | `RX_VK_NO_DRAWN_WRITEBACK=1` | Small mip-chained textures the GPU drew are not written into guest memory a few frames later (where that memory is still zero, or still their own last write-back), as before: the game's ground garbles after some minutes in one area (its copies of drawn terrain tiles are all zero) |
 | `RX_VK_NO_DRAWN_PAGE_MAP=1` | A texture in a virtual pool that the GPU writes before anything uploads it has no page map noted at that write, as before: once the game has finalized it, its next check takes all of its storage for remapped and uploads it whole from guest memory over what the GPU drew (the game's HUD button labels go blank after a zone change) |
+| `RX_VK_ASTC_CPU=1` or `0` | ASTC textures decoded on the CPU (as RGBA8), or by the GPU's decoder (and big ones re-encoded as BC3). Unset: on the CPU on Windows with the graphics built into AMD's Ryzen 7000 and 9000 desktop CPUs (2 CUs; not the APUs' larger iGPUs), where the GPU's decode of Kokiri Forest's terrain arrays ran so long in one submission that Windows reset the GPU; by the GPU elsewhere |
 | `RX_VK_SKIP_COMPRESSED_OVER_RT=1` | A compressed (ASTC, BC, ETC2/EAC) texture made over storage render targets used is not uploaded, as before: bosses and new enemies all blue the first time |
 | `RX_VK_NO_WRITEBACK` (set) | GPU writes to mirrored pools are not copied back to guest memory (an experiment, for A/B) |
 | `RX_VK_WRITTEN_EACH=1` | A storage buffer a program writes is noted at every descriptor build that binds it, as before: the texture note (`texture_gpu_wrote`), the write-back and hazard (`gpu_buffer_bind`, under the pools' lock) and the page stamp (`memory_stamp_gpu`, which also drops every thread's kept uniform copies). By default the same range again is left as it was while nothing those notes answer has moved: the same recording and no change to the map of GPU writes; the same submission, recording, place in the queue and pools, the mirror still synced; no generation kept by a reader and no capture since its stamp (`tests/test_written_once.py`). Off follows the on/off rule above |
 | `RX_VK_WB_DIFF=0` | Write-backs copy every byte again instead of only what changed against a VRAM shadow (the diff is on by default; v2.0.9 and v2.0.10 had it off, issue 1161) |
 | `RX_VK_LATE_FIX=0` | A capture whose pages a submission still on the GPU writes back (late pages) waits for that submission and copies them again, as before, instead of the GPU writing the write-backs' words into the capture (`shaders/late_fix.comp`; on by default, off under `RX_VK_PARALLEL` > 1) |
+| `RX_VK_MET_WAIT_CAPTURE=0` | On the submitting thread (the render thread off): a wait for an event the CPU signals (`nvnEventSignal`) that is met already when the replay reaches it goes on with its submit's capture whenever it is met, as before. By default such a wait stops there once when its signal came after the newest capture was begun, and goes on through the capture a stopped queue takes when it goes on: the game writes part of a frame's data between its submit and that signal, and without the capture the frame was drawn with that data as it was before (the lit scene and Link dark for a frame, issue 366). Nothing to do with the render thread, which takes its capture at the signal itself; off as well with `RX_VK_RESUME_CAPTURE=0` |
+| `RX_VK_HOLD_GPU_WAIT=0` | Queues stopped at a wait for longer than `RX_VK_HOLD_MS` are made to go past it whoever is waiting, as before. By default they are held on while a thread of the game's waits for the GPU to finish recorded work of its own queue (OoT's main thread once a frame, on the frame before's last fence) and for `RX_VK_HOLD_MS` after it: the signal they wait for is made after that wait, and made to go during a long GPU frame (a load's uploads, ~100 ms) they drew with what the game had not written yet (the lit scene and Link dark for a frame, issue 366). On the submitting thread; the log's `vk: stopped queues held past ...` lines count it |
+| `RX_VK_HOLD_GPU_MS=<ms>` | How long at most, since they stopped, queues are held on for a thread waiting for the GPU (1000; never under `RX_VK_HOLD_MS`) |
 | `RX_VK_SHADOW_FOLLOWS_SYNC=0` | The write-back shadow is filled from guest memory at the write-back, as before, instead of taking the same bytes as the mirror's sync (with it off the diff can write a capture's older words over the CPU's newer ones) |
 | `RX_VK_WB_OBSERVE=1` | Opt-in diagnostics for actual mirror/shadow differences in the write-back diff pass. Reports completed chunks and bytes covered by changed chunks every 600 submissions; does not change copy decisions. See [write-back observations](writeback-observations.md) for interpretation and tests |
 | `RX_VK_DLSS=0/1/2`, `RX_VK_DLSS_PRESET=<letter>`, `RX_VK_DLSS_LOG=1`, `RX_VK_REFLEX`, `RX_VK_REFLEX_LOG=1`, `RX_VK_REFLEX_SUBMIT_IDS=0`, `RX_VK_ANTILAG=0/1` | NVIDIA DLSS and Reflex, and AMD Anti-Lag 2, for one run (`=-` on Reflex or Anti-Lag 2: its extensions not even enabled): the readme's NVIDIA DLSS section. `RX_VK_DLSS_TRACE=<frames>` logs one frame's large draws every that many frames, `RX_VK_DLSS_DEBUG=motion` shows the motion vectors, `=alternate` the game's own upscale every other frame. `RX_VK_DLSS_HDR=0` keeps DLSS's LDR feature and clamped colour with Native HDR too, for comparisons. `RX_VK_REFLEX_SUBMIT_IDS=0` sends the queue submits without their game frame (`VkLatencySubmissionPresentIdNV`, `gpu/vk/vk_reflex.cpp`), for comparisons: with frame generation, Reflex's "to the GPU's end" timing then goes wrong by hundreds of ms. Actor motion (skinned models' own motion, drawn over the camera's for every temporal upscaler, `gpu/vk/vk_temporal.cpp`): `RX_VK_DLSS_ACTORS=0` turns it off, `RX_VK_DLSS_ACTOR_LIVE=1` copies each pose from the game's memory at the upscale as before rather than reading it at the draw (for an A/B), and `RX_VK_DLSS_ACTOR_REACH=<units a second>` (default 60, over at most 1/30 s: 2 units) is how far a copy of a model may move between two frames and still pair with itself by place |
 | `RX_VK_FSR4=0/1/2`, `RX_VK_FSR_DIR=<folder>`, `RX_VK_FSR4_HDR=0` | AMD FSR 4 for one run (0 never, 1 FSR 4, 2 its Native AA), and another folder for AMD's DLLs (not from `longshot_env.txt`): the readme's AMD FSR 4 section. `RX_VK_FSR4=1/2` and `RX_VK_DLSS=1/2` go over the Upscaler row, a saved FSR 3.1 too where the engine they ask for runs; `RX_VK_FSR=1` goes over them (one upscaler at a time). The DLSS trace and debug switches above (and `RX_VK_DLSS_JITTER=0`) apply to FSR 4 too, and to FSR 3.1 on the chain, on the frame chain they share. `RX_VK_FSR4_HDR=0`: with HDR on Native, FSR 4 keeps its LDR context and the colour clamped at the paper white, as before (by default it takes the game's HDR colour as linear light while the game presents PQ). `RX_VK_FSR4_TUNE=0`: AMD's passes as AMD made them; by default, on AMD GPUs, the network's layers run 64 lanes wide, the weight tables the layers and the postpass copy into per-thread arrays are read from a tail of the library's storage buffer, and the small layers with weight tables are unrolled, built one at a time in the background (`gpu/vk/fsr4_tune.h`, `vk_fsr4.cpp`); checked bit for bit against AMD's output on an RX 6700 XT with Adrenalin 26.10.1 (other drivers: the same maths, not necessarily the same bits). Where the library binds its buffer without the tail, or destroys it, AMD's own shaders are bound for that context and the log says so (`AMD's own shaders in place of the tuned ones`). `RX_VK_FSR4_UNROLL=0`: all of that but the unrolling |
+| `RX_VK_XESS=0/1/2`, `RX_VK_XESS_DIR=<folder>`, `RX_VK_XESS_HDR=0` | Intel XeSS Super Resolution for one run (0 never, and Intel's library not even loaded; 1 XeSS; 2 its Native AA), and another folder for Intel's `libxess.dll` (not from `longshot_env.txt`, which takes no paths): the readme's Intel XeSS section. Windows only (`gpu/vk/vk_xess.cpp`; Intel makes no XeSS library for Linux, and XeSS Frame Generation and XeLL are Direct3D 12 only). The DLL is looked for in `RX_VK_XESS_DIR`, beside the exe, then in the game folder, loaded at the instance's making (XeSS's instance and device extensions and features are asked of it before the instance and the device are made; one the driver lacks leaves XeSS out with the reason in the log and the Upscaler row's hint, never a failed start), and its functions taken by name: the import library is not linked and the DLL never shipped. `RX_VK_XESS=1/2` goes over the Upscaler row as `RX_VK_FSR4=1/2` does, after `RX_VK_DLSS` and `RX_VK_FSR4` (one upscaler at a time). The DLSS trace and debug switches above (and `RX_VK_DLSS_JITTER=0`) apply to XeSS too, on the frame chain they share. `RX_VK_XESS_HDR=0`: with HDR on Native, XeSS keeps its LDR context and the colour clamped at the paper white (by default it takes the game's HDR colour as linear light, with XeSS's own exposure, while the game presents PQ). The log's `vk: Intel XeSS:` lines say what it loaded, asked for and made |
 | `RX_VK_FSR3_CHAIN=0` | AMD FSR 3.1 upscales with inputs of its own (`vk_fsr3_inputs.cpp`: the camera's motion alone) instead of as an engine of `vk_temporal.cpp`'s chain (the skinned draws' own motion, as DLSS and FSR 4 get it), for comparisons. The log says `vk: fsr3 on the chain: N frames drawn` on the chain, `vk: fsr3 ... with assembled depth and camera motion` without |
 | Threaded rendering (the Insert menu's row, `threaded_rendering=` in `longshot_options.ini`) | The player's one setting for the two threads (`gpu/vk/threaded_rendering.h`): Off (2) is the replay on the game's submitting thread; On (1) is the render thread, exactly as `RX_VK_ASYNC=1` below, and the recorder thread, as `RX_VK_RECORDER=thread`, together; Auto (0, the default) picks On where the process may run on 12 or more logical processors (its affinity mask, `usable_cpus`, not the PC's count) and Off with fewer, and Off where the mode is not safe: `RX_VK_CAPTURE=0`, `RX_VK_LOW_SPEC`, `RX_VK_DUMP`, `RX_VK_BENCH`, or buffer pools with no mirrors (`RX_VK_MIRROR=0`, an integrated GPU, GCN). One constant, `threaded::kAutoEnabled` in that header, is the gate over Auto's rule: it is `true`, and turning it to `false` makes Auto Off on every PC again, with nothing else to change. Still open with it on: GPU-written tables over 16 KiB that the game reads back without waiting (Hyrule Field's culling tables) can be a frame old behind the game. Not yet in Auto's rule: a pool refused its mirror, or over the mirrors' budget, while the game runs (it needs a fall-back at run time, which is not written). The row is read once, at the start (`menu_threaded_rendering`, logged as `vk: Threaded rendering: ...`): a change applies at the next start. The switches stay over it, for testing: `RX_VK_ASYNC` set chooses the replay's thread and `RX_VK_RECORDER` set the recorder, each for its own half, whatever the row says; unset, the row decides. The host learns the replay's half from the renderer (`HOS_OPT_RENDER_THREAD`, `host/nvn_native.c`'s present poll), not from `RX_VK_ASYNC` |
 | `RX_VK_ASYNC=1` | The render thread (off by default; the Threaded rendering row's On turns it on too, with this unset; any value but `0` turns it on, and there is no `=2` any more: the older replay thread that `=1` used to mean, on which the game still waited for the replay at every frame, is removed): the replay on a thread of its own instead of the game's submitting thread, with the game let run one frame ahead of it, so a frame costs the larger of the game's work and the replay's instead of their sum. The game's present poll is answered at once and the present waits for room instead. It replays whole frames: the present is handed over after the main thread's signal for its frame, and the render thread starts a frame's jobs when that present has been handed over, so it never replays a frame the game is still writing (that drew the lit scene black for one frame at some of the moments it caught up with the game); what a game thread waits for (a queue finish, a texture read back, a fence of the frame in the making) goes on at once, and so does a job with no present behind it after `RX_VK_FRAME_GATE_MS` (1000); the log's `vk: the render thread's whole frames (600 presents)` line counts those (`RX_VK_FRAME_GATE=0`, a test: jobs replayed as they come, as before; `RX_VK_PRESENT_AFTER_SIGNAL=0`/`1`, a test: the present's part alone). Readbacks of small ranges (meters and counters, up to 16 KiB) wait for the write-backs recorded so far, not for the queue, as do larger ones: a read the game makes without waiting for the GPU gets the latest result that has landed, as on the console (`RX_VK_READBACK_EXACT=1`, a test: every range is read after everything handed over before the read is replayed; `=2`: only the ranges over 16 KiB; `RX_VK_LOG_READBACK_RANGES=2` logs the ranges, largest first, with how many frames old what each read got is); nothing but a present or `RX_VK_HOLD_MS` forces a stopped queue; occlusion queries stay on. GPU results the game reads without waiting for the GPU reach it up to a frame later than with the default; for the large GPU-written tables (over 16 KiB: Hyrule Field's culling tables) whether that is what the console gives is an open TODO, and this must not become the default until it is closed. The log's `vk: the render thread (600 presents ...)` line says what its jobs took and what the game waited for. `HOS_PRESENT_NOWAIT=0` with it: the poll as before (the game then waits for each frame's GPU work) |
@@ -528,6 +612,7 @@ Pipeline-cache file ownership, temporary storage and failure behavior are descri
 | `RX_VK_DESC_COUNTS=0` | A/B switch: a draw's descriptor build (`build_descriptors`, `gpu/vk/vk_draw.cpp`) counts the program's descriptors before every build, as before; by default the three counts are taken once and kept with the program (`Program::desc_counts`), once it is ready. The same writes and reserves either way |
 | `RX_VK_LAYOUT_EACH=1` | A/B switch: each program its own descriptor set layout and pipeline layout, as before; by default programs whose bindings (number, type, count and stages of each), push-descriptor flag and push constant range are the same share one pair (`layouts_for`, `gpu/vk/vk_draw.cpp`), kept for the device's life, so a draw of a program after another of the same bindings pushes only the descriptor writes that changed instead of all of them. With `RX_VK_PROF_FINE=1` the fine line's `full pushes` falls and `pushes of changed writes only` and `pushes of nothing` rise; the log says `vk: N programs have M pipeline layouts between them` at each power of two from 1,024 programs |
 | `RX_VK_NAN_GUARD=0` | No NaN guard on float colour outputs (on by default on every card: one NaN texel spreads through bloom into glowing blocks) |
+| `RX_VK_VB_RANGE=0` | A/B switch: a draw whose vertex streams changed binds all 16 bindings again, as before, instead of only the ones that differ from what the command buffer has (`vertex_bind_range`, `gpu/vk/vk_draw.cpp`) |
 | `RX_VK_FIFO=1`, `RX_VK_IMMEDIATE=1` | V-Sync On (FIFO) or Off (immediate) for one run, over the menu's V-Sync row |
 | `HOS_VCORES=0`, `HOS_CORES=<1..8>`, `HOS_RESERVE_CORE=0` | No virtual cores; the cores the game sees (6); no core kept for the replay (one is, with 8 or more logical processors) |
 | `RX_VK_ASTC_BC1=0` | Every ASTC texture kept as BC3, as before; by default a big ASTC texture whose blocks all decode opaque is kept as BC1 (half BC3's video memory), and one that later gets alpha is made BC3 again |
@@ -537,6 +622,7 @@ Pipeline-cache file ownership, temporary storage and failure behavior are descri
 | `RX_VK_IMPORT_FENCE=0` | No fence page while the driver is asked about an imported host pointer, as before; by default the page after the range ends the run of read-write pages the driver walks (not with the CPU write watches) |
 | `RX_VK_UNSWIZZLE_IMPORT=1` | A GPU unswizzle for one upload may import its pool, as before; by default only an already imported pool is used, and the CPU unswizzles the rest (several threads from 4 MB) |
 | `HOS_CV_SIGNAL_ALWAYS=1` | Every condition-variable signal takes the lock and wakes, as before; by default a signal with no waiter returns at once (`tests/test_cv_signal_early.py`) |
+| `HOS_NATIVE_ZSTD=1/2`, `HOS_NATIVE_ZSTD_FRAMES` (set) | The game's zstd decodes on the host's libzstd 1.5.7 (`host/hos_zstd.c`), both off by default: `HOS_NATIVE_ZSTD` the stream decode (ParallelDecompThread; 1 gives the virtual core up while it decodes, 2 keeps it), `HOS_NATIVE_ZSTD_FRAMES` the resource loaders' whole-buffer decode (the ARes_Loading threads). The log names each switch that is on, and each kind of decode that still runs lifted, once |
 
 ### Building
 
@@ -545,7 +631,7 @@ A build reads and writes tens of gigabytes. When the game folder or the build fi
 
 | Switch | What it does |
 |---|---|
-| `LONGSHOT_JOBS=<n>` (or `--jobs`) | Compilers at once (default one per CPU thread, each started when the free memory holds it; `LONGSHOT_MEM_GATE=0` turns that check off) |
+| `LONGSHOT_JOBS=<n>` (or `--jobs`) | Compilers at once (default one per CPU thread but one, so the PC stays usable, each started when the free memory holds it; `LONGSHOT_MEM_GATE=0` turns that check off) |
 | `LONGSHOT_LIFT_JOBS=<n>` | Processes that write the lifted C and make its edits (default the cores, at most 16, one per 2 GB free; on Windows, where they start as new processes, one per 0.75 GB free) |
 | `LONGSHOT_KEEP_BUILD_FILES=1` | Keeps the lifted C and the objects after a build, so that the next one compiles only what changed |
 | `LONGSHOT_PROMPT_JOBS=<n>` | Processes that draw the button prompts' faces (default one a face, at most the CPU threads and one per GB free) |
@@ -555,7 +641,7 @@ A build reads and writes tens of gigabytes. When the game folder or the build fi
 | `LONGSHOT_THIRD_PARTY_OBJECTS=0` or `=<dir>` | The third-party code's objects a release ships compiled (`nx2/third_party_objects.py`: Eden's shader recompiler, sirit, Dear ImGui, zstd, libopus, and on Windows suyu's code under the WebGPU renderer), which a build copies into its object cache instead of compiling them. Each is taken only by its object key, which holds its source, flags and headers and, for these objects, the compiler's version and what the system headers, the C++ library and the Vulkan, SPIR-V and VMA headers preprocess to: anything else (another compiler, a checkout's edit, a CPU below `x86-64-v3`) compiles as before. Default: the tools' own `third_party_objects/` (the AppImage's and the Windows zip's; a checkout has none). `0` turns it off; a folder uses that set (`python -I nx2/third_party_objects.py make <dir>` makes one with this PC's tools). A player's dry run says how many of them the set holds (`scripts/linux/check_player_build.sh` requires all) |
 | `LONGSHOT_FORCE_PROMPTS=1` | Regenerates button-prompt assets even when unchanged. Unset, empty, `0`, `false`, `off` and `no` (case-insensitive, surrounding spaces ignored) are off |
 | `LONGSHOT_MINGW=<dir>`, `LONGSHOT_MSVC=1` | The llvm-mingw to build with; the Visual Studio route instead |
-| `RX_CPM=<dir>`, `WGPU_NATIVE=<dir>` | The CPM cache (Vulkan and SPIR-V headers, VMA, FFmpeg) and wgpu-native |
+| `RX_CPM=<dir>` | The CPM cache (Vulkan and SPIR-V headers, VMA, FFmpeg) |
 | `RX_TARGET=windows` | On Linux: the Windows game, with llvm-mingw's Linux build in `LONGSHOT_MINGW` |
 | `RX_RELEASE=1` | A release build (`make_game.py` sets it): no console window, the shaders prepared before the title |
 | `RX_PGO=gen` or `RX_PGO=<file>` | The hot code counting its branches for a profile, or built with one (`make_game.py` passes the shipped profile) |
@@ -571,6 +657,15 @@ The Longshot Launcher's build settings set two of these for its build. **Build w
 memory and are not always faster. **Build memory**: Automatic keeps the free-memory policy; a number of GB sets
 `LONGSHOT_MEM_LIMIT_GB`, so the compilers may reserve that much together whatever is free now (the ones that always run,
 up to 4 on Windows, still run under a smaller number). The builders' `--cli` passes both on as it finds them.
+
+**What a build compiles again.** Each object is named by its source, its flags and the headers it depends on
+(`nx2/build.py` `object_key`), and kept in the object cache under that name. The Vulkan back end's own files (`gpu/vk`,
+not eden or sirit) are compiled with `-MD`, and the next build names each by the headers its depfile says it read
+(`renderer_deps`), so a renderer header edit compiles the files that include it. A file with no depfile yet (the first
+build, or one fetched from the object store, `LONGSHOT_OBJ_STORE` above) is named by every header under `gpu/vk`,
+`gpu/render` and `gpu/compat`, as before. Lifted files depend on every runtime header, and the host's on every
+`host/*.h`. `vk_menu.cpp` and `host/hos_main.c` carry the version, a fingerprint of every source, so any source change
+compiles those two again.
 
 Builds keep the button prompts when their source, fonts, game assets, button tables, image overrides,
 Python, package/library versions and generation options still match, and every generated file still has its recorded
@@ -638,6 +733,28 @@ The report keeps its per-program counts and adds `code` rows with the native sta
 recorded, including programs loaded from the cache. The four keys are vertex/mesh/compute, fragment, task and the
 header-only stage; zero means no key was available. Distinct tuples for the same program stay separate. These are
 recorded-query identities, not a complete draw replay or display timestamps. The queries can perturb frame timing.
+
+#### Links skipped, and the compile commands
+
+A link whose inputs and outputs are as the last successful one left them is not run again: the build says
+`(longshot.exe: what it reads and writes is as the last link left it, not linked again)`. Each link keeps a record beside its
+output, `<output>.linkkey` (`nx2/build.py` `run_link`), of what decides it:
+
+- the command, the compiler, the system headers' stamp, each object's key and the files the command names (resources, the
+  symbol order);
+- every file the linker itself says it read (asked with `-Wl,--verbose` for lld's MinGW driver, `-Xlinker /verbose` for
+  lld-link, `-Wl,--trace` on Linux), so a library it found by search path (`-l`, `-static-libstdc++`, the C runtime's
+  archives) counts too, and the linker program the compiler runs;
+- the outputs, the binary and its map, by size, time and file id: a map deleted, or a file copied over the binary, links
+  again.
+
+A link that failed, or whose linker gave no list, keeps no record, so the next build links. To link again by hand, delete
+the `.linkkey` file. Outside the checkout's own `work/`, the build's clean-up can let the build files go
+(`LONGSHOT_KEEP_BUILD_FILES=1` keeps them all), and a record gone just means the next build links.
+
+Each build also writes `sa/build/compile_commands.json`, every compile with its flags, for clangd and clang-tidy (point
+clangd at that folder, or link the file to the checkout's top, which `.gitignore` leaves out). The lifted C is left out (about
+1.4 GB, which clangd's background index would read); the host's commands still name the lifted headers' folders.
 
 #### The renderer's play profile
 
@@ -826,7 +943,11 @@ cd squashfs-root/usr/share/longshot
 `AppRun --cli` installs the build tools first, then runs `make_game.py`. To read the log:
 
 - **Build tools:** from the start to the `@@stage read` line.
-- **Read, lift, compile and finish:** the `where the time went:` table that ends the build.
+- **Read, lift, compile and finish:** the `where the time went:` table that ends the build. The finish has its parts
+  under it (copying the new files in, the shader list, the button prompts, the clean-up); `build_times.json` in the work
+  folder keeps them with each build. A file the last build copied into the game folder, still as it left it and with the
+  same bytes as the new one (the same exe linked again by an update with nothing changed), is not copied again: the
+  folder's `.longshot_installed.json` has each file's hash and stat.
 - **Shader preparation:** from `@@stage shaders` to `@@done`. Its `prepared <n> shader programs ... in <s> s` line
   gives the programs' share.
 
@@ -992,7 +1113,12 @@ Only `compile_shaders=`, the build's choice, stays in the game folder's file, wh
 case with `_` for spaces (`frame_generation=2`, `invert_camera_x=1`), except Output resolution, which is `output_res`.
 `gpu/vk/vk_menu.cpp` writes the whole file at every change (`save`), with `options_version=5`,
 `microphone_device=<name>` when a microphone is chosen by name, and the controls (`pad_<button>`, `key_<button>` and `toggle_<button>`:
-the README's [Controls](../README.md#controls)). A value outside a row's range is clamped when it is read. A text field
+the README's [Controls](../README.md#controls)). The microphone list retains up to 64 recording endpoints, shared by physical
+and virtual devices: `MAX_DEVICES` in `host/nn_audio_in.c` and `kMaxMics` in `gpu/vk/vk_menu.cpp` must agree. Off and Default
+are additional selector choices, not recording endpoints. Devices after the first 64 returned by the audio backend are
+omitted. `microphone_device` remains name-based; no options-format or renderer-ABI change is needed for the larger list.
+`tests/test_audio_in.py` covers high-index selection, the 64-endpoint boundary, reconnect under a new device ID and Default
+using fake SDL state; it does not establish real-device capture. A value outside a row's range is clamped when it is read. A text field
 (Custom output size: printable ASCII, with full-width digits and `ｘ` folded to ASCII) is saved as its setting is:
 Custom output size as `output_res`. A pad can edit it without a keyboard: D-pad Left/Right moves the caret, Up/Down
 cycles the character, the right shoulder inserts a digit and the left shoulder removes a character. The end caret
@@ -1020,9 +1146,12 @@ them does not renew a size change's declined restart prompt. Choosing a differen
 | `gpu_device` | 0 Auto, n the n-th card with Vulkan 1.3 as the row lists them |
 | `frame_generation` | 0 Off, 2 to 8 the multiplier |
 | `resolution` | 0 Auto, 1 100%, 2 75%, 3 67%, 4 50% |
+| `dlss` | The Upscaler row: 0 the game's own, 1 NVIDIA DLSS, 2 NVIDIA DLAA, 3 AMD FSR 3.1, 4 AMD FSR 4, 5 AMD FSR 4 Native AA, 6 Off, 7 Intel XeSS, 8 Intel XeSS Native AA (each added after the ones before, so a saved value keeps its meaning; one that cannot run on this PC is kept, and the game's own runs) |
 | `output_res` | A size, `<width>x<height>`: 2048x1152 (the game's own reduced size), one of the screen's display modes (the menu's Aspect ratio and Output resolution rows), or any other with each side a multiple of 8 (rounded down), at least 640x360, at most 5120x2880's pixels, 5:4 to 48:9; anything else is 2048x1152. No line: 2560x1440, the game's own picture, or the screen's size where that has fewer pixels, at the screen's shape (2560x1080 and 2256x1504 start at their own size, as 1280x800 and 1920x1200 did before). The menu marks 2048x1152 "(reduced)". A size more than 1 % off 16:9 sets the picture's shape (`host/hos_wide_size.h` `hos_output_own_shape`). The Aspect ratio row saves `ultrawide=` 1 for the monitor's own shape, else 0; another shape is `output_res`'s own. The numbers saved before (0 2048x1152, 1 2560x1440, 2 3840x2160, 3 1920x1080, 4 5120x1440, 5 5120x2880) are still read |
 | `upscaling` | 0 Off, 1 Catmull-Rom, 2 Lanczos |
 | `compile_shaders` | No menu row: the Builder's, `make_game.py --compile-shaders`'s and the launcher's Compile shaders, read by a preparation (`vk_draw.cpp` `compile_all`). 0 Most (the default), 1 All (the predicted pipelines too). A file with only this line still makes the game's first start a first start |
+| `crt_filter` | 0 Off (default), 1 Lottes aperture grille, 2 Lottes consumer TV, 3 Hyllian Fast, 4 zfast CRT |
+| `crt_lines` | 0 240 virtual lines (default), 1 480, 2 720; capped at half the destination height, at least one line |
 | `sharpness`, `rumble_strength`, `motion_sensitivity_x`, `motion_sensitivity_y`, `walk_speed` | percent |
 | `mouse_sensitivity` | hundredths: 100 is 1.00 |
 | `field_of_view` | 50 to 150 percent of the current vertical gameplay FOV; 100 is the original. Applies immediately, before projection and culling. The resulting vertical angle stays within 5 to 140 degrees |
@@ -1058,7 +1187,35 @@ See [control.md](control.md) for the fields, sampling, bounds and examples.
 `HOS_CONTROL_PEER_SID=<SID>` (Windows) also lets one other local user account open the bridge's pipe: the Test Farm
 agent sets it when it runs the game as its low-rights user. Only a local user account's SID is taken (`S-1-5-21-...`, a
 RID of 1000 or more); a group such as Everyone or Users is refused and logged. Unset, the pipe is the game's user's
-alone. See [control.md](control.md#security).
+alone. Set it in the environment: `longshot_env.txt` leaves it out. See [control.md](control.md#security).
+
+### CRT output stage
+
+The Graphics tab's **CRT filter** and **CRT lines** rows follow Window scaling filter. Both are live, preset-exempt
+options in `gpu/vk/vk_menu.h`; the usual row-name key generation, read-time clamp and save path handle `crt_filter`
+and `crt_lines`. Neither needs an environment switch, host/renderer API field or restart. Missing keys keep Off/240.
+
+The CRT stage takes the finished SDR picture after window scaling, sharpness and ultrawide-side treatment, on each
+displayed frame after frame generation. It downsamples to a virtual raster, then applies the selected CRT shader at
+the destination size. The game's HUD is already in that picture; Longshot's menu, FPS counter and other overlays
+are drawn afterwards. Keep the mask out of temporal upscalers and frame-generation history.
+
+When the checked source rectangle is larger than the destination in either dimension, the window downscale runs
+even with Window scaling filter Off and Sharpness 0. CRT reads that destination-size result, not the original
+larger image. Returning CRT to Off keeps this downscale. Native HDR still uses the 10-bit scaling pass and skips CRT.
+
+The requested virtual height is 240, 480 or 720, capped at `max(1, destination_height / 2)` using integer division;
+the virtual width follows the destination aspect. This does not change Render resolution, force 4:3, or introduce
+integer scaling. Destination-pixel masks and non-integer raster scaling can show moire; the cap limits scanline
+undersampling but does not make every output size regular. Lottes' flat aperture-grille setting is a PVM-style look,
+not calibration to a particular Sony model; its consumer-TV setting uses curvature and the TV shadow mask.
+Hyllian Fast and zfast CRT are the small upstream algorithms, not their larger multipass relatives.
+
+These filters expect SDR. Expanded HDR runs after CRT through the existing HDR expansion. An actual Native HDR PQ
+picture bypasses CRT without changing the saved selection; it must never be processed as sRGB. Native-HDR CRT
+presets, composite/NTSC simulation, phosphor persistence, bezels and arbitrary downloaded presets are not supported.
+Off allocates no CRT GPU resources and records no CRT dispatches. New menu text uses the existing English fallback
+where no translation is available.
 
 ## Layout
 
@@ -1068,11 +1225,11 @@ alone. See [control.md](control.md#security).
 | `nx2/` | the lift pipeline and its tests (mkw-recomp's, made game-neutral; `kit.py` has the paths), and `make_game.py`, which the launcher and the builders run |
 | `host/` | the standalone Horizon runtime (TOTKPort's `hos/` as adapted by mkw-recomp), with the native NVN2 layer `nvn_native.c`; `host/posix` has the Win32 calls on Linux |
 | `gpu/vk/` | the Vulkan back end (`longshot_vk.dll`, `longshot_vk.so`), with Eden's shader recompiler and sirit |
-| `gpu/render/`, `gpu/third_party/` | the WebGPU renderer the Windows exe falls back to when it was built with wgpu-native, its op stream (`rx_nvn.h`), suyu's decoders |
+| `gpu/render/`, `gpu/third_party/` | the op stream the host records and the Vulkan back end replays (`rx_nvn.h`, `nvn_api.h`), and suyu's texture decoders; what is left of TOTKPort's WebGPU renderer, which is built no more (suyu's WGSL recompiler stays in `gpu/third_party/suyu`, uncompiled) |
 | `builder/` | Longshot Builder, command-line only (players use the Longshot Launcher): the Windows `--cli` program (.NET 8), its setup (also a game folder's `longshot.exe`), and the Linux AppImage's `AppRun`, tools and game folder scripts |
 | `scripts/` | test runs, the profile and log readers, the save copier (`longshot_saves.py`), release tooling, `scripts/linux` (dependencies, AppImage) |
 | `tests/` | the game-free checks, all run by `tests/run_all.py` |
-| `third_party/` | a64-kit (with Hookshot's changes, marked `(hookshot)`, and Longshot's, `(longshot)`: its PROVENANCE.md), libopus, zbic (Atmosphere's zstd with ZBIC, for unpacking only), SDL2's licence, Dear ImGui and its Vulkan backend, zstd's decoder, the Libertinus fonts |
+| `third_party/` | a64-kit (with Hookshot's changes, marked `(hookshot)`, and Longshot's, `(longshot)`: its PROVENANCE.md), libopus, zbic (Atmosphere's zstd with ZBIC, for unpacking only), SDL2's licence, Dear ImGui and its Vulkan backend, zstd's decoder, the Libertinus fonts, Intel's XeSS API headers (`third_party/xess`, MIT; never its DLL) |
 
 License: GPL-3.0-or-later, as mkw-recomp: a64-kit's translator is suyu's (GPL-2.0-or-later) and Eden's code is
 GPL-3.0.

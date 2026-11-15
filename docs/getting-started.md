@@ -8,6 +8,9 @@ Longshot is built on your PC, from your own copy of the game, by the Longshot La
 Your copy of the game must be the supported version, and your PC needs a Vulkan 1.3 graphics card with 4 GB of video
 memory (8 GB and mesh shaders recommended), 16 GB of memory and about 60 GB free while building. See [what you need](../README.md#what-you-need).
 
+The launcher checks your selected game files before the build. If it reports a different game build,
+compare its message with the supported identifiers in the requirements above.
+
 ## 2. Download the launcher
 
 - [Download for Windows](https://longshot.magicbean.dev/download/launcher/windows)

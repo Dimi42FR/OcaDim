@@ -49,7 +49,8 @@ it. The default waits until the bridge answers, then prints the socket's path. S
     RID of 1000 or more, an account this PC can look up, and a user, not a group. Everyone, Authenticated Users,
     Users, Administrators and other well-known SIDs (an SDDL alias like `WD` too) are refused. A refused value is
     logged (`control: HOS_CONTROL_PEER_SID refused: ...`), and the pipe stays the current user's alone. Unset, nothing
-    changes.
+    changes. It is taken from the environment only: `longshot_env.txt`, a file players pass around, can't set it (the
+    line is left out and logged), so a shared file can't let another user of the PC into the pipe.
 
   Linux has neither addition: a sandbox there (the farm's bwrap) runs the game as the same user, which
   `SO_PEERCRED` already lets in. `FILE_FLAG_FIRST_PIPE_INSTANCE` keeps another process from owning the name first.
@@ -403,8 +404,12 @@ With `"wait": false` the reply is at once, with `"sent": null`. The game logs it
 < {"id":14,"ok":true,"frame":7310,"age":"adult","sent":true,"map":"KokiriForest_Adult","accepted":true}
 ```
 
-**quit**: the reply, then the game exits as when its window is closed (the log flushed, exit code 0). The socket is
-removed.
+**quit**: the reply acknowledges the request, then the bridge closes, runs the renderer close hooks and shared
+close/log tail, and calls `ExitProcess(0)`. It does not restart even if the menu had asked for a restart, and does
+not claim a window closed. The Unix socket is removed. There is no forced deadline or DLL-detach bound on this
+route. It does not request a guest save or wait for pending save writes. Observe the game process's exit separately;
+the reply is not a save or exit receipt. See [Stopping a windowless game](development.md#stopping-a-windowless-game)
+for Windows console/window routes, their different deadlines, and how incomplete shutdown differs from normal close.
 
 ## Saves
 

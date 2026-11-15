@@ -11,7 +11,8 @@
     python -I scripts/test_requests.py done T-7KQ2 --result pass|fail|mixed --comment <URL of your comment on the PR>
     python -I scripts/test_requests.py cancel T-7KQ2
 
-It uses the sign-in of scripts/team_chat.py (run `team_chat.py login` once). Every message is one line that starts
+It uses the team chat's sign-in, MagicBeanDev/Tooling's team_chat.py (cloned beside this checkout, scripts/tooling.py;
+run `python -I ../Tooling/scripts/forge.py login` once). Every message is one line that starts
 with the request's ID and the action, so people can read it and type it by hand in Element:
 
     🧪 T-7KQ2 request: Keep 8 GB cards inside their memory budget
@@ -54,7 +55,10 @@ import urllib.request
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import magicbean_login  # noqa: E402  (same folder; python -I does not add it to the path)
+import tooling  # noqa: E402  (same folder; python -I does not add it to the path)
+
+tooling.scripts()   # (the sign-in and the team chat are MagicBeanDev/Tooling's, cloned beside this checkout)
+import magicbean_login  # noqa: E402
 import team_chat  # noqa: E402
 
 ROOM = "#test-requests:magicbean.dev"
@@ -171,26 +175,57 @@ def forge_get(path, token=None):
         return json.loads(r.read().decode("utf-8"))
 
 
+# How long an author's permission on Longshot is kept (forge_permissions.json in the sign-in's folder): it changes
+# rarely, and asking it for every PR on every list was most of this script's calls to git.magicbean.dev
+PERMISSION_TTL = 3600
+_permissions = {}
+
+
+def author_permission(author, token):
+    """The author's permission on Longshot ("write", "admin", ...), kept PERMISSION_TTL seconds, or None when
+    git.magicbean.dev can't be asked."""
+    path = os.path.join(magicbean_login.config_dir(), "forge_permissions.json")
+    if not _permissions:
+        try:
+            with open(path, encoding="utf-8") as f:
+                _permissions.update(json.load(f))
+        except (OSError, ValueError):
+            pass
+    kept = _permissions.get(author)
+    if kept and time.time() - kept[1] < PERMISSION_TTL:
+        return kept[0]
+    try:
+        perm = forge_get("/collaborators/%s/permission" % urllib.parse.quote(author), token).get("permission")
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    _permissions[author] = [perm, time.time()]
+    try:
+        magicbean_login.write_private(path, _permissions)
+    except OSError:   # (a folder that can't be written, a sandbox: kept for this run only)
+        pass
+    return perm
+
+
 def pr_info(number):
     """The PR's state (open, draft, merged, closed), its labels and whether its author may push to Longshot, from
-    git.magicbean.dev (the author check needs the team sign-in; without it only the label counts)."""
+    git.magicbean.dev (the author check needs the team sign-in; without it only the label counts). Asked as an issue:
+    the same fields, without Forgejo loading the PR's branches as /pulls/N does."""
     try:
-        pr = forge_get("/pulls/%d" % number)
+        pr = forge_get("/issues/%d" % number)
     except urllib.error.HTTPError as error:
         raise team_chat.ChatError("git.magicbean.dev answered %d for PR #%d" % (error.code, number)) from None
     except (urllib.error.URLError, OSError, ValueError) as error:
         raise team_chat.ChatError("cannot reach git.magicbean.dev to check PR #%d: %s" % (number, error)) from None
-    state = "merged" if pr.get("merged") else "closed" if pr.get("state") == "closed" \
-        else "draft" if pr.get("draft") else "open"
+    meta = pr.get("pull_request")
+    if not meta:
+        raise team_chat.ChatError("#%d on git.magicbean.dev is an issue, not a pull request" % number)
+    state = "merged" if meta.get("merged") else "closed" if pr.get("state") == "closed" \
+        else "draft" if meta.get("draft") else "open"
     author = (pr.get("user") or {}).get("login")
     writer = False
     signed_in = magicbean_login.forge_session()
     if author and signed_in:
-        try:
-            perm = forge_get("/collaborators/%s/permission" % urllib.parse.quote(author), signed_in["access_token"])
-            writer = perm.get("permission") in WRITERS
-        except (urllib.error.URLError, OSError, ValueError):
-            pass
+        writer = author_permission(author, signed_in["access_token"]) in WRITERS
     return {"state": state, "labels": [label.get("name") for label in pr.get("labels") or []], "author": author,
             "writer": writer}
 

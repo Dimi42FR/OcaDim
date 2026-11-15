@@ -556,5 +556,28 @@ class Running(unittest.TestCase):
         self.assertNotIn("${{ github.event.pull_request.title", wf)   # (nothing the PR's author writes reaches the shell)
 
 
+
+class TitleAndGamePaths(unittest.TestCase):
+    """TITLE, the Conventional Commit the CI workflow's title job and Tooling's forge.py check; GAME_PATHS, the files
+    the game runs, for which forge.py pr create wants a run in the game"""
+
+    def test_title(self):
+        for good in ("fix(vk): walls", "feat(builder)!: x", "docs: y", "ci(forge.py): z"):
+            self.assertTrue(check.TITLE.match(good), good)
+        for bad in ("Fix walls", "fix walls", "fix:walls", "wip: x", "WIP: fix: x"):
+            self.assertFalse(check.TITLE.match(bad), bad)
+        self.assertTrue(check.TITLE.match(check.strip_wip("WIP: fix: x")))
+
+    def test_game_paths(self):
+        self.assertTrue(all(p.endswith("/") for p in check.GAME_PATHS))
+        for path in ("gpu/vk/vk_draw.cpp", "host/hos.c", "nx2/lift.py"):
+            self.assertTrue(path.startswith(check.GAME_PATHS), path)
+        for path in ("docs/development.md", "scripts/release.py", "tests/run_all.py", "website/src/x.ts"):
+            self.assertFalse(path.startswith(check.GAME_PATHS), path)
+        ci = (ROOT / ".forgejo" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        self.assertIn('spec_from_file_location("check", "scripts/check_pr_description.py")', ci)   # (the title job)
+        self.assertNotIn('"scripts/forge.py"', ci)   # (forge.py is Tooling's: the sparse checkout has only a forwarder)
+
+
 if __name__ == "__main__":
     unittest.main()

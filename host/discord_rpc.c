@@ -6,7 +6,7 @@
    of its own (discord.com/developers/applications, named OcaDim, its art uploaded under Rich Presence > Art Assets with the key
    below). Its Application ID goes into LONGSHOT_DISCORD_APP_ID_DEFAULT; longshot_options.ini's discord_app_id= or
    HOS_DISCORD_APP_ID override it. With no id the thread stays idle and says so once in the log: Longshot's application id
-   made Discord say "Playing Longshot", which is not this build's name. */
+   made Discord say "Playing Longshot", which is not this build's name.
 
    One host thread owns the connection. It connects to the first of Discord's discord-ipc-0..9 that completes a handshake and
    writes the activity again every 60 s: that write is the keep-alive, and one that fails closes the connection and tries again
