@@ -76,9 +76,10 @@ class PrepareTests(unittest.TestCase):
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             make_game.say("error", "The compile stopped.")
-            make_game.say("check", "ok", "This is the version Longshot supports (build e0f3ccfa).")
+            make_game.say("check", "ok", "This is the version Longshot supports (program 0400486024DEC000, build e0f3ccfa).")
         self.assertEqual(out.getvalue().splitlines(),
-                         ["error The compile stopped.", "check ok This is the version Longshot supports (build e0f3ccfa)."])
+                         ["error The compile stopped.",
+                          "check ok This is the version Longshot supports (program 0400486024DEC000, build e0f3ccfa)."])
         self.assertEqual(err.getvalue(), "")
 
     def test_progress_lines(self):

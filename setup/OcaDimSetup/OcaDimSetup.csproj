@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- OcaDim's setup: the wizard that takes the player's own .nup, fetches the build tools tools.lock names, and has the
+       machine compile the game (nx2/make_game.py's prepare mode), then installs and plays it. No game data in the parcel.
+       A folder, not one compressed exe: antivirus programs took the single file for a trojan (builder/LongshotBuilder's
+       csproj says the same). docs/SETUP-OCADIM-DESIGN.md -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>OcaDimSetup</AssemblyName>
+    <RootNamespace>OcaDimSetup</RootNamespace>
+    <ApplicationIcon>..\..\assets\branding\ocadim.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Product>OcaDim Setup</Product>
+    <Version>0.0.1</Version>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <!-- dotnet publish -c Release: a folder with the app and .NET's own signed files (SelfContained), no single file -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>false</PublishSingleFile>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+
+  <!-- The emblem the welcome page draws (assets/branding/longshot.png, the OcaDim shield) -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\assets\branding\longshot.png" LogicalName="OcaDimSetup.longshot.png" />
+  </ItemGroup>
+
+</Project>

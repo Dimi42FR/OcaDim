@@ -38,6 +38,7 @@ import queue
 import re
 import shutil
 import stat
+import struct
 import subprocess
 import threading
 import time
@@ -48,6 +49,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 PY = [sys.executable, "-I", "-u", "-X", "utf8"]   # (utf8: every step's output in UTF-8 whatever the console's code page: lift.py crashed on a letter, #180)   # (-u: the steps' output as it comes, not in 8 KB blocks minutes apart)
 BUILD_ID = "e0f3ccfa"   # (the version the patches, the hot list and the profile were made from)
+PROGRAM_ID = "0400486024DEC000"   # (the title itself: main.npdm's ACID names it, nx2/dump.py reads the same field)
 STARTED = time.time()   # (the build's total time, kept in build_times.json and said as @@times)
 sys.path[:0] = [HERE, os.path.join(ROOT, "third_party", "a64-kit", "tools")]   # (python -I leaves the script folder off)
 import toolchain as _toolchain
@@ -429,6 +431,21 @@ def build_id(main):
     return head[0x40:0x60].hex()
 
 
+def program_id(exefs):
+    """The title main.npdm's ACID names (nx2/dump.py reads the same field), or None when the dump has no readable one"""
+    try:
+        with open(os.path.join(exefs, "main.npdm"), "rb") as f:
+            b = f.read()
+    except OSError:
+        return None
+    if len(b) < 0x78:
+        return None
+    aoff, asz = struct.unpack_from("<II", b, 0x70)
+    if b[aoff:aoff + 4] != b"ACI0" or asz < 0x18:
+        return None
+    return struct.unpack_from("<Q", b, aoff + 0x10)[0]
+
+
 def check_modules(exefs):
     """Every module of the exefs is one the tools can read: said here, not as a Python error from the translator"""
     for name in os.listdir(exefs):
@@ -580,20 +597,44 @@ def check_cache_paths(out, paths):
 
 
 def check(a, work):
+    """What the player chose, read before anything is built: the program (the title) and the build (the version), said
+    on stdout as "check ok"/"check bad" lines, for a launcher or the OcaDim setup. 0 only when both are ours."""
     check_windows_sdk(work)   # (first: said in plain words when the game is chosen, not after it has been read)
+    probe = None
     if a.nup:
         probe = os.path.join(work, "probe")
         shutil.rmtree(probe, ignore_errors=True)
         run(PY + ["nx2/nup.py", a.nup, "--extract", probe, "--only", "exefs"])
-        check_modules(os.path.join(probe, "exefs"))
-        bid = build_id(os.path.join(probe, "exefs", "main"))
-        shutil.rmtree(probe, ignore_errors=True)
+        exefs = os.path.join(probe, "exefs")
     else:
-        bid = build_id(os.path.join(a.exefs, "main"))
-    if bid.startswith(BUILD_ID):
-        say("check", "ok", "This is the version Longshot supports (build %s)." % bid[:8])
-    else:
+        exefs = a.exefs
+    try:
+        if not os.path.isdir(exefs):
+            say("check", "bad", "This copy has no exefs folder. Longshot supports program %s." % PROGRAM_ID)
+            return 1
+        check_modules(exefs)
+        pid = program_id(exefs)
+        main = os.path.join(exefs, "main")
+        bid = build_id(main) if os.path.isfile(main) else ""
+    finally:
+        if probe:
+            shutil.rmtree(probe, ignore_errors=True)
+    ok = True
+    if pid is None:
+        say("check", "bad", "This copy has no program id (main.npdm). Longshot supports program %s." % PROGRAM_ID)
+        ok = False
+    elif "%016X" % pid != PROGRAM_ID:
+        say("check", "bad", "This is program %016X. Longshot supports program %s." % (pid, PROGRAM_ID))
+        ok = False
+    if not bid:
+        say("check", "bad", "This copy has no main module.")
+        ok = False
+    elif not bid.startswith(BUILD_ID):
         say("check", "bad", "This is build %s. Longshot supports build %s." % (bid[:8], BUILD_ID))
+        ok = False
+    elif ok:   # (a right build in another program: the program's own line already refused it)
+        say("check", "ok", "This is the version Longshot supports (program %s, build %s)." % (PROGRAM_ID, bid[:8]))
+    return 0 if ok else 1
 
 
 def visual_studio_environment():
