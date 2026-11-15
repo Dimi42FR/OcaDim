@@ -49,6 +49,9 @@ struct Program {
     // made by vk_pipeline.cpp at first use
     VkDescriptorSetLayout set_layout = VK_NULL_HANDLE;
     VkPipelineLayout layout = VK_NULL_HANDLE;
+    // (longshot) the two are the ones every program with its bindings shares (vk_draw.cpp layouts_for), kept for the device's life:
+    // not this program's to destroy
+    bool layout_shared = false;
     std::vector<VkDescriptorType> binding_types;   // by binding (what each descriptor write is)
     VkPipeline compute_pipeline = VK_NULL_HANDLE;
     // (the compute pipeline's build: 0 not started, 1 on a worker, 2 done (compute_pipeline made, or failed): vk_draw.cpp dispatch)

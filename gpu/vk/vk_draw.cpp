@@ -668,6 +668,71 @@ VkFormat supported_vertex_format(VkFormat f) {
 // (+ the guest page table's address, a task draw's first, and the fallback's two buffer addresses)
 constexpr uint32_t kPushSize = Shader::Backend::SPIRV::MESH_FALLBACK_PUSH_END;
 
+/// (longshot) What a set layout and the pipeline layout over it are made from, as words: the set's flags (push descriptors) and
+/// each binding's number, type, count and stages, then the pipeline layout's flags and push constant ranges. Empty: not to be
+/// shared (immutable samplers, a pNext chain, a set count other than one). Two programs with the same words get the same layouts
+std::vector<uint64_t> layout_signature(const VkDescriptorSetLayoutCreateInfo& li, const VkPipelineLayoutCreateInfo& pi) {
+    std::vector<uint64_t> w;
+    if (li.pNext || pi.pNext || pi.setLayoutCount != 1) return w;
+    w.reserve(2 + 2 * (size_t)li.bindingCount + 2 * (size_t)pi.pushConstantRangeCount);
+    w.push_back((uint64_t)li.flags << 32 | li.bindingCount);
+    for (uint32_t i = 0; i < li.bindingCount; i++) {
+        const VkDescriptorSetLayoutBinding& b = li.pBindings[i];
+        if (b.pImmutableSamplers) return {};
+        w.push_back((uint64_t)b.binding << 32 | (uint32_t)b.descriptorType);
+        w.push_back((uint64_t)b.descriptorCount << 32 | b.stageFlags);
+    }
+    w.push_back((uint64_t)pi.flags << 32 | pi.pushConstantRangeCount);
+    for (uint32_t i = 0; i < pi.pushConstantRangeCount; i++) {
+        const VkPushConstantRange& r = pi.pPushConstantRanges[i];
+        w.push_back((uint64_t)r.stageFlags << 32 | r.offset);
+        w.push_back(r.size);
+    }
+    return w;
+}
+
+/// (longshot) The layouts made for each signature (layout_signature), shared by every program that has it and kept for the device's
+/// life: no program destroys them (Program::layout_shared), so none goes while another program, a pipeline or a recording uses it.
+/// One each, a program change at a bind point pushed every descriptor again (bind_descriptors: another layout, nothing known of
+/// what is pushed); shared, a program after another of the same signature pushes only the writes that changed.
+/// RX_VK_LAYOUT_EACH=1: each program its own, as before
+struct SharedLayouts {
+    VkDescriptorSetLayout set = VK_NULL_HANDLE;
+    VkPipelineLayout layout = VK_NULL_HANDLE;
+};
+std::mutex shared_layouts_mu;   // (the prepare's workers make programs' layouts at once, without the replay's lock)
+std::map<std::vector<uint64_t>, SharedLayouts> shared_layouts;
+size_t shared_layout_programs = 0;
+/// The set layout li and the pipeline layout pi over it (its pSetLayouts set here), into *set and *layout: the shared ones of their
+/// signature, made at its first program. True: they are shared, not the program's to destroy (false: its own, or nothing was made)
+bool layouts_for(const VkDescriptorSetLayoutCreateInfo& li, VkPipelineLayoutCreateInfo& pi, VkDescriptorSetLayout* set,
+                 VkPipelineLayout* layout) {
+    static const bool each = env_on("RX_VK_LAYOUT_EACH");
+    const auto make = [&] {
+        *set = VK_NULL_HANDLE, *layout = VK_NULL_HANDLE;
+        vkCreateDescriptorSetLayout(dev.device, &li, nullptr, set);
+        pi.pSetLayouts = set;
+        vkCreatePipelineLayout(dev.device, &pi, nullptr, layout);
+    };
+    std::vector<uint64_t> sig;
+    if (!each) sig = layout_signature(li, pi);
+    if (sig.empty()) return make(), false;
+    std::lock_guard lk(shared_layouts_mu);
+    const size_t programs = ++shared_layout_programs;
+    if (programs >= 1024 && !(programs & (programs - 1)))   // (a line at each power of two: the prepare makes ~13,000 a start)
+        logf("vk: %zu programs have %zu pipeline layouts between them (one a binding signature; RX_VK_LAYOUT_EACH=1: one each)",
+             programs, shared_layouts.size());
+    if (const auto it = shared_layouts.find(sig); it != shared_layouts.end()) {
+        *set = it->second.set, *layout = it->second.layout;
+        pi.pSetLayouts = set;
+        return true;
+    }
+    make();
+    if (!*set || !*layout) return false;   // (one the driver did not make is not kept: the program's own, as without sharing)
+    shared_layouts.emplace(std::move(sig), SharedLayouts{*set, *layout});
+    return true;
+}
+
 void ensure_layout(Program& p) {
     if (p.layout) return;
     std::vector<VkDescriptorSetLayoutBinding> bindings;
@@ -692,17 +757,15 @@ void ensure_layout(Program& p) {
     if (p.push) li.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
     li.bindingCount = (uint32_t)bindings.size();
     li.pBindings = bindings.data();
-    vkCreateDescriptorSetLayout(dev.device, &li, nullptr, &p.set_layout);
     VkShaderStageFlags stages = 0;
     for (const Stage& st : p.stages) stages |= st.vk_stage;
     const VkPushConstantRange range{stages, 0, kPushSize};
     VkPipelineLayoutCreateInfo pi{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     pi.setLayoutCount = 1;
-    pi.pSetLayouts = &p.set_layout;
     pi.pushConstantRangeCount = 1;
     pi.pPushConstantRanges = &range;
     VkPipelineLayout layout = VK_NULL_HANDLE;
-    vkCreatePipelineLayout(dev.device, &pi, nullptr, &layout);
+    p.layout_shared = layouts_for(li, pi, &p.set_layout, &layout);   // (the same as another program's with these bindings: shared)
     p.push_stages = stages;
     for (const Stage& st : p.stages) p.uses_render_area |= st.info.uses_render_area;
     p.uses_push = p.uses_render_area;
@@ -4104,7 +4167,8 @@ void build_descriptors(const NvnState& s, const Program& p) {
 
 /// Binds the descriptors built: pushed, or a set from the recording's pool
 // (push descriptors keep what is not pushed again: a program drawn again pushes only the bindings that changed,
-// while nothing else was bound at its bind point in this command buffer)
+// while nothing else was bound at its bind point in this command buffer. (longshot) So does a program after another of the same
+// bindings: they share the layout (layouts_for), and the words compared are the writes' own, binding and type first)
 struct Pushed {
     VkCommandBuffer cmd = VK_NULL_HANDLE;
     VkPipelineLayout layout = VK_NULL_HANDLE;
@@ -8945,8 +9009,11 @@ bool prepare_run(void (*progress)(size_t done, size_t total), bool background, b
             libs++;
             pcache_built_since_save++;
         }
-        if (p.layout) vkDestroyPipelineLayout(dev.device, p.layout, nullptr), p.layout = VK_NULL_HANDLE;
-        if (p.set_layout) vkDestroyDescriptorSetLayout(dev.device, p.set_layout, nullptr), p.set_layout = VK_NULL_HANDLE;
+        if (!p.layout_shared) {   // (shared ones stay: other programs have them)
+            if (p.layout) vkDestroyPipelineLayout(dev.device, p.layout, nullptr);
+            if (p.set_layout) vkDestroyDescriptorSetLayout(dev.device, p.set_layout, nullptr);
+        }
+        p.layout = VK_NULL_HANDLE, p.set_layout = VK_NULL_HANDLE, p.layout_shared = false;
     };
     const auto worker = [&] {
         ub_thread_off();   // (a background thread: see ub_thread_off)
