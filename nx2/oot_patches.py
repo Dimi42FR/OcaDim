@@ -616,6 +616,77 @@ def patch_solver_steps(s):
     return s, done
 
 
+# Three more places that go wrong with a frame step under one frame, as NX2navi found and fixed them for its build (its
+# recomp/patches-v111.txt, the sets ofollow, owater and orecord: public domain / MIT, as merged into Triforce;
+# host/oot_high_fps.h has why and the logic. At a cap of 60 the host hands back what the game computed):
+# - the character controller's three follow-surface updates (f_8015d490, f_80159dc0, f_838baa40) compare the physics' inverse
+#   step with 100.0 and keep a tenth of the floor's velocity above it: every update above 100 fps, so a moving platform slid out
+#   from under Link. The 100.0 comes from hos_oot_floor_cut (100 / the frame's 60 fps frames while that is under one).
+# - the two water managers (f_83895f20, f_838a2660) run seconds / (1/60 s), cut to whole fixed steps: none in an update shorter
+#   than 1/60 s, so those surfaces stood still above 60 fps. Before the cut the quotient goes through hos_oot_sim_steps (x19 the
+#   object): the whole steps in it with the object's remainder kept, as a float for the game's own cut and clamp.
+# - the ocarina recorder's clock adds (unsigned)frame step at four places (f_832b2690, f_832b32b0, twice in f_832b6840): 0 above
+#   60 fps, so a recording lost its rests. host/oot_high_fps.c has hos_oot_record_frames for them.
+# Two of those places are already WHOLE_SITES' in this tree, with the same remainder kept per counter address (host/frame_whole.h):
+# the recorder's four adds and the interactive floors' own update (f_80652cb0, the Deku Tree's ground webs). Their text is the
+# lift's no more, so no hook is added there: oot_record_frames and the floor web's share of oot_sim_steps wait for a tree whose
+# whole-frames patches give way to NX2navi's.
+FLOOR_HEADS = ("void f_8015d490(Ctx *__restrict A64_NOESC c) {\n", "void f_80159dc0(Ctx *__restrict A64_NOESC c) {\n",
+               "void f_838baa40(Ctx *__restrict A64_NOESC c) {\n")
+# (mov w8, #0x42c80000; fmov s1, w8: the 100.0 of the compare that follows)
+FLOOR_OLD = ("    c->x[8] = 0x42c80000ULL;\n    c->x[8] &= 0xFFFFFFFFULL;\n"
+             "    { a64_vset64(c->vreg[1],0); memcpy(&c->vreg[1][0],&c->x[8],4); }\n")
+FLOOR_NEW = FLOOR_OLD.replace("c->x[8] = 0x42c80000ULL;",
+                              "c->x[8] = hos_oot_floor_cut();   /* (nx2/oot_patches.py: a floor's carry above 100 fps) */", 1)
+FLOOR_DECL = "extern uint32_t hos_oot_floor_cut(void);\n"
+# (a function and the register its cut goes to: fdiv s0, s8, s0 then fcvtzs w<n>, s0, the function's one cut of s0 into that
+#  register. f_80652cb0 is WHOLE_SITES' here: its fraction is carried before the game's 0..3 clamp)
+SIM_SITES = (("void f_83895f20(Ctx *__restrict A64_NOESC c) {\n", 8), ("void f_838a2660(Ctx *__restrict A64_NOESC c) {\n", 8))
+SIM_OLD = "    c->x[%d]=recomp_fp_to_int(c->vreg[0][0]&UINT64_C(0xffffffff),32,32,1,3,c->fpcr,&c->fpsr);\n"
+SIM_HOOK = ("    a64_vset64(c->vreg[0],hos_oot_sim_steps(c->x[19], (uint32_t)c->vreg[0][0]));"
+            "   /* (nx2/oot_patches.py: fixed steps above 60 fps) */\n")
+SIM_DECL = "extern uint32_t hos_oot_sim_steps(uint64_t object, uint32_t quotient_bits);\n"
+
+
+def patch_floor_carry(s):
+    """The follow-surface updates' compare: (s, how many of the three are in s with the hook, made now or before)"""
+    done = 0
+    for head_text in FLOOR_HEADS:
+        at = _function(s, head_text)
+        if at is None:
+            continue
+        head, end = at
+        body = s[head:end]
+        if body.count(FLOOR_NEW) == 1:
+            done += 1
+        elif body.count(FLOOR_OLD) == 1:
+            s = s[:head] + body.replace(FLOOR_OLD, FLOOR_NEW, 1) + s[end:]
+            done += 1
+    if done and FLOOR_DECL not in s:
+        s = s.replace('#include "a64.h"\n', '#include "a64.h"\n' + FLOOR_DECL, 1)
+    return s, done
+
+
+def patch_sim_steps(s):
+    """The height-field surfaces' fixed steps: (s, how many of the two places are in s with the hook, made now or before)"""
+    done = 0
+    for head_text, reg in SIM_SITES:
+        at = _function(s, head_text)
+        if at is None:
+            continue
+        head, end = at
+        body = s[head:end]
+        old = SIM_OLD % reg
+        if body.count(SIM_HOOK + old) == 1:
+            done += 1
+        elif body.count(old) == 1 and SIM_HOOK not in body:
+            s = s[:head] + body.replace(old, SIM_HOOK + old, 1) + s[end:]
+            done += 1
+    if done and SIM_DECL not in s:
+        s = s.replace('#include "a64.h"\n', '#include "a64.h"\n' + SIM_DECL, 1)
+    return s, done
+
+
 def patch_text_speed(s):
     """The scale at the head of the letters' block of f_80b1e140 (Text speed), and the call to hos_oot_text_pane after it
     (Text size: host/oot_text_size.c); None when the file has no such function, s unchanged when the
@@ -965,6 +1036,16 @@ def patch_file(s, name, protect_hearts=False):
     if solver != out:
         lines.append("oot_patches: the solver steps rounded up above 60 fps in " + name)
     out = solver
+    floor, found = patch_floor_carry(out)
+    counts["floor sites"] += found
+    if floor != out:
+        lines.append("oot_patches: a floor's carry above 100 fps in " + name)
+    out = floor
+    sim, found = patch_sim_steps(out)
+    counts["sim sites"] += found
+    if sim != out:
+        lines.append("oot_patches: the water surfaces' fixed steps above 60 fps in " + name)
+    out = sim
     return out, counts, lines
 
 
@@ -1005,6 +1086,11 @@ def report(paths, counts, protect_hearts=False):
         print("oot_patches: WARNING: the sound job was found %d times, not once" % total["sound jobs"])
     if total["solver sites"] != len(SOLVER_HEADS):   # (without them, above 60 fps moving platforms can drop Link)
         print("oot_patches: WARNING: the solver step count was found at %d of %d places" % (total["solver sites"], len(SOLVER_HEADS)))
+    if total["floor sites"] != len(FLOOR_HEADS):   # (without them, above 100 fps a moving platform carries Link at a tenth of its speed)
+        print("oot_patches: WARNING: a floor's carry was found at %d of %d places" % (total["floor sites"], len(FLOOR_HEADS)))
+    if total["sim sites"] != len(SIM_SITES):   # (without them, above 60 fps the water surfaces stand still)
+        print("oot_patches: WARNING: the water surfaces' fixed steps were found at %d of %d places"
+              % (total["sim sites"], len(SIM_SITES)))
     for what, n in done.items():
         if n != 1:
             print("oot_patches: WARNING: the %s was found %d times" % (what, n))
