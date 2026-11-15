@@ -87,7 +87,8 @@ enum MenuTab {
     TAB_GAMEPLAY = 2,
     TAB_CONTROLS = 3,
     TAB_DEBUG = 4,   // (the OoT debug tools of #785, a tab of their own)
-    TAB_COUNT = 5,
+    TAB_PERF = 5,    // (longshot) what this PC is doing now: read-only numbers, no setting
+    TAB_COUNT = 6,
     TAB_MOTION = TAB_COUNT,   // (longshot: not a tab of the strip, the Motion page that the Controls tab's Motion row
                               // opens: one past the strip's tabs, so a tab added before TAB_COUNT moves it along)
     TAB_PAGE = TAB_MOTION + 1   // (longshot: the Controls page's rows, above its grid; no tab shows them)
@@ -1236,6 +1237,52 @@ void text_set(TextField& f, const char* t) {
     f.len = f.caret = (int)strlen(f.text);
 }
 
+// (longshot) The Performance tab: this PC's numbers as they are now, read-only. Each row formats its line when it is drawn, from
+// the accounts the FPS counter's Dev level reads (the frame's parts, the textures, the driver's memory). Nothing here sets
+// anything: perf_value stands for every row's value, and stops_at_ends keeps the arrows off it.
+int perf_value = 0;
+fps_stats::Summary perf_summary() { return fps_summary(fps_clock(), fps_stats::kSecond / 2, fps_stats::kLowWindow); }
+const char* perf_frame_rate(int) {
+    static char b[48];
+    const fps_stats::Summary s = perf_summary();
+    if (!s.frames) return "-";
+    snprintf(b, sizeof b, "%.1f fps  %.1f ms", s.avg_ms > 0 ? 1000.0 / s.avg_ms : 0.0, s.avg_ms);
+    return b;
+}
+void perf_part_line(int part, char* b, size_t n) {
+    const fps_stats::Summary s = perf_summary();
+    if (!s.frames) { snprintf(b, n, "%s", "-"); return; }
+    snprintf(b, n, "%.1f ms", s.part[part]);
+}
+const char* perf_game(int) { static char b[24]; perf_part_line(fps_stats::kGame, b, sizeof b); return b; }
+const char* perf_render(int) { static char b[24]; perf_part_line(fps_stats::kRender, b, sizeof b); return b; }
+const char* perf_gpu_wait(int) { static char b[24]; perf_part_line(fps_stats::kGpuWait, b, sizeof b); return b; }
+const char* perf_pace(int) { static char b[24]; perf_part_line(fps_stats::kPace, b, sizeof b); return b; }
+const char* perf_gpu(int) {
+    static char b[24];
+    const fps_stats::Summary s = perf_summary();
+    if (!s.frames) { snprintf(b, sizeof b, "%s", "-"); return b; }
+    snprintf(b, sizeof b, "%.1f ms", s.gpu_ms);
+    return b;
+}
+const char* perf_vram(int) {
+    static char b[40];
+    uint64_t used = 0, allowed = 0;
+    const bool known = vram_usage(&used, &allowed);   // (before the line reads them: one statement, one order)
+    fps_stats::vram_line(b, sizeof b, used, allowed, known);
+    return b;
+}
+const char* perf_textures(int) {
+    static char b[40];
+    fps_stats::textures_line(b, sizeof b, texture_count(), texture_bytes());
+    return b;
+}
+const char* perf_pipelines(int) {
+    static char b[48];
+    const fps_stats::Summary s = perf_summary();
+    snprintf(b, sizeof b, "%d made, %d left out", s.pipelines, s.left_out);
+    return b;
+}
 Row rows[] = {
     // Graphics, in sections: a heading row is a section's title (draw_options draws it, the selection steps over it). The
     // Quality preset first, as it sets rows in every section. (Reflex, Anti-Lag 2, the Upscaler and the DLSS model only where
@@ -1513,6 +1560,27 @@ Row rows[] = {
      "For integrated graphics with 4 CPU threads or fewer (an i3 laptop's UHD Graphics): Render resolution 33% with the game's own "
      "upscaler, the plain window scale without sharpening, the handheld profile, smaller textures, Intel's shaders "
      "one at a time and quick compute builds. The handheld profile applies after a restart."},
+    // (longshot) the Performance tab: what this PC is doing now. Read-only rows (perf_value, stops_at_ends): no setting here
+    {TAB_PERF, "Frame rate", &perf_value, 0, 0, 1, perf_frame_rate,
+     "The frame rate and the frame time of the last half second. Read-only: nothing on this tab changes a setting."},
+    {TAB_PERF, "The game's code", &perf_value, 0, 0, 1, perf_game,
+     "How much of each frame is the game's own work: its logic, its threads, its sound. Read-only."},
+    {TAB_PERF, "The renderer", &perf_value, 0, 0, 1, perf_render,
+     "How much of each frame is the renderer recording the game's draws and submitting them. Read-only."},
+    {TAB_PERF, "Waiting for the GPU", &perf_value, 0, 0, 1, perf_gpu_wait,
+     "How much of each frame waits for the graphics card: a recording slot, a fence, OoT's own poll for its frame's GPU work. "
+     "Read-only."},
+    {TAB_PERF, "The GPU", &perf_value, 0, 0, 1, perf_gpu,
+     "The graphics card's own time for a frame, a few frames late. Read-only."},
+    {TAB_PERF, "Frame pacing", &perf_value, 0, 0, 1, perf_pace,
+     "How much of each frame waits for its turn: the frame rate cap, V-Sync, the game's own sleeps. Read-only."},
+    {TAB_PERF, "Video memory", &perf_value, 0, 0, 1, perf_vram,
+     "How much of the driver's budget the renderer holds: textures, render targets, the game's memory mirrors. Read-only."},
+    {TAB_PERF, "Textures", &perf_value, 0, 0, 1, perf_textures,
+     "How many textures the renderer holds, and how much video memory they take. Read-only."},
+    {TAB_PERF, "Pipelines", &perf_value, 0, 0, 1, perf_pipelines,
+     "Shaders built while playing since the counter's window began, and draws left out because their pipeline was not ready "
+     "yet. Read-only."},
     // (longshot) the Gameplay tab's Bug report (vk_bug_report.h): A or Enter writes the report's folder; the help says what is in it
     {TAB_GAMEPLAY, "Bug report", nullptr, 0, 0, 0, nullptr,
      "Saves what an issue needs in a new folder, bug-reports in the game folder: report.txt with the issue form's answers (this "
@@ -1836,7 +1904,7 @@ int drag_row = -1;
 bool mouse_read = false;   // (the menu has read the mouse since it opened)
 bool is_slider(const Row& r) { return r.value == &opts.sharpness || r.value == &opts.mouse_sens || r.value == &opts.gyro_sens_x || r.value == &opts.gyro_sens_y || r.value == &opts.volume || r.value == &opts.camera_speed || r.value == &opts.fov; }
 /// (a scale: the arrows and a click stop at its ends; Rumble strength would go from Off to its strongest)
-bool stops_at_ends(const Row& r) { return r.value == &opts.ultrawide || r.value == &opts.mouse_sens || r.value == &opts.rumble || r.value == &opts.gyro_sens_x || r.value == &opts.gyro_sens_y || r.value == &opts.volume || r.value == &opts.camera_speed || r.value == &opts.fov; }
+bool stops_at_ends(const Row& r) { return r.value == &opts.ultrawide || r.value == &opts.mouse_sens || r.value == &opts.rumble || r.value == &opts.gyro_sens_x || r.value == &opts.gyro_sens_y || r.value == &opts.volume || r.value == &opts.camera_speed || r.value == &opts.fov || r.value == &perf_value; }
 /// (the ini's Rumble strength on the menu's steps: 0 to 150, the nearest 25)
 int rumble_step(int v) { return (std::min(std::max(v, 0), 150) + 12) / 25 * 25; }
 // (longshot) A run's environment over a saved row (RX_VK_PACE=1, HOS_OUTPUT_RES=...): for that run only. save() writes the
@@ -3324,7 +3392,7 @@ const char* bug_report_hint() {
     return text.c_str();
 }
 
-const char* const tab_titles[TAB_COUNT] = {"Graphics", "Audio", "Gameplay", "Controls", "Debug"};
+const char* const tab_titles[TAB_COUNT] = {"Graphics", "Audio", "Gameplay", "Controls", "Debug", "Performance"};
 inline const char* tab_title(int t) { return t >= 0 && t < TAB_COUNT ? tab_titles[t] : "Settings"; }
 inline bool cheat_is_toggle(int c) { return c == 0 || c == 1 || c == 7; }
 
@@ -4804,7 +4872,7 @@ void menu_option_set(int id, int value) {
 // its own thread: menu_mu keeps them apart from menu_tick (the present's thread) and from menu_option_set (the game's)
 bool bridge_row(int i) { return rows[i].value && !rows[i].heading && rows[i].cheat < 0 && row_shown(i); }
 void bridge_fill(int i, MkwVkSetting* out) {
-    static const char* const tabs[] = {"graphics", "audio", "gameplay", "controls", "debug", "motion", "controls"};
+    static const char* const tabs[] = {"graphics", "audio", "gameplay", "controls", "debug", "performance", "motion", "controls"};
     static_assert(sizeof tabs / sizeof tabs[0] == TAB_PAGE + 1, "a name for each MenuTab");
     const Row& r = rows[i];
     *out = MkwVkSetting{};
