@@ -82,7 +82,15 @@ namespace mkwvk {
 int display_refresh_mhz();   // (below, outside the unnamed namespace)
 
 std::vector<std::string> gpu_device_names;
+std::vector<gpu_choice::Card> gpu_device_cards;
 const MkwVkHost* host;
+std::string options_path() {
+    if (host && host->options_path) {
+        const char* p = host->options_path();
+        return p ? p : "";
+    }
+    return game_folder_path() + "longshot_options.ini";
+}
 int64_t prof_ns[PROF_COUNT];
 Device dev;
 PFN_vkGetInstanceProcAddr instance_proc() { return vkx::instance_proc_addr(); }
@@ -199,14 +207,17 @@ bool pick_device() {
 
     std::vector<uint32_t> valid_gpus;
     gpu_device_names.clear();
+    gpu_device_cards.clear();
     for (uint32_t i = 0; i < n; i++) {
         VkPhysicalDeviceProperties p;
         vkGetPhysicalDeviceProperties(all[i], &p);
-        logf("vk: device %u: %s, Vulkan %u.%u, driver %#x, type %d", i, p.deviceName, VK_API_VERSION_MAJOR(p.apiVersion),
-             VK_API_VERSION_MINOR(p.apiVersion), p.driverVersion, (int)p.deviceType);
+        logf("vk: device %u: %s, Vulkan %u.%u, driver %#x, type %d, id %04x:%04x", i, p.deviceName,
+             VK_API_VERSION_MAJOR(p.apiVersion), VK_API_VERSION_MINOR(p.apiVersion), p.driverVersion, (int)p.deviceType,
+             p.vendorID, p.deviceID);
         if (p.apiVersion >= VK_API_VERSION_1_3) {
             valid_gpus.push_back(i);
             gpu_device_names.push_back(p.deviceName);
+            gpu_device_cards.push_back({p.vendorID, p.deviceID});   // (the row's saved card: gpu_choice.h card_id)
         }
     }
     menu_set_gpu_count((int)valid_gpus.size());
@@ -292,11 +303,7 @@ bool create_device() {
     // fallback the GTX 10xx and RX 5000 cards run (issue 640) can be tried on any GPU. The Graphics tab's row it was, and its
     // mesh_shaders= in longshot_options.ini, no longer choose: the line is only told of in the log)
     static const mesh_rule::Choice mesh_choice = [] {
-        char exe[MAX_PATH];
-        const DWORD len = game_module_path(exe, MAX_PATH);   // (the game folder, not bin beside the launcher: vk_paths.h)
-        std::string ini(exe, len);
-        ini = ini.substr(0, ini.find_last_of("\\/") + 1) + "longshot_options.ini";
-        if (FILE* fl = fopen(ini.c_str(), "r")) {
+        if (FILE* fl = fopen(options_path().c_str(), "r")) {   // (vk_paths.h)
             char line[80];
             int old = 0;
             while (fgets(line, sizeof line, fl))
@@ -538,12 +545,8 @@ bool create_device() {
     // over it. Off is null descriptors only: some NVIDIA cards ran slower with it on, issues 394, 418, 419)
     static const bool robust = []() -> bool {
         if (const char* e = getenv("RX_VK_ROBUST")) return atoi(e) != 0;
-        char exe[MAX_PATH];
-        const DWORD n = game_module_path(exe, MAX_PATH);   // (the game folder, not bin beside the launcher: vk_paths.h)
-        std::string ini(exe, n);
-        ini = ini.substr(0, ini.find_last_of("\\/") + 1) + "longshot_options.ini";
         int v = 0;   // (Auto)
-        if (FILE* f = fopen(ini.c_str(), "r")) {
+        if (FILE* f = fopen(options_path().c_str(), "r")) {   // (vk_paths.h)
             char line[80];
             while (fgets(line, sizeof line, f))
                 if (!strncmp(line, "robust_buffers=", 15)) {
@@ -1233,6 +1236,7 @@ void prepare_with_screen() {
             StartupState st;
             st.stage = stage, st.done = done, st.total = total, st.left = left, st.secs = secs;
             st.prepared = prepared, st.finished = finished, st.stopping = prepare_stopped();
+            st.saving = prepare_saving();
             st.whole = whole;
             const StartupView view = startup_view(st);
             startup_screen(&view);

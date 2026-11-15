@@ -28,6 +28,7 @@ static std::string mode;
 static unsigned loads, inits, windows, threads, offscreen, signals, sleeps, flushes, waited, prepares;
 static std::vector<std::string> logs;
 void hos_discord_start() {} // Inert optional IPC startup; the fixture exercises display startup only.
+int hos_crash_helper_main(int, char**) { return -1; } // (host/hos_crash_dialog.c: not a crash window's helper, the game itself)
 
 static void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
@@ -101,6 +102,7 @@ static void WaitForSingleObject(HANDLE h, unsigned timeout) {
 }
 static void load_longshot_env() {}
 static void hos_game_layout() {}   // (host/game_layout.c: the game folder's cache/ and logs/)
+static void hos_options_choose(int, char**) {}   // (host/options_path.c: the settings file, in the user folder)
 static void driver_cache_room() {}   // (host/hos_main.c: the drivers' shader caches' size, #2033)
 static void driver_cache_folder() {}   // (host/hos_main.c: the folder __GL_SHADER_DISK_CACHE_PATH names, made)
 

@@ -253,7 +253,7 @@ The build reads your game and never changes it.
 | Your saves | `user` in the game folder | `~/.local/share/longshot` |
 | The launcher, each version's builder and its tools (`toolchains`), the build files (`work`) | `%LOCALAPPDATA%\LongshotLauncher` (the installed program in `%LOCALAPPDATA%\Programs\LongshotLauncher`; the portable one's data in `LongshotLauncher-data` beside it) | `~/.local/share/longshot/launcher` (the portable AppImage's in `<AppImage>.home` beside it) |
 | A builder without the launcher (`--cli`) and its tools | `%LOCALAPPDATA%\LongshotBuilder` | `~/.local/share/longshot/builder` and `~/.cache/longshot-builder` |
-| The in-game menu's choices | `longshot_options.ini` in the game folder | `longshot_options.ini` in the game folder |
+| The in-game menu's choices and your controls | `longshot_options.ini` in `%APPDATA%\Longshot` when the launcher starts the game, the same for every version (a portable launcher's in `LongshotLauncher-data\user`); in the game folder when you start the game yourself | `longshot_options.ini` in the game folder |
 | The shader and pipeline caches, and the logs | `cache` and `logs` in the game folder | `cache` and `logs` in the game folder |
 
 - **Caches and logs:** the game keeps its shader and pipeline caches in the game folder's `cache` folder (several GB, made
@@ -327,7 +327,9 @@ line with the video memory in use against what the driver allows, and DLSS's det
 | **Other** | |
 | The game is in the wrong language | Change the code in `language.txt` in the game folder. The file lists them all, and an update keeps the one you set. |
 
-Still stuck? [Report it](https://git.magicbean.dev/MagicBeanDev/Longshot/issues/new) with the version, where you were in
+After a crash, at the start or in play, a window says what happened; its **Report** button copies a report (no saves or
+game files, your home folder and user name taken out) and opens the issue form, for you to paste it into. Still stuck?
+[Report it](https://git.magicbean.dev/MagicBeanDev/Longshot/issues/new) with the version, where you were in
 the game, your graphics card, `longshot_log.txt` and a screenshot or video, and never game files. **Gameplay → Bug
 report** in the [in-game menu](#in-game-menu) gathers all of it in one press.
 
@@ -399,7 +401,8 @@ Controls, the Teleport list, the inventory), and B goes back or closes the menu:
 on (with the Nintendo layout, A is the right face button). The mouse is free while the menu is open: click a tab, click a row's name to choose it (its
 value stays), click the left or right half of a value to lower or raise it, drag a slider, turn the wheel to scroll the rows (it never changes a value), and right-click to go back. The
 button prompts at the bottom show the keys or the controller's buttons, whichever you used last. Your choices are saved
-in `longshot_options.ini` in the game folder.
+in `longshot_options.ini`: with your saves when the launcher starts the game on Windows, so every version keeps them, else in
+the game folder ([Where the files go](#where-the-files-go)).
 
 The menu, the FPS counter and the start-up screen are drawn in the style of the game's own menus. They use the game's
 own menu font, read into memory from your game files (the romfs folder the game runs from) the first time one of them is
@@ -443,12 +446,11 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | HDR paper white | 80 to 400 nits, in steps of 10 (while HDR is on) | 200 nits |
 | | HDR peak brightness | 400 to 4000 nits, in steps of 100 (while HDR is on) | 1000 nits |
 | | HDR contrast | 50% to 200% around mid grey, in steps of 5 (while HDR is on) | 100% |
-| | HDR tone mapper | Vanilla (the game's curve), PsychoV35 (RenoDX's; with HDR set to Native. DLSS/DLAA with their NVIDIA frame-generation inputs, and AMD FSR 4, can be tried with `RX_VK_PSYCHOV35_DLSS=1`; FSR 3.1, TAAU and Upscaler Off still fall back to the game's network) | Vanilla |
+| | HDR tone mapper | Vanilla (the game's curve), PsychoV35 (RenoDX's; with HDR set to Native). Compatible DLSS/DLAA, FSR 4/native AA and shared-chain FSR 3.1 upscaling run automatically; `RX_VK_PSYCHOV35_DLSS=0` disables that compatibility route. Off and the spatial/FXAA TAAU replacement support PsychoV35 directly. FSR 3.1 FG remains separately opt-in and 2x only; legacy own-input FSR upscaling remains unsupported | Vanilla |
 | | Texture detail | Auto, Full, Medium, Low | Auto |
 | | Anisotropic filtering | Game's, 2x, 4x, 8x, 16x | 16x |
 | | GPU device | Auto, or each graphics card by name (after a restart) | Auto |
 | | Threaded rendering | Auto, On, Off (after a restart). Auto is On with 12 or more processor threads for the game | Auto |
-| | VRAM budget | Auto, 3.6, 4.8, 6, 7.5, 9, 11 GB (2.2 GB only from the Minimum (4GB) preset); a quality preset sets it | Auto |
 | Audio | Volume | 0 to 100%, in steps of 5 | 100% |
 | | Mute in background | Off, On | Off |
 | | Audio output | Auto, Stereo, 5.1, Mono (layout changes after a restart; Mono/Stereo live on stereo output) | Auto |
@@ -494,10 +496,10 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | Developer: ASTC as RGBA8 | Off, On (after a restart) | Off |
 | | Developer: Intel shader compiles | One at a time, Side by side (after a restart; Intel graphics on Windows only) | One at a time |
 
-- **Quality preset** sets Render resolution, Window scaling filter, Sharpness, Frame pacing, Game speed, Profile
-  and the video memory limits for a card with that much memory. It leaves the Upscaler and Frame generation as
-  you chose them: with DLSS, FSR 3.1 or FSR 4, the preset's resolution becomes their nearest mode. Changing most other
-  rows yourself sets it back to Custom.
+- **Quality preset** sets Render resolution, Window scaling filter, Sharpness, Frame pacing, Game speed and Profile
+  for a card with that much memory; how much video memory the textures use comes from the card itself. It leaves the
+  Upscaler and Frame generation as you chose them: with DLSS, FSR 3.1 or FSR 4, the preset's resolution becomes their
+  nearest mode. Changing most other rows yourself sets it back to Custom.
 - **Auto (this PC)**, which a first start begins on, chooses for the PC it runs on: the memory tier from the card's
   video memory (an integrated GPU, a Steam Deck or a card without mesh shaders at Minimum), DLSS on an NVIDIA RTX card
   or FSR 4 on an AMD RX 9000 where the build has them (else the game's own upscaler). It leaves the Output resolution as
@@ -516,9 +518,11 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
   file list as soon as the game has a save. Until you have saved once, it leaves the title screen alone, so a new game can
   still be started. It applies after a restart; turn it off to watch the intro and use the title.
 - **GPU device** matters on a PC with more than one graphics card (a laptop's integrated and dedicated GPUs, or a
-  second card for Lossless Scaling). Auto prefers a dedicated one, and only cards with Vulkan 1.3 are listed.
-  `longshot_log.txt` lists every card as `vk: device <n>`; `RX_VK_DEVICE=<n>` chooses one for a single run and wins
-  over the menu.
+  second card for Lossless Scaling). Auto prefers a dedicated one, and only cards with Vulkan 1.3 are listed. The card
+  you choose is saved as that card (`gpu_device_id=` in `longshot_options.ini`), not its place in the list, so it stays
+  chosen when the list's order changes (a driver update, a card added, an update into a new folder). A chosen card that
+  is not there (an eGPU unplugged) is Auto until it is back. `longshot_log.txt` lists every card as `vk: device <n>`;
+  `RX_VK_DEVICE=<n>` chooses one for a single run and wins over the menu.
 - **Frame generation** makes extra frames between the game's own. It adds a little input delay, and fast motion can
   show artifacts. The renderer's own interpolation makes the frames; at 2x, AMD FSR 3.1's frame interpolation can make
   it instead with `RX_VK_FSR_FG=1` (below: it moves the HUD with the scene, so it is not the default). **Frame pacing** shows frames at an even interval: less stutter, up to one frame of delay. It paces
@@ -989,8 +993,8 @@ license. Never share a game folder built with them, and do not post builds made 
   run the build with `LONGSHOT_NGX_SDK=<sdk folder>` set: `make_game.py` puts both runtimes in the game folder's `ngx`
   folder. NGX's core comes with NVIDIA's Linux driver.
 - **Linux, a game folder with other than plain English letters in its path:** NVIDIA's NGX on Linux loads DLSS's
-  runtimes only from a folder whose whole path is ASCII. A game in `~/Games/Zelda` needs nothing more. A game in a
-  folder such as `~/Games/Zelda-Café` (the `é` is not ASCII) cannot use the runtimes in its own `ngx` folder, and the
+  runtimes only from a folder whose whole path is ASCII. A game in `~/Games/Longshot` needs nothing more. A game in a
+  folder such as `~/Games/Longshot-Café` (the `é` is not ASCII) cannot use the runtimes in its own `ngx` folder, and the
   log and the Insert menu say so: copy `libnvidia-ngx-dlss.so.*` and `libnvidia-ngx-dlssg.so.*` from there into
   `$XDG_DATA_HOME/longshot/ngx`
   (`~/.local/share/longshot/ngx`), which the game also looks in, or into any other folder with an ASCII path and name
@@ -1159,7 +1163,7 @@ The switches for scripted test runs, screenshots, frame dumps and profiles are i
 [development guide](docs/development.md#switches-for-testing-and-debugging).
 
 `RX_VK_WB_MAX_KB=<KB>` (off by default; 1024 is the tested value) is the size from which a written GPU binding may go
-without most of its write-back. OoT
+without most of its write-back. The game
 writes tens of MB of culling lists and per-frame buffers through the GPU that the CPU never reads, and copying them back
 sat on every submit's memory sync: in Hyrule Field on a 10 GB RTX 3080, about 66 MB and 4.4 ms a submit, holding the
 scene at 45-48 fps. The CPU does read and write parts of some large ones, so a binding over the size is written back
@@ -1261,7 +1265,7 @@ people:
 - **[kinnay/zbic](https://github.com/kinnay/zbic)**, **Opus** and **SDL**: decompression, audio and controllers.
 - **[sostenesfreitas/ocarina-recomp](https://github.com/sostenesfreitas/ocarina-recomp)**: this README's layout, and its notes
   confirmed the mesh stage's control section.
-- **[MythosOfs/Orchid](https://github.com/MythosOfs/Orchid)**: the fog and exposure workaround Ocarina of Time used before
+- **[MythosOfs/Orchid](https://github.com/MythosOfs/Orchid)**: the fog and exposure workaround the game used before
   its fog and lighting were fixed.
 - **Mesa (NAK)**: the reference for Ampere's instruction encoding.
 - Everyone who sent fixes: SkippySteve (Linux and the AppImage, and many more), monsterlag, klimovich008, hckrman101 (NVIDIA

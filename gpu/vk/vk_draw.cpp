@@ -63,6 +63,7 @@
 #include "shaders/clear_u_frag_spv.h"
 #include "shaders/clear_vert_spv.h"
 #include "shaders/taau_upscale_comp_spv.h"
+#include "shaders/taau_upscale_rgba_comp_spv.h"
 #include "shaders/shadow_stab_comp_spv.h"
 #include "shaders/movie_upscale_comp_spv.h"
 #include "shader_recompiler/backend/spirv/mma_layout.h"
@@ -728,6 +729,7 @@ std::atomic<int64_t> pcache_built_since_save{0};
 // size: data the cache took in since. The pipeline creation feedback cannot tell the new ones apart: NVIDIA's driver reports
 // most precompiled pipelines as not found in the app's cache (~460 of ~12,900 here), which it then serves from its own.
 std::atomic<size_t> pcache_saved_size{0};
+bool pcache_no_save = false;   // (RX_VK_PCACHE_LOAD=0: pcache_init)
 /// A pipeline cache file's data, or nothing when it cannot be read or was made by another device or driver
 PipelineCacheFile pcache_file_read(const std::string& path) {
     return PipelineCacheFile::read(path, [](const uint8_t* head, uint64_t size) {
@@ -902,7 +904,7 @@ PlayCache* play_cache_make() {
 /// (the start-up done, vk_main's start) play begins: what is made from now on goes into the play generations
 void play_cache_begin() {
     static const bool off = getenv("RX_VK_PLAY_CACHE") && atoi(getenv("RX_VK_PLAY_CACHE")) == 0;
-    if (off || !pcache || !dev.vk13.pipelineCreationCacheControl || play_cache.load()) return;
+    if (pcache_no_save || off || !pcache || !dev.vk13.pipelineCreationCacheControl || play_cache.load()) return;
     if (PlayCache* g = play_cache_make()) {
         play_cache.store(g);
         logf("vk: pipeline cache: what play makes goes into play files (RX_VK_PLAY_CACHE=0: into the one cache)");
@@ -1022,7 +1024,6 @@ VkResult create_cached(VkResult (*create)(VkPipelineCache, const CI*, VkPipeline
 bool play_cache_in_use() { return play_cache.load() != nullptr; }
 // ---- (end of the play caches) ----
 
-bool pcache_no_save = false;   // (RX_VK_PCACHE_LOAD=0: pcache_init)
 // (RX_VK_PCACHE_LOAD=0, an A/B of what the file costs in memory: its 2.5 GB read whole and held by the driver. The cache
 // starts empty and is not saved; the driver's own shader cache is all there is)
 bool pcache_load_off() {
@@ -1066,7 +1067,7 @@ void pcache_init() {
     }
     logf("vk: pipeline cache %s (%zu KB)", pcache_path.c_str(), data.size() >> 10);
     data = {};
-    if (pcache) play_files_merge();
+    if (pcache && !off) play_files_merge();
     // (what it holds as read, the play files too: a save of data that size has nothing to add to the files)
     size_t held = 0;
     PcacheFetch fetch(-1);
@@ -3464,16 +3465,13 @@ bool slow_desc_timing() {
 }
 
 // (longshot) one switch read two ways, like the Robust buffers row of vk_main.cpp: the environment variable says it for test
-// runs (any value, 0 off); else the row's line in longshot_options.ini beside the game; else off.
+// runs (any value, 0 off); else the row's line in longshot_options.ini in the user folder; else off.
 /// (the row's value in longshot_options.ini, read before the menu has loaded it; the environment's switch first. def: no
 /// file, no line, or a file older than options_version since (one whose line was only ever the old default, vk_menu.cpp
 /// load))
 bool menu_env_on(const char* env_name, const char* ini_key_name, bool def = false, int since = 0) {
     if (const char* e = getenv(env_name)) return !env_value_off(e);   // (longshot_env.h: the switches' one rule)
-    char exe[MAX_PATH];
-    const DWORD n = game_module_path(exe, MAX_PATH);   // (the game folder, not bin beside the launcher: vk_paths.h)
-    std::string ini(exe, n);
-    ini = ini.substr(0, ini.find_last_of("\\/") + 1) + "longshot_options.ini";
+    const std::string ini = options_path();   // (vk_paths.h)
     const size_t klen = strlen(ini_key_name);
     int v = -1, version = 0;
     if (FILE* f = fopen(ini.c_str(), "r")) {
@@ -8163,6 +8161,36 @@ bool upscale_stub(VkCommandBuffer cmd, const NvnState& s, uint64_t key) {
     // Failed upscales can receive RGB9E5 bits in a shared R11 image, including the 75% gameplay TAAU.
     // Match the observed base-level 2D case only; other fallbacks keep their existing blit.
     const bool gameplay_taau = key == 0xfd029a317a9a4b94ull;
+    if (gameplay_taau && scene_tonemap_on() &&
+        (src->format == VK_FORMAT_R16G16B16A16_SFLOAT || dst->format == VK_FORMAT_R16G16B16A16_SFLOAT)) {
+        if (src->format != VK_FORMAT_R16G16B16A16_SFLOAT || dst->format != VK_FORMAT_R16G16B16A16_SFLOAT ||
+            in.d.format != NVN_FORMAT_RGB9E5F || out.d.format != NVN_FORMAT_R11G11B10F ||
+            !(fd.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) ||
+            src->type != VK_IMAGE_TYPE_2D || dst->type != VK_IMAGE_TYPE_2D || src->depth != 1 || dst->depth != 1 ||
+            src->layers != 1 || dst->layers != 1 || src->levels != 1 || dst->levels != 1 || src->skip || dst->skip ||
+            in.d.swizzle_r != NVN_TEXTURE_SWIZZLE_R || in.d.swizzle_g != NVN_TEXTURE_SWIZZLE_G ||
+            in.d.swizzle_b != NVN_TEXTURE_SWIZZLE_B) return false;
+        nvn_tex selected_in{}, selected_out{};
+        nvn_view iv{}, ov{};
+        bool ihv = false, ohv = false;
+        if (texture_of((int)(in_h & 0xFFFFF), &selected_in, &iv, &ihv) &&
+            texture_of((int)(out_h & 0xFFFFF), &selected_out, &ov, &ohv) && !ihv && !ohv &&
+            selected_in.serial == in.serial && selected_out.serial == out.serial) {
+            VkFormat input_format = VK_FORMAT_UNDEFINED, output_format = VK_FORMAT_UNDEFINED;
+            const VkImageView input_view = texture_view(src, &in, nullptr, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Sample,
+                                                         &input_format, VK_FORMAT_R16G16B16A16_SFLOAT);
+            const VkImageView output_view = texture_view(dst, &out, nullptr, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Storage,
+                                                          &output_format, VK_FORMAT_R16G16B16A16_SFLOAT);
+            if (input_view && output_view && input_format == VK_FORMAT_R16G16B16A16_SFLOAT &&
+                output_format == VK_FORMAT_R16G16B16A16_SFLOAT &&
+                typed_upscale(cmd, input_view, output_view, dst, 0, key, "PsychoV35 TAAU fallback", true)) {
+                full_barrier(cmd);
+                texture_written(dst);
+                return true;
+            }
+        }
+        return false; // Do not blit perceptually encoded PsychoV35 input into a linear output.
+    }
     if ((!gameplay_network(key) || gameplay_taau) && in.d.format == NVN_FORMAT_RGB9E5F && out.d.format == NVN_FORMAT_R11G11B10F &&
         src->format == VK_FORMAT_B10G11R11_UFLOAT_PACK32 && dst->format == VK_FORMAT_B10G11R11_UFLOAT_PACK32 &&
         (fd.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) &&
@@ -8251,10 +8279,20 @@ bool taau_key(uint64_t key) {
 static bool typed_upscale(VkCommandBuffer cmd, VkImageView input_view, VkImageView output_view,
                           Texture* out, uint32_t level, uint64_t key, const char* keys, bool temporal) {
     if (!dev.push_descriptor || !vkCmdPushDescriptorSetKHR || !input_view || !output_view || !out) return false;
-    static VkPipeline pipe = VK_NULL_HANDLE;
-    static VkPipelineLayout layout = VK_NULL_HANDLE;
-    static VkSampler linear = VK_NULL_HANDLE;
-    static bool tried = false;
+    const bool rgba = out->format == VK_FORMAT_R16G16B16A16_SFLOAT;
+    if (out->format != VK_FORMAT_B10G11R11_UFLOAT_PACK32 && !(rgba && temporal && scene_tonemap_on())) return false;
+    struct Pipeline {
+        VkPipeline pipe = VK_NULL_HANDLE;
+        VkPipelineLayout layout = VK_NULL_HANDLE;
+        VkSampler linear = VK_NULL_HANDLE;
+        bool tried = false;
+    };
+    static Pipeline pipelines[2];
+    Pipeline& pipeline = pipelines[rgba ? 1 : 0];
+    auto& pipe = pipeline.pipe;
+    auto& layout = pipeline.layout;
+    auto& linear = pipeline.linear;
+    auto& tried = pipeline.tried;
     if (!tried) {
         tried = true;
         VkDescriptorSetLayoutBinding b[3] = {{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
@@ -8270,7 +8308,8 @@ static bool typed_upscale(VkCommandBuffer cmd, VkImageView input_view, VkImageVi
         pi.setLayoutCount = 1, pi.pSetLayouts = &set, pi.pushConstantRangeCount = 1, pi.pPushConstantRanges = &pr;
         vkCreatePipelineLayout(dev.device, &pi, nullptr, &layout);
         VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-        mi.codeSize = sizeof TAAU_UPSCALE_COMP_SPV, mi.pCode = TAAU_UPSCALE_COMP_SPV;
+        mi.codeSize = rgba ? sizeof TAAU_UPSCALE_RGBA_COMP_SPV : sizeof TAAU_UPSCALE_COMP_SPV;
+        mi.pCode = rgba ? TAAU_UPSCALE_RGBA_COMP_SPV : TAAU_UPSCALE_COMP_SPV;
         VkShaderModule m{};
         IntelDriverGate gate;
         if (guarded_shader_module(&mi, &m) != VK_SUCCESS) m = VK_NULL_HANDLE;
@@ -8284,7 +8323,7 @@ static bool typed_upscale(VkCommandBuffer cmd, VkImageView input_view, VkImageVi
         si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         si.maxLod = 0.25f;
         vkCreateSampler(dev.device, &si, nullptr, &linear);
-        logf("vk: typed upscale helper %s%s", keys,
+        logf("vk: typed upscale helper %s, %s output%s", keys, rgba ? "RGBA16F" : "packed",
              pipe ? "" : ": its pipeline was not made");
     }
     if (!pipe) return false;
@@ -8296,6 +8335,7 @@ static bool typed_upscale(VkCommandBuffer cmd, VkImageView input_view, VkImageVi
         VmaAllocation memory = nullptr;
         VkImageView view = VK_NULL_HANDLE;
         uint32_t width = 0, height = 0;
+        VkFormat format = VK_FORMAT_UNDEFINED;
         uint64_t frame = 0;
     };
     static History histories[2];
@@ -8320,12 +8360,12 @@ static bool typed_upscale(VkCommandBuffer cmd, VkImageView input_view, VkImageVi
         destroy_image(old_hist[i].image, old_hist[i].mem);
         old_hist.erase(old_hist.begin() + (ptrdiff_t)i);
     }
-    if (hist_w != size[0] || hist_h != size[1]) {
+    if (hist_w != size[0] || hist_h != size[1] || history.format != out->format) {
         // (the one before is kept for the while: work in flight may still use it)
         if (hist && !leak) old_hist.push_back({hist, hist_mem, hist_view, texture_frame_no()});
         hist = VK_NULL_HANDLE, hist_view = VK_NULL_HANDLE;
         VkImageCreateInfo ic{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-        ic.imageType = VK_IMAGE_TYPE_2D, ic.format = VK_FORMAT_B10G11R11_UFLOAT_PACK32;
+        ic.imageType = VK_IMAGE_TYPE_2D, ic.format = out->format;
         ic.extent = {size[0], size[1], 1}, ic.mipLevels = 1, ic.arrayLayers = 1, ic.samples = VK_SAMPLE_COUNT_1_BIT;
         ic.tiling = VK_IMAGE_TILING_OPTIMAL, ic.usage = VK_IMAGE_USAGE_STORAGE_BIT;
         if (!create_image(ic, hist, hist_mem)) { hist = VK_NULL_HANDLE; return false; }
@@ -8343,7 +8383,7 @@ static bool typed_upscale(VkCommandBuffer cmd, VkImageView input_view, VkImageVi
         VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
         di.imageMemoryBarrierCount = 1, di.pImageMemoryBarriers = &ib;
         vkCmdPipelineBarrier2(cmd, &di);
-        hist_w = size[0], hist_h = size[1], hist_frame = 0;
+        hist_w = size[0], hist_h = size[1], history.format = out->format, hist_frame = 0;
     }
     // (bounded when the history is last frame's or so: a pause of the TAAU, a menu, starts again unbounded)
     const uint64_t now_frame = texture_frame_no();
@@ -8392,7 +8432,12 @@ bool fsr3_stand_in(VkCommandBuffer cmd, const NvnState& s, const Program& p) {
     uint32_t level = 0;
     const uint32_t out_handle = handle_of(s, st, od, 0);
     if (out_handle) texture_view_of(out_handle, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Storage, image_format(od.format), &out, &level);
-    return fsr3_upscale(cmd, p.key, gameplay_network(p.key), in, dw().imgs[0].imageView, out, dw().imgs[ntex].imageView, level);
+    VkImageView input_view = dw().imgs[0].imageView, output_view = dw().imgs[ntex].imageView;
+    if (in && out && fsr3_inputs::colour_pair(in->format, out->format) && out->format == VK_FORMAT_R16G16B16A16_SFLOAT) {
+        input_view = texture_view_of(in_handle, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Sample, VK_FORMAT_R16G16B16A16_SFLOAT);
+        output_view = texture_view_of(out_handle, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Storage, VK_FORMAT_R16G16B16A16_SFLOAT);
+    }
+    return fsr3_upscale(cmd, p.key, gameplay_network(p.key), in, input_view, out, output_view, level);
 }
 /// (longshot) A temporal upscaler (NVIDIA DLSS, AMD FSR 4: vk_temporal.cpp) in place of the gameplay upscale network, when
 /// one is on and its inputs are as expected: the network's input as it samples it, its output's storage view
@@ -8439,7 +8484,8 @@ static bool temporal_rejected_network(VkCommandBuffer cmd, uint64_t key, Texture
     end_pass(cmd);
     VkFormat in_format = VK_FORMAT_UNDEFINED, out_format = VK_FORMAT_UNDEFINED;
     const VkImageView in_view = texture_view(src, in, nullptr, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Sample, &in_format);
-    const bool rgba_pair = temporal_colour_pair(src->format, dst->format) && dst->format == VK_FORMAT_R16G16B16A16_SFLOAT;
+    const bool rgba_pair = (temporal_colour_pair(src->format, dst->format) || fsr3_inputs::colour_pair(src->format, dst->format)) &&
+                           dst->format == VK_FORMAT_R16G16B16A16_SFLOAT;
     const VkImageView out_view = texture_view(dst, out, nullptr, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Storage, &out_format,
                                               rgba_pair ? VK_FORMAT_R16G16B16A16_SFLOAT : VK_FORMAT_B10G11R11_UFLOAT_PACK32);
     // (the gameplay networks' own formats: their input is the square root of the scene colour, which the fixed shares' networks
@@ -8447,7 +8493,8 @@ static bool temporal_rejected_network(VkCommandBuffer cmd, uint64_t key, Texture
     // both are what the temporal upscaler's prep pass takes. The movies' (RGBA8) are not the scene)
     const bool packed_pair = out_format == VK_FORMAT_B10G11R11_UFLOAT_PACK32 &&
                              (in_format == VK_FORMAT_B10G11R11_UFLOAT_PACK32 || in_format == VK_FORMAT_E5B9G9R9_UFLOAT_PACK32);
-    if (!in_view || !out_view || (!packed_pair && !temporal_colour_pair(in_format, out_format)))
+    if (!in_view || !out_view || (!packed_pair && !temporal_colour_pair(in_format, out_format) &&
+                                !fsr3_inputs::colour_pair(in_format, out_format)))
         return false;
     // (FSR 3.1 first, as fsr3_stand_in comes before temporal_stand_in: its upscale, or its frame interpolation's inputs while
     // another upscaler draws. Without it, on a card that leaves these networks out, FSR 3.1's own Render resolution steps
@@ -8482,9 +8529,22 @@ bool taau_stand_in(VkCommandBuffer cmd, const NvnState& s, const Program& p) {
     const uint32_t handle = handle_of(s, st, od, 0);
     if (!handle) return false;
     texture_view_of(handle, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Storage, image_format(od.format), &out, &level);
-    if (!out || out->format != VK_FORMAT_B10G11R11_UFLOAT_PACK32) return false;
+    if (!out) return false;
+    VkImageView input_view = dw().imgs[0].imageView, output_view = dw().imgs[ntex].imageView;
+    if (out->format == VK_FORMAT_R16G16B16A16_SFLOAT && scene_tonemap_on()) {
+        const uint32_t input_handle = handle_of(s, st, st.info.texture_descriptors[0], 0);
+        Texture* input = nullptr;
+        if (!input_handle) return false;
+        texture_view_of(input_handle, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Sample, VK_FORMAT_UNDEFINED, &input);
+        if (!input || input->format != VK_FORMAT_R16G16B16A16_SFLOAT) return false;
+        input_view = texture_view_of(input_handle, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Sample, VK_FORMAT_R16G16B16A16_SFLOAT);
+        output_view = texture_view_of(handle, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Storage, VK_FORMAT_R16G16B16A16_SFLOAT);
+        if (!input_view || !output_view) return false;
+    } else if (out->format != VK_FORMAT_B10G11R11_UFLOAT_PACK32) {
+        return false;
+    }
     const char* keys = getenv("RX_VK_TAAU_KEYS") ? getenv("RX_VK_TAAU_KEYS") : "fd029a317a9a4b94";
-    return typed_upscale(cmd, dw().imgs[0].imageView, dw().imgs[ntex].imageView, out, level, p.key, keys, true);
+    return typed_upscale(cmd, input_view, output_view, out, level, p.key, keys, true);
 }
 
 bool precompile_wanted() {
@@ -8498,9 +8558,11 @@ bool precompile_wanted() {
 }
 namespace {
 std::atomic<bool> prepare_halt{false};
+std::atomic<bool> prepare_saving_now{false};   // (precompile_warm: the pipeline cache written out, prepare_saving)
 }
 void prepare_stop() { prepare_halt.store(true); }
 bool prepare_stopped() { return prepare_halt.load(std::memory_order_relaxed); }
+bool prepare_saving() { return prepare_saving_now.load(std::memory_order_relaxed); }
 std::string prepared_path() { return cache_path("longshot_prepared.bin"); }
 // (longshot) What the last prepare here was made for, in longshot_prepared.bin: the translator (program_cache_stamp), and since the
 // seed grows apart from it (4221050d: networks, the movie upscaler, the particle sets, 19 compute programs more) the seed it went
@@ -8672,7 +8734,9 @@ bool prepare_is_update() {
 /// before the stamp says they are: a start that ended before the save would otherwise find them cold for good)
 bool pcache_saved_now() {
     size_t before = 0;
-    if (!pcache) return false;
+    // (RX_VK_PCACHE_LOAD=0: the save does nothing, and the file left from before, read against the cache that started empty,
+    // would pass for it: the record is not written as done)
+    if (!pcache || pcache_no_save) return false;
     {
         PcacheFetch fetch(-1);
         if (vkGetPipelineCacheData(dev.device, pcache, &before, nullptr) != VK_SUCCESS) return false;
@@ -9010,6 +9074,10 @@ void precompile_warm(void (*progress)(size_t done, size_t total)) {
         list.push_back(&r);
     }
     const size_t total = refs.size();
+    // (the compute pipelines after them, every kept compute program's, counted in the progress from the start: reported as the
+    // notes' total once those were done, the screen read "32,623 / 32,623", 100%, "a few seconds left" while they were built, #714)
+    const std::vector<uint64_t> computes = program_cache_compute_keys();
+    const size_t all_n = total + computes.size();
     std::atomic<size_t> done{0}, built{0}, failed{0}, no_program{0};
     const std::string notes_path = pipe_notes_path();
     auto log_at = std::chrono::steady_clock::now() + std::chrono::seconds(10);
@@ -9034,16 +9102,15 @@ void precompile_warm(void (*progress)(size_t done, size_t total)) {
         no_program += list.size() - std::min(found, list.size());
         done += list.size();
     }, [] { return prepare_stopped(); }, [&](size_t) {
-        if (progress) progress(done.load(), total);
+        if (progress) progress(done.load(), all_n);
         prepare_progress_log("noted pipelines", done.load(), total, t0, log_at);
     });
     // (the compute pipelines too, every kept compute program's: a first start in start mode makes them all, and a load at a
     // create call only asks the caches, so on a new install a first dispatch found none (666 in one first session). Built
-    // into the cache and let go, as the noted ones)
-    const std::vector<uint64_t> computes = done == total && !prepare_stopped() ? program_cache_compute_keys() : std::vector<uint64_t>{};
+    // into the cache and let go, as the noted ones; only once those are all done)
     std::atomic<size_t> computes_done{0}, computes_built{0}, computes_failed{0};
     const auto c0 = std::chrono::steady_clock::now();
-    warm_bounded::run(computes.size(), threads, [&](size_t i) {
+    warm_bounded::run(done == total && !prepare_stopped() ? computes.size() : 0, threads, [&](size_t i) {
         static thread_local bool off = (ub_thread_off(), true);
         (void)off;
         program_cache_borrow(computes[i], [&](Program& p) {
@@ -9061,13 +9128,20 @@ void precompile_warm(void (*progress)(size_t done, size_t total)) {
         });
         computes_done++;
     }, [] { return prepare_stopped(); }, [&](size_t) {
-        if (progress) progress(total, total);
+        if (progress) progress(total + computes_done.load(), all_n);
         prepare_progress_log("compute pipelines", computes_done.load(), computes.size(), c0, log_at);
     });
     const bool all = done == total && computes_done == computes.size();
     static const bool prepare_only = env_on("LONGSHOT_PREPARE_ONLY");   // (a --prepare-shaders run: vk_main.cpp)
     if (all && !prepare_stopped()) {
+        // (the whole cache written, a GB and more, with every pipeline counted: the start-up screen says so, not "a few seconds
+        // left", #714)
+        const auto s0 = std::chrono::steady_clock::now();
+        prepare_saving_now.store(true, std::memory_order_relaxed);
         pipeline_cache_save(true);   // (in the file before the marker says they are there)
+        prepare_saving_now.store(false, std::memory_order_relaxed);
+        logf("vk: precompile: the pipeline cache written out in %.1f s",
+             std::chrono::duration<double>(std::chrono::steady_clock::now() - s0).count());
         // (not by the preparation's own process: warm_bounded.h leaves_marker)
         if (warm_bounded::leaves_marker(prepare_only, all, prepare_stopped())) precompile_built_write(total);
         remove(warming.c_str());
@@ -9404,8 +9478,9 @@ bool predict_pending() {
     fclose(f);
     return true;
 }
-// (longshot) Compile shaders, the Builder's, make_game.py's and the launcher's choice (compile_shaders= in longshot_options.ini:
-// 0 Most, the default; 1 All; any other number is Most). All builds the predicted pipelines too: about 50,000 for the driver's own cache, over 40 % more time (a full preparation on an RTX
+// (longshot) Compile shaders, the Builder's, make_game.py's and the launcher's choice (compile_shaders= in the game folder's
+// longshot_options.ini, where make_game.py writes it: the build's, not the player's settings in the user folder, vk_paths.h
+// options_path; 0 Most, the default; 1 All; any other number is Most). All builds the predicted pipelines too: about 50,000 for the driver's own cache, over 40 % more time (a full preparation on an RTX
 // 3090 with 24 threads: 415 and 413 s against 292 s without them), for pipelines play almost never draws ("vk: predicted
 // pipelines met in play"). RX_VK_COMPILE_SHADERS=all or most over the file (the game's --compile-shaders sets it, host/hos_main.c).
 // Asked only where a prediction would run: on Most it says so in the log, and takes away what an earlier preparation on All left
