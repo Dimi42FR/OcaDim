@@ -3240,12 +3240,19 @@ VkImageView texture_view_of(uint32_t handle, VkImageViewType want, ViewUse use, 
                      has_view && v.set_format ? v.format : 0, has_view && v.set_target ? v.target : -1, (int)want, (int)use);
         }
     }
-    handle_hits()[key] = {view, tex, level, version, tex ? tex->serial : 0, tex ? tex->view_gen.load(std::memory_order_relaxed) : 0,
-                          use == ViewUse::Sample || use == ViewUse::Storage, texture_epoch()};
-    if (vf) vf->key = key, vf->view = view, vf->tex = tex, vf->level = level, vf->version = version,
-            vf->serial = tex ? tex->serial : 0,
-            vf->view_gen = tex ? tex->view_gen.load(std::memory_order_relaxed) : 0,
-            vf->tex_epoch = texture_epoch(), vf->sampling = use == ViewUse::Sample || use == ViewUse::Storage;
+    // (longshot, OcaDim) cached only when a texture came out of it: texture_get's touch defers a new ASTC texture's
+    // upload when the frame's took its budget, and returns null — the draw samples the dummy. The global destroy
+    // generation's bump at the frame's end used to make the next look resolve it again, and the texture's own
+    // generations do not move for a deferral: caching the null would keep the dummy bound until the game happened to
+    // re-register the slot (the textures jumping black, h24). Not cached, the next look resolves it, and its upload
+    if (tex) {
+        handle_hits()[key] = {view, tex, level, version, tex->serial, tex->view_gen.load(std::memory_order_relaxed),
+                              use == ViewUse::Sample || use == ViewUse::Storage, texture_epoch()};
+        if (vf) vf->key = key, vf->view = view, vf->tex = tex, vf->level = level, vf->version = version,
+                vf->serial = tex->serial,
+                vf->view_gen = tex->view_gen.load(std::memory_order_relaxed),
+                vf->tex_epoch = texture_epoch(), vf->sampling = use == ViewUse::Sample || use == ViewUse::Storage;
+    }
     if (tex_out) *tex_out = tex;
     if (level_out) *level_out = level;
     return view;
