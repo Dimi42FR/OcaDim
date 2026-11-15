@@ -159,6 +159,33 @@ sealed class Setup
         "-I", "nx2/make_game.py", "--prepare", "--work", WorkDir, "--log", LogPath,
     };
 
+    /// The game exe's own icon: nx2/make_icon.py writes work's longshot.res from OcaDim's .ico, and nx2/build.py links
+    /// it into longshot.exe (the taskbar, Alt-Tab and the shortcut when it has no icon of its own). A missing Pillow or
+    /// .ico only means the exe keeps its generic icon: the build goes on.
+    public void MakeIcon(string source, Action<string> line)
+    {
+        var picture = Path.Combine(source, "assets", "branding", "ocadim.ico");
+        if (!File.Exists(picture)) return;
+        try
+        {
+            Directory.CreateDirectory(WorkDir);
+            var si = StartInfo(source, new[] { "-I", "nx2/make_icon.py", picture, WorkDir });
+            si.RedirectStandardOutput = true;
+            si.RedirectStandardError = true;
+            using var p = Process.Start(si);
+            if (p == null) return;
+            var said = p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd();
+            p.WaitForExit(30000);
+            var res = Path.Combine(WorkDir, "longshot.res");
+            if (File.Exists(res)) line("Icône d'OcaDim : " + res + " (" + new FileInfo(res).Length / 1024 + " Ko)");
+            else line("Icône d'OcaDim : non faite (" + said.Trim().Split('\n').LastOrDefault() + ")");
+        }
+        catch (Exception e) when (e is IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            line("Icône d'OcaDim : non faite (" + e.Message + ")");
+        }
+    }
+
     /// <summary>make_game.py --check: the program and the build read and refused before anything is built.</summary>
     public async Task<CheckResult> CheckAsync(string source, string work, Action<string> line, CancellationToken cancel)
     {

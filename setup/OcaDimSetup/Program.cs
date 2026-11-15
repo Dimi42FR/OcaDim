@@ -25,6 +25,20 @@ static class Program
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
+        if (args.Length > 1 && args[0] == "--shot")
+        {
+            // (a page of the wizard as a PNG, without a window: the README's pictures and a look before shipping)
+            using var form = new WizardForm { Opacity = 0, ShowInTaskbar = false };
+            if (args.Length > 2) form.ShowPreview(args[2]);
+            form.Show();
+            Application.DoEvents();
+            using var shot = new Bitmap(form.Width, form.Height);
+            form.DrawToBitmap(shot, new Rectangle(0, 0, form.Width, form.Height));
+            shot.Save(args[1], System.Drawing.Imaging.ImageFormat.Png);
+            File.WriteAllLines(args[1] + ".txt", form.BoundsDump());
+            form.Hide();
+            return 0;
+        }
         Application.Run(new WizardForm());
         return 0;
     }
@@ -114,6 +128,7 @@ static class Cli
             setup.EnsureInstallFolder();
             using var guard = BuildLock.Take(setup.ToolsDir);
             writer.Info("build : " + (update ? "mise à jour" : "installation"));
+            setup.MakeIcon(source, writer.Line);
             var built = setup.BuildAsync(source, update, (fraction, text) => writer.Progress(fraction, text), writer.Line, cancel.Token)
                               .GetAwaiter().GetResult();
             if (built.Code != 0)

@@ -33,7 +33,7 @@ static class Shell
     public static void MakeShortcuts(Setup setup, bool desktop, bool startMenu)
     {
         var exe = Path.Combine(setup.InstallDir, Setup.GameExe);
-        var icon = exe;
+        var icon = EnsureIcon(setup) ?? exe;
         if (desktop)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(DesktopShortcut)!);
@@ -44,6 +44,23 @@ static class Shell
             Directory.CreateDirectory(StartMenuFolder);
             Shortcut(StartMenuShortcut, exe, setup.InstallDir, icon, Setup.Name + " " + Setup.Version);
         }
+    }
+
+    /// OcaDim.ico beside the game (the emblem the setup carries), so the desktop and Start-menu entries show OcaDim's
+    /// mark and not the game exe's own resource (which is generic: nx2/build.py links one only when work/longshot.res is
+    /// there). Null when it cannot be written: the shortcut takes the exe's icon then.
+    static string? EnsureIcon(Setup setup)
+    {
+        try
+        {
+            var path = Path.Combine(setup.InstallDir, "OcaDim.ico");
+            using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("OcaDimSetup.ocadim.ico");
+            if (stream == null) return null;
+            Directory.CreateDirectory(setup.InstallDir);
+            using (var file = File.Create(path)) stream.CopyTo(file);
+            return path;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
     }
 
     public static void RemoveShortcuts()

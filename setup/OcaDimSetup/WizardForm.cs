@@ -34,15 +34,20 @@ sealed class WizardForm : Form
     ProgressBar? bar;
     Label? stageLabel, percentLabel, elapsedLabel, chosenLabel, verifyLabel, errorLabel;
 
-    int ContentWidth => ClientSize.Width - 108;
+    int ContentWidth => Math.Max(560, ClientSize.Width - 96);
 
     public WizardForm()
     {
         Text = Setup.Name + " Setup " + Setup.Version;
-        ClientSize = new Size(900, 660);
+        var area = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1280, 800);
+        var width = Math.Min(900, area.Width - 40);
+        var height = Math.Min(660, area.Height - 40);
+        ClientSize = new Size(width, height);
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
-        StartPosition = FormStartPosition.CenterScreen;
+        StartPosition = FormStartPosition.Manual;
+        Location = new Point(area.Left + Math.Max(0, (area.Width - (width + 16)) / 2),
+                             area.Top + Math.Max(0, (area.Height - (height + 39)) / 2));
         BackColor = Ink;
         ForeColor = Paper;
         Font = new Font("Segoe UI", 9.75f);
@@ -50,15 +55,15 @@ sealed class WizardForm : Form
         catch (Exception) { }
 
         var header = new Panel { Dock = DockStyle.Top, Height = 104, BackColor = Ink };
-        var emblem = new PictureBox { Left = 32, Top = 14, Width = 64, Height = 77, SizeMode = PictureBoxSizeMode.Zoom, Image = Emblem() };
+        var emblem = new PictureBox { Left = 32, Top = 14, Width = 72, Height = 72, SizeMode = PictureBoxSizeMode.Zoom, Image = Emblem() };
         var wordmark = new Label
         {
-            Text = "OcaDim", Left = 116, Top = 18, AutoSize = true, ForeColor = Gold,
+            Text = "OcaDim", Left = 124, Top = 18, AutoSize = true, ForeColor = Gold,
             Font = new Font("Segoe UI Semibold", 26f, FontStyle.Bold),
         };
         var sub = new Label
         {
-            Text = "le port natif · " + Setup.Version, Left = 120, Top = 66, AutoSize = true, ForeColor = Muted,
+            Text = "le port natif · " + Setup.Version, Left = 128, Top = 66, AutoSize = true, ForeColor = Muted,
             Font = new Font("Segoe UI", 10f),
         };
         header.Controls.AddRange(new Control[] { emblem, wordmark, sub });
@@ -80,20 +85,62 @@ sealed class WizardForm : Form
         Controls.Add(footer);
 
         clock.Tick += (_, _) => Tick();
+        PlaceFooter();
         ShowLauncherOrWelcome();
+    }
+
+    void PlaceFooter()
+    {
+        next.Left = ClientSize.Width - 32 - next.Width;
+        back.Left = next.Left - 12 - back.Width;
+        status.MaximumSize = new Size(Math.Max(200, back.Left - 48), 0);
+    }
+
+    protected override void OnResize(EventArgs e)
+    {
+        base.OnResize(e);
+        if (next != null && back != null && status != null) PlaceFooter();
     }
 
     static Image? Emblem()
     {
         try
         {
-            using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("OcaDimSetup.longshot.png");
+            using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("OcaDimSetup.ocadim.ico");
+            if (stream != null) return new Icon(stream, 64, 64).ToBitmap();
+        }
+        catch (Exception) { }
+        try { return Icon.ExtractAssociatedIcon(Application.ExecutablePath)?.ToBitmap(); }
+        catch (Exception) { return null; }
+    }
+
+    static Image? Artwork()
+    {
+        try
+        {
+            using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("OcaDimSetup.artwork.png");
             return stream == null ? null : Image.FromStream(stream);
         }
         catch (Exception) { return null; }
     }
 
     // ---------------------------------------------------------------- pages
+
+    /// A page by name, for --shot (Program.cs): welcome, game, folder, launcher.
+    public void ShowPreview(string page)
+    {
+        switch (page)
+        {
+            case "game": ShowGame(); break;
+            case "folder": ShowFolder(); break;
+            case "launcher": ShowLauncher(); break;
+            default: ShowWelcome(); break;
+        }
+    }
+
+    internal IEnumerable<string> BoundsDump() => body.Controls.Cast<Control>()
+        .Select(c => string.Format("{0} L={1} T={2} W={3} H={4} B={5} : {6}",
+            c.GetType().Name, c.Left, c.Top, c.Width, c.Height, c.Bottom, c.Text.Replace('\n', ' ')));
 
     void ShowLauncherOrWelcome()
     {
@@ -104,9 +151,12 @@ sealed class WizardForm : Form
     void ShowWelcome()
     {
         Begin(Page.Welcome, "Bienvenue");
+        var hero = Artwork();
+        var bannerWidth = Math.Min(ContentWidth, 460);
         Add(new PictureBox
         {
-            Image = Emblem(), SizeMode = PictureBoxSizeMode.Zoom, Width = 132, Height = 160,
+            Image = hero, SizeMode = PictureBoxSizeMode.Zoom, Width = bannerWidth,
+            Height = hero == null ? 200 : (int)(bannerWidth * hero.Height / (double)hero.Width),
         });
         Add(Heading("OcaDim " + Setup.Version));
         Add(Paragraph(
@@ -124,18 +174,13 @@ sealed class WizardForm : Form
         Add(Heading("Le jeu"));
         Add(Paragraph("Choisissez votre fichier .nup, ou les deux dossiers romfs et exefs. OcaDim lit le programme et le " +
                       "build avant de compiler, et refuse tout autre jeu sans rien créer."));
-        var row = new FlowLayoutPanel
-        {
-            FlowDirection = FlowDirection.LeftToRight, AutoSize = true, WrapContents = false,
-        };
         var nup = GoldButton("Choisir un .nup…");
         nup.Width = 190; nup.Height = 38;
         nup.Click += (_, _) => ChooseNup();
         var folders = QuietButton("Choisir romfs + exefs…");
-        folders.Width = 210; folders.Height = 38; folders.Margin = new Padding(12, 0, 0, 0);
+        folders.Width = 210; folders.Height = 38;
         folders.Click += (_, _) => ChooseFolders();
-        row.Controls.AddRange(new Control[] { nup, folders });
-        Add(row);
+        Add(Row(nup, folders));
 
         chosenLabel = Paragraph(setup.HasGame ? setup.GameLabel : "Aucun jeu choisi.");
         chosenLabel.ForeColor = Gold;
@@ -157,10 +202,6 @@ sealed class WizardForm : Form
         var label = Paragraph("Dossier d'installation");
         label.ForeColor = Muted;
         Add(label);
-        var row = new FlowLayoutPanel
-        {
-            FlowDirection = FlowDirection.LeftToRight, AutoSize = true, WrapContents = false,
-        };
         var box = new TextBox
         {
             Text = setup.InstallDir, Width = ContentWidth - 160, BackColor = Card, ForeColor = Paper,
@@ -168,14 +209,13 @@ sealed class WizardForm : Form
         };
         box.TextChanged += (_, _) => setup.InstallDir = box.Text.Trim();
         var browse = QuietButton("Parcourir…");
-        browse.Width = 132; browse.Margin = new Padding(12, 0, 0, 0);
+        browse.Width = 132;
         browse.Click += (_, _) =>
         {
             using var d = new FolderBrowserDialog { Description = "Dossier où installer OcaDim", SelectedPath = setup.InstallDir };
             if (d.ShowDialog(this) == DialogResult.OK) box.Text = d.SelectedPath;
         };
-        row.Controls.AddRange(new Control[] { box, browse });
-        Add(row);
+        Add(Row(box, browse));
         var tools = Paragraph("Outils : " + Path.Combine(setup.InstallDir, "tools") + "   (~250 Mo, téléchargés une fois)");
         tools.ForeColor = Muted;
         Add(tools);
@@ -232,21 +272,16 @@ sealed class WizardForm : Form
         Add(Paragraph(Setup.Name + " " + setup.InstalledVersion() + " est installé dans " + setup.InstallDir + "."));
         Add(Paragraph("Le jeu se lance par le raccourci, ou par le bouton ci-dessous. Vos réglages (longshot_options.ini) et " +
                       "vos sauvegardes vivent dans le dossier du jeu."));
-        var row = new FlowLayoutPanel
-        {
-            FlowDirection = FlowDirection.LeftToRight, AutoSize = true, WrapContents = false,
-        };
         var play = GoldButton("Jouer");
         play.Width = 150; play.Height = 40;
         play.Click += (_, _) => Shell.Play(setup);
         var open = QuietButton("Ouvrir le dossier");
-        open.Width = 180; open.Height = 40; open.Margin = new Padding(12, 0, 0, 0);
+        open.Width = 180; open.Height = 40;
         open.Click += (_, _) => Shell.OpenFolder(setup.InstallDir);
         var close = QuietButton("Fermer");
-        close.Width = 110; close.Height = 40; close.Margin = new Padding(12, 0, 0, 0);
+        close.Width = 110; close.Height = 40;
         close.Click += (_, _) => Close();
-        row.Controls.AddRange(new Control[] { play, open, close });
-        Add(row);
+        Add(Row(play, open, close));
         SetFooter("", "Jouer", false, false);
     }
 
@@ -257,15 +292,11 @@ sealed class WizardForm : Form
         Add(Paragraph("Le jeu est installé dans " + setup.InstallDir + "."));
         Add(Paragraph("Mettre à jour recompile le jeu dans le même dossier, à partir des fichiers qu'il garde : vos réglages " +
                       "et vos sauvegardes ne sont pas touchés."));
-        var row = new FlowLayoutPanel
-        {
-            FlowDirection = FlowDirection.LeftToRight, AutoSize = true, WrapContents = false,
-        };
         var play = GoldButton("Jouer");
         play.Width = 150; play.Height = 40;
         play.Click += (_, _) => Shell.Play(setup);
         var update = QuietButton("Mettre à jour");
-        update.Width = 170; update.Height = 40; update.Margin = new Padding(12, 0, 0, 0);
+        update.Width = 170; update.Height = 40;
         update.Click += (_, _) =>
         {
             if (setup.GameIsRunning())
@@ -281,10 +312,9 @@ sealed class WizardForm : Form
             ShowBuild(true);
         };
         var open = QuietButton("Ouvrir le dossier");
-        open.Width = 170; open.Height = 40; open.Margin = new Padding(12, 0, 0, 0);
+        open.Width = 170; open.Height = 40;
         open.Click += (_, _) => Shell.OpenFolder(setup.InstallDir);
-        row.Controls.AddRange(new Control[] { play, update, open });
-        Add(row);
+        Add(Row(play, update, open));
         var uninstall = QuietButton("Désinstaller OcaDim");
         uninstall.ForeColor = Alarm;
         uninstall.Width = 210;
@@ -327,6 +357,7 @@ sealed class WizardForm : Form
             Line(verification);
 
             Stage(update ? "Mise à jour" : "Compilation", 0.18);
+            setup.MakeIcon(source, Line);
             var built = await setup.BuildAsync(source, update, (fraction, text) =>
             {
                 if (!token.IsCancellationRequested) Stage(text.Length > 0 ? text : "Compilation", 0.18 + 0.82 * fraction);
@@ -518,8 +549,25 @@ sealed class WizardForm : Form
         if (!control.AutoSize) control.Width = Math.Min(control.Width, ContentWidth);
         var top = body.Controls.Count == 0 ? 6 : body.Controls.Cast<Control>().Max(c => c.Bottom) + 8;
         body.Controls.Add(control);
-        control.Left = 0;
+        control.Left = 36;
         control.Top = top;
+    }
+
+    /// A row of controls side by side (a Panel, not a FlowLayoutPanel: that one kept its default 100 px height and
+    /// left a hole under each row of buttons)
+    Panel Row(params Control[] items)
+    {
+        var row = new Panel { Height = items.Max(c => c.Height) + 2, BackColor = Color.Transparent };
+        var x = 0;
+        foreach (var item in items)
+        {
+            item.Left = x;
+            item.Top = 0;
+            row.Controls.Add(item);
+            x += item.Width + 12;
+        }
+        row.Width = Math.Max(0, x - 12);
+        return row;
     }
 
     Label Heading(string text) => new()

@@ -27,9 +27,11 @@
     <DebugType>none</DebugType>
   </PropertyGroup>
 
-  <!-- The emblem the welcome page draws (assets/branding/longshot.png, the OcaDim shield) -->
+  <!-- OcaDim's own marks: the artwork Dimi42FR supplied (the welcome page's hero) and the emblem the .ico carries (the
+       header). Nothing of Longshot's own graphics is in the setup. -->
   <ItemGroup>
-    <EmbeddedResource Include="..\..\assets\branding\longshot.png" LogicalName="OcaDimSetup.longshot.png" />
+    <EmbeddedResource Include="..\..\assets\branding\ocadim-setup.png" LogicalName="OcaDimSetup.artwork.png" />
+    <EmbeddedResource Include="..\..\assets\branding\ocadim.ico" LogicalName="OcaDimSetup.ocadim.ico" />
   </ItemGroup>
 
 </Project>
