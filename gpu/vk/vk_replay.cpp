@@ -35,6 +35,7 @@
 #include "vk_reflex.h"
 #include "vk_antilag.h"
 #include "vk_draw.h"
+#include "par_scale.h"   // (longshot: the workers and the prefetch sized from the cores, when the switches say nothing)
 #include "vk_dump.h"
 #include "vk_paths.h"   // (log_path: the frame trace in the game folder's logs/)
 #include "vk_gprof.h"
@@ -1262,7 +1263,7 @@ bool desc_prefetch_on() {
     // not take a core the game needs; off under it. The switch still decides when it is set.
     static const bool on = [] {
         if (const char* e = getenv("RX_VK_DESC_PREFETCH")) return atoi(e) != 0;
-        return usable_cpus() >= 6;
+        return par::prefetch(usable_cpus());   // (gpu/vk/par_scale.h: its helper thread needs a core of its own)
     }();
     return on;
 }
@@ -2445,8 +2446,8 @@ int par_threads() {
     static const int n = [] {
         if (const char* e = getenv("RX_VK_PARALLEL")) return std::clamp(atoi(e), 0, 8);
         const unsigned c = usable_cpus();
-        if (c < 6) return 0;
-        const int w = (int)std::clamp(c / 4, 1u, 4u);
+        const int w = par::workers(c);   // (gpu/vk/par_scale.h, checked by tests/test_parallel_workers.py)
+        if (!w) return 0;
         logf("vk: parallel replay: %d worker(s) for the %u logical processors the process may run on (RX_VK_PARALLEL overrides)",
              w, c);
         return w;
