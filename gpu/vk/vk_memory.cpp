@@ -732,6 +732,7 @@ struct RangeWalk {
     }
 };
 void cap_view_bump();   // (defined with cap_view_gen below)
+void stamp_fence_bump();   // (defined with memory_stamp_gpu below)
 }
 const std::vector<std::pair<uint64_t, uint64_t>>& capture_ranges_merged();
 void shadow_written(const uint32_t* pages, int64_t n);   // (the write-back's diff, below: pages the captures took)
@@ -763,6 +764,7 @@ void memory_collect_written() {
     if (pages) host->free_pages(pages);
 }
 uint32_t memory_generation() {
+    stamp_fence_bump();   // (a reader keeps this generation: memory_stamp_gpu stamps a range again from now on)
     return gen_now;
 }
 bool memory_written_since(uint64_t guest, uint64_t size, uint32_t gen) {
@@ -803,9 +805,37 @@ bool gpu_pages_on() {
     static const bool v = env_on("RX_VK_GPU_PAGES");
     return v;
 }
+// (longshot) A storage buffer a program writes was stamped at every descriptor build that bound it (most of a frame's draws
+// rebuild theirs, and the culling dispatches bind the same written ranges one after another): the page loop, and
+// cap_view_bump, which made every thread's kept uniform overlays and capture reads go again. What a stamp tells is that the
+// pages are newer than every generation a reader kept before it (a texture's upload or drawing, a pool's sync, a page kept
+// for the GPU's records): once stamped, the range stays newer than all of those, and stamping it again changes no answer,
+// only numbers (other ranges' stamps in between too: no reader orders two pages by their generations), until a reader keeps
+// a generation again or a capture gives pages an entry of its own (stamp_fence counts both). A GPU write changes nothing in
+// guest memory or a capture either, which is what the reads kept read. So a thread's last stamps, by range: the same range
+// again before the fence moves is left as it was. RX_VK_WRITTEN_EACH=1: every one stamped, as before (and with
+// RX_VK_GPU_PAGES=1, whose table may drop pages between)
+namespace {
+std::atomic<uint64_t> stamp_fence{1};
+void stamp_fence_bump() {
+    stamp_fence.fetch_add(1, std::memory_order_relaxed);
+}
+struct StampSeen {
+    uint64_t guest = 0, size = 0, fence = 0;
+};
+thread_local StampSeen stamp_seen[256];
+bool stamp_seen_hit(const StampSeen& s, uint64_t guest, uint64_t size, uint64_t fence) {
+    return size && s.guest == guest && s.size == size && s.fence == fence;
+}
+} // namespace
 void memory_stamp_gpu(uint64_t guest, uint64_t size) {
     if (!size) return;
+    static const bool each = env_on("RX_VK_WRITTEN_EACH");
+    StampSeen& seen = stamp_seen[((guest ^ size * 0x9E3779B97F4A7C15ull) * 0x9E3779B97F4A7C15ull) >> 56];
+    const uint64_t fence = stamp_fence.load(std::memory_order_relaxed);   // (before the stamp: a reader during it moves it)
+    if (!each && !gpu_pages_on() && stamp_seen_hit(seen, guest, size, fence)) return;
     memory_stamp(guest, size);
+    seen = {guest, size, fence};
     if (!gpu_pages_on()) return;
     std::lock_guard lk(gpu_pages_mu);
     const uint64_t p0 = guest >> kPageShift, p1 = (guest + size - 1) >> kPageShift;
@@ -842,6 +872,7 @@ void memory_protect_gpu(uint64_t guest, uint64_t size) {
     const uint64_t p0 = guest >> kPageShift, p1 = (guest + size - 1) >> kPageShift;
     if (p1 - p0 > 16384) return;   // (64 MB at most: a guess past that is not the GPU's records)
     std::lock_guard lk(prot_mu);
+    stamp_fence_bump();   // (it keeps this generation)
     for (uint64_t p = p0; p <= p1; p++) prot_pages[(uint32_t)p] = gen_now;
     if (prot_pages.size() > 4000000) prot_pages.clear();
 }
@@ -2640,6 +2671,7 @@ bool take_capture(std::unique_ptr<Capture> c, uint64_t value, uint64_t completed
         cap_buf_retire(oldest);
     }
     uint32_t g = 0;
+    stamp_fence_bump();   // (its entries and the shadow's pages hold its generation: memory_stamp_gpu)
     if (!c->pages.empty()) {
         g = ++gen_now;
         for (uint32_t p : c->pages) stamp_page(p, g);
@@ -4119,6 +4151,34 @@ void note_direct_write(Pool& p, uint64_t off, uint64_t size) {   // (pools_mu he
         wb_pages_note(p.lo + off, p.lo + std::min(off + size, p.hi - p.lo), mem_rec_value, 0);
 }
 
+// (longshot) A storage buffer a program writes is bound again at most descriptor builds of a recording (the culling
+// dispatches' lists, one dispatch after another), and each binding took ParLock and the pools' lock to note again what the
+// first had noted: its write-back (the submission's are merged by range, memory_end_submission) and its write hazard
+// (memory_rb_refresh asks only whether one overlaps, from a recording ahead). A thread's written bindings of a pool's
+// mirror, by range, while their submission, recording (the pool's last_value), place in the queue (the hazard's segment)
+// and pools stand: the same binding again, the mirror still in use and synced for this place (no mirror_sync would run),
+// is the one found before, and nothing is noted. Not with RX_VK_WB_MAX_KB (a binding there takes the CPU's reads since the
+// last one), nor of a sparse mirror. RX_VK_WRITTEN_EACH=1: each looked up, as before
+struct WriteMemo {
+    uint64_t guest = 0, size = 0, epoch = 0, pools = 0, value = 0, seg = 0;
+    Pool* p = nullptr;
+    BufferRef ref{};
+};
+thread_local WriteMemo write_memo[256];
+void write_memo_keep(Pool& p, uint64_t guest, uint64_t size, const BufferRef& ref) {   // (pools_mu held)
+    static const bool each = env_on("RX_VK_WRITTEN_EACH");
+    if (each || !size || p.sparse || wb_cap()) return;
+    write_memo[bind_slot(guest, size)] = WriteMemo{guest, size, mirror_epoch, pools_gen.load(std::memory_order_relaxed),
+                                                   mem_rec_value, texture_segment(), &p, ref};
+}
+bool write_memo_hit(const WriteMemo& m, uint64_t guest, uint64_t size) {   // (without the lock, as a read's pool cache)
+    if (!m.p || !size || m.guest != guest || m.size != size || m.epoch != mirror_epoch || m.value != mem_rec_value ||
+        m.pools != pools_gen.load(std::memory_order_relaxed) || m.seg != texture_segment() || !mirror_upload)
+        return false;
+    const Pool& p = *m.p;   // (still in the table: pools_gen)
+    return p.mstate == Pool::MIRROR_ON && p.synced_epoch == mirror_epoch && p.sync_seg <= m.seg;
+}
+
 BufferRef gpu_buffer_bind(uint64_t gpu, uint64_t size, bool written) {
     if (written) texture_gpu_wrote(gpu, size);
     // (below 1 TB a GPU address is the guest address itself, and a pool holds the whole range or nothing: the host's
@@ -4130,7 +4190,8 @@ BufferRef gpu_buffer_bind(uint64_t gpu, uint64_t size, bool written) {
         guest = host->gpu_guest(gpu);
     }
     // (the same read, while that stamp still stands: the buffer and the offset are the ones found before. a miss
-    // runs the lookup below, including a mirror sync, and remembers what it returned. a write is not remembered)
+    // runs the lookup below, including a mirror sync, and remembers what it returned. a write is not remembered here:
+    // write_memo, above)
     auto remember = [&](BufferRef ref) {
         if (!written && ref.buffer != VK_NULL_HANDLE && size)
             bind_memo[bind_slot(guest, size)] = BindMemo{guest, size, gpu_bind_stamp(), ref};
@@ -4140,6 +4201,9 @@ BufferRef gpu_buffer_bind(uint64_t gpu, uint64_t size, bool written) {
         const BindMemo& m = bind_memo[bind_slot(guest, size)];
         if (bind_memo_hit(guest, size, gpu_bind_stamp(), m.guest, m.size, m.stamp, m.ref.buffer != VK_NULL_HANDLE))
             return m.ref;
+    } else if (const WriteMemo& m = write_memo[bind_slot(guest, size)]; write_memo_hit(m, guest, size)) {
+        tl_pools[(guest >> 16) & 1023] = {m.p, m.pools};   // (as the lookup leaves it)
+        return m.ref;
     }
     // (a read binding of a pool this thread found before and whose mirror is in use this submission or that has none,
     // without the lock: every thread's, the replay thread's too (each draw binds several uniform buffers: the pool's
@@ -4268,6 +4332,7 @@ BufferRef gpu_buffer_bind(uint64_t gpu, uint64_t size, bool written) {
             if (wb_skips_log()) wb_skip_note(wlo, whi);
         }
         rb_hazard_locked(p->lo + off, p->lo + std::min(off + size, p->hi - p->lo));   // (memory_rb_refresh)
+        write_memo_keep(*p, p->lo + off, size, {p->mirror, off, size, 0});   // (the same binding again: write_memo_hit)
     }
     return remember({p->mirror, off, size, 0});
 }
@@ -4979,6 +5044,7 @@ bool mirror_make(Pool& pool) {
         p->mstate = Pool::MIRROR_ON;
         pools_gen.fetch_add(1, std::memory_order_relaxed);   // (the binding's buffer changes: guest memory, then this mirror)
         p->synced_gen = gen_now;
+        stamp_fence_bump();   // (it keeps this generation: memory_stamp_gpu)
         p->synced_epoch = mirror_epoch;
         p->sync_seg = texture_segment();
         mirror_synced.push_back(p);
@@ -5939,6 +6005,7 @@ void memory_end_submission(VkCommandBuffer cmd, uint64_t part) {
     // (what this submission synced is current as of now: the GPU's own writes, stamped while it was recorded, are
     // in the mirror and written back; CPU writes collected at the next submission get a newer generation)
     for (Pool* p : mirror_synced) p->synced_gen = gen_now;
+    stamp_fence_bump();   // (they keep this generation: memory_stamp_gpu)
     mirror_synced.clear();
     mirror_upload = false;
 }

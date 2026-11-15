@@ -13,7 +13,8 @@ ENV_ON_H = str(Path(__file__).resolve().parents[1] / "gpu" / "vk" / "compat" / "
 ROOT = Path(__file__).resolve().parents[1]
 RUN_ALL_ARGS = ["--cxx", "{cxx}"]
 CASES = ("mirror_off", "upload_off", "refused", "virtual_write", "large_write", "no_recording",
-         "wait_disabled", "readonly", "mirror_pending", "mirror_on", "invalid_pool", "invalid_mapping")
+         "wait_disabled", "readonly", "mirror_pending", "mirror_on", "invalid_pool", "invalid_mapping",
+         "written_again", "written_again_each")
 
 
 def block(source, signature, semicolon=False):
@@ -64,6 +65,9 @@ def main():
         block(source, "struct GuestPool {", True), "std::vector<GuestPool> guest_pools;",
         block(source, "bool sparse_none("), block(source, "bool sparse_gaps_outside_pools("), block(source, "void sparse_touch("),
         block(source, "void sparse_want("),
+        # (a written binding of a mirror bound again: write_memo_keep, write_memo_hit)
+        block(source, "struct WriteMemo {", True), "thread_local WriteMemo write_memo[256];",
+        block(source, "void write_memo_keep("), block(source, "bool write_memo_hit("),
         block(source, "BufferRef gpu_buffer_bind(")])
     flags = subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS if os.name == "nt" else 0
     env = dict(os.environ)

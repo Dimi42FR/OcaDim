@@ -456,6 +456,19 @@ uint64_t completed_value = 0;
 // (GPU writes into guest memory by buffers: GPU address -> (end, the submission that wrote it last))
 std::map<uint64_t, std::pair<uint64_t, uint64_t>> gpu_wrote;
 std::mutex gpu_wrote_mu;
+// (longshot) A storage buffer a program writes is noted at every descriptor build that binds it (most draws rebuild theirs,
+// and the culling dispatches bind the same written ranges one after another): each note took the lock and a map lookup to
+// set the submission the range already had. A thread's last notes by range, with the map's count of changes (bumped under
+// the lock by every note that changed the map) as the note left it: the same range again in the same recording, with no
+// change to the map since, would only set what is there. RX_VK_WRITTEN_EACH=1: each note under the lock, as before
+std::atomic<uint64_t> gpu_wrote_changes{0};
+struct GpuWroteSeen {
+    uint64_t lo = 0, hi = 0, value = 0, changes = 0;
+};
+thread_local GpuWroteSeen gpu_wrote_seen[64];
+bool gpu_wrote_seen_hit(const GpuWroteSeen& s, uint64_t lo, uint64_t hi, uint64_t value, uint64_t changes) {
+    return s.hi && s.lo == lo && s.hi == hi && s.value == value && s.changes == changes;
+}
 }  // namespace
 bool gpu_wrote_into(Texture& tex);
 namespace {
@@ -3820,16 +3833,22 @@ void texture_gpu_wrote(uint64_t gpu, uint64_t size) {
                  (unsigned long long)lo, (unsigned long long)size, (unsigned long long)wlo, (unsigned long long)whi,
                  (unsigned long long)frame_no, (unsigned long long)tl_watch_prog);
     }
+    static const bool each = env_on("RX_VK_WRITTEN_EACH");
+    GpuWroteSeen& seen = gpu_wrote_seen[((lo ^ size * 0x9E3779B97F4A7C15ull) * 0x9E3779B97F4A7C15ull) >> 58];
+    if (!each && gpu_wrote_seen_hit(seen, lo, hi, rec_value, gpu_wrote_changes.load(std::memory_order_acquire))) return;
     std::lock_guard lk(gpu_wrote_mu);
     auto it = gpu_wrote.find(lo);
     if (it != gpu_wrote.end() && it->second.first >= hi) {
-        it->second.second = rec_value;
+        if (it->second.second != rec_value) it->second.second = rec_value, gpu_wrote_changes.fetch_add(1, std::memory_order_release);
+        seen = {lo, hi, rec_value, gpu_wrote_changes.load(std::memory_order_relaxed)};
         return;
     }
     for (auto e = gpu_wrote.lower_bound(lo); e != gpu_wrote.end() && e->first < hi;)   // (ranges it covers)
         e = e->second.first <= hi ? gpu_wrote.erase(e) : std::next(e);
     gpu_wrote[lo] = {hi, rec_value};
     if (gpu_wrote.size() > 65536) gpu_wrote.erase(gpu_wrote.begin());
+    gpu_wrote_changes.fetch_add(1, std::memory_order_release);
+    if (gpu_wrote.count(lo)) seen = {lo, hi, rec_value, gpu_wrote_changes.load(std::memory_order_relaxed)};   // (unless the bound took it)
 }
 /// A finished GPU write into the texture's storage it was not uploaded after (and notes it as seen)
 bool gpu_wrote_into(Texture& tex) {

@@ -45,6 +45,7 @@ static void rb_hazard_locked(uint64_t lo, uint64_t hi) { ++hazards; hazard_lo = 
 static bool wb_leave_out(uint64_t, uint64_t, std::vector<std::pair<uint64_t, uint64_t>>&) { return false; }
 static bool wb_skips_log() { return false; }
 static void wb_skip_note(uint64_t, uint64_t) {}
+static uint64_t wb_cap() { return 0; }   // (RX_VK_WB_MAX_KB unset, the default)
 static bool mirror_on() { return mirrors; }
 static uint64_t mirror_budget() { return 2048ull << 20; }
 static void note_in_place_read(bool = false) {}   // (the readback's part wait: tests/test_readback_part.py checks every such read is noted)
@@ -53,8 +54,9 @@ static Pool* pool_of(uint64_t guest, uint64_t size) {
     return have_pool && guest >= pool.lo && guest <= pool.hi && size <= pool.hi - guest ? &pool : nullptr;
 }
 static bool mirror_make(Pool&) { ++made; return false; }
-static void mirror_sync(Pool& p) { ++synced; p.synced_epoch = mirror_epoch; p.sync_seg = 0; }
-static uint64_t texture_segment() { return 0; }
+static uint64_t seg_now = 0;   // (the parallel replay's place in the queue: texture_segment)
+static void mirror_sync(Pool& p) { ++synced; p.synced_epoch = mirror_epoch; p.sync_seg = seg_now; }
+static uint64_t texture_segment() { return seg_now; }
 static void publish_cap_ranges() { throw std::runtime_error("unexpected mirror publication"); }
 static void logf(const char*, ...) {}
 static bool import_in_background(uint64_t, uint64_t) { throw std::runtime_error("unexpected asynchronous import"); }
@@ -101,6 +103,49 @@ static void page_state(uint64_t guest, uint64_t size, bool expected) {
     }
 }
 
+// (a written binding of a pool's mirror bound again: looked up and noted (its write-back, its hazard) once while its
+// submission, recording, place in the queue and pools stand; again when one of them changes or its mirror wants a sync;
+// every time with RX_VK_WRITTEN_EACH=1. The texture note is texture_gpu_wrote's own: every time here)
+static void written_again(bool each) {
+    pool.mstate = Pool::MIRROR_ON;
+    const uint64_t guest = pool.lo + 0x1000, size = 256;
+    unsigned calls = 0;
+    auto bind = [&](bool noted, bool sync, const char* what) {
+        const unsigned l = lookups, h = hazards, s = synced;
+        const size_t w = writebacks.size();
+        const BufferRef ref = gpu_buffer_bind(guest, size, true);
+        calls++;
+        require(ref.buffer == pool.mirror && ref.offset == guest - pool.lo && ref.size == size && !ref.address, what);
+        const unsigned full = noted || each ? 1u : 0u;
+        require(lookups == l + full && hazards == h + full && writebacks.size() == w + full && synced == s + (sync ? 1u : 0u), what);
+        if (full) require(writebacks.back().pool == &pool && writebacks.back().lo == ref.offset &&
+                          writebacks.back().hi == ref.offset + size && hazard_lo == guest && hazard_hi == guest + size, what);
+    };
+    bind(true, true, "the first written binding was not looked up and noted");
+    bind(false, false, "the same written binding again was noted again");
+    bind(false, false, "the same written binding a third time was noted again");
+    mem_rec_value++;
+    bind(true, false, "a written binding of the next recording was not noted");
+    bind(false, false, "the next recording's binding again was noted again");
+    seg_now = 1;
+    bind(true, false, "a written binding at another place in the queue was not noted (its hazard's segment)");
+    bind(false, false, "that place's binding again was noted again");
+    pool.sync_seg = 2;   // (a segment after this one synced the mirror: this one syncs it again, as the lookup does)
+    bind(true, true, "a written binding whose mirror a later segment synced was not synced again");
+    bind(false, false, "the binding after its sync was noted again");
+    mirror_epoch++;
+    bind(true, true, "a written binding of the next submission was not noted");
+    bind(false, false, "the next submission's binding again was noted again");
+    pools_gen++;
+    bind(true, false, "a written binding after a pool left was not looked up");
+    bind(false, false, "the binding after the lookup was noted again");
+    mirror_upload = false;   // (its submission's write-back done: in guest memory from here, as the lookup has it)
+    const BufferRef past = gpu_buffer_bind(guest, size, true);
+    calls++;
+    require(past.buffer == pool.buffer, "a written binding after the write-back was served from the mirror it was noted in");
+    require(texture_writes == calls, "a written binding's texture note was left out");
+}
+
 int main(int argc, char** argv) {
     const std::string mode = argc == 2 ? argv[1] : "";
     try {
@@ -108,6 +153,18 @@ int main(int argc, char** argv) {
         pool.shadow = 33;
         const uint64_t pages = (pool.hi - pool.lo) >> kPageShift;
         pool.shadow_known.assign((pages + 63) / 64, UINT64_MAX);
+        if (mode == "written_again" || mode == "written_again_each") {
+            readback_disabled(false);
+#ifdef _WIN32
+            _putenv_s("RX_VK_WRITTEN_EACH", mode == "written_again_each" ? "1" : "");
+#else
+            if (mode == "written_again_each") setenv("RX_VK_WRITTEN_EACH", "1", 1);
+            else unsetenv("RX_VK_WRITTEN_EACH");
+#endif
+            written_again(mode == "written_again_each");
+            std::printf("PASS %s\n", mode.c_str());
+            return 0;
+        }
         uint64_t guest = pool.lo + 4092, gpu = guest, size = 16;
         readback_disabled(mode == "wait_disabled");
         if (mode == "mirror_off" || mode == "virtual_write" || mode == "large_write" ||
