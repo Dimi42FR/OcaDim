@@ -22,3 +22,9 @@ RX_VK_ASYNC=0
 # le helper publie les bytes des uniform buffers que le record demande;
 # un miss retombe sur le chemin d'avant, mot pour mot
 RX_VK_DESC_PREFETCH=1
+
+# ---- le budget d'upload ASTC (le deferral, par défaut 40) ----
+# avec les fixes du cache des vues, le dummy d'un deferral n'est plus
+# caché à l'infini : une frame max, le flicker h24 est mort (validé en
+# jeu). Si un flicker reparaissait un jour, RX_VK_UPLOAD_BUDGET_MS=0
+# coupe le deferral entirely - le diagnostic est fait, la ligne est là
