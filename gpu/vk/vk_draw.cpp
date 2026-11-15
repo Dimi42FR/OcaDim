@@ -131,7 +131,7 @@ const char* const kFineT[] = {"banks", "c1", "user uniform buffers", "storage bu
 enum FineC { FC_DRAWS, FC_BUILDS, FC_DESCS, FC_WRITES, FC_BANK_CALLS, FC_BANK_GEN, FC_BANK_FILLS, FC_BANK_FILL_BYTES, FC_BANK_SAME,
              FC_BANK_NEW, FC_BANK_NEW_BYTES, FC_C1_CALLS, FC_UBO_CALLS, FC_UBO_OVERLAY, FC_UBO_STREAM, FC_PUSH_FULL, FC_PUSH_DELTA,
              FC_PUSH_NONE, FC_PUSH_WRITES, FC_PUSH_DESCS, FC_BIND_PIPE, FC_DYN_FAST, FC_DYN_FULL, FC_DYN_CALLS, FC_VBIND, FC_IBIND,
-             FC_PUSHC, FC_PIPE_FAST, FC_PIPE_MAP, FC_POOL_SETS, FC_POOL_DESCS, FC_SSBO_DESCS, FC_COUNT };
+             FC_IBIND_CMDS, FC_PUSHC, FC_PIPE_FAST, FC_PIPE_MAP, FC_POOL_SETS, FC_POOL_DESCS, FC_SSBO_DESCS, FC_COUNT };
 const char* const kFineC[] = {"draws", "descriptor builds", "descriptors", "descriptor writes", "bank calls",
                                       "bank kept by its stage's generation", "bank fills", "bank bytes filled", "bank refills equal",
                                       "bank copies into the stream", "bank bytes copied", "c1 calls", "user uniform buffer calls",
@@ -139,8 +139,9 @@ const char* const kFineC[] = {"draws", "descriptor builds", "descriptors", "desc
                                       "full pushes", "pushes of changed writes only", "pushes of nothing (all as pushed)",
                                       "writes pushed", "descriptors pushed", "pipeline binds", "dynamic state from the draw before",
                                       "dynamic state worked out", "dynamic state commands", "vertex stream binds", "index buffer binds",
-                                      "push constants", "pipeline keys from the fast pair", "pipeline keys from the thread's map",
-                                      "sets allocated (over the push limit)", "descriptors in them", "storage buffer descriptors built"};
+                                      "index buffer bind commands", "push constants", "pipeline keys from the fast pair",
+                                      "pipeline keys from the thread's map", "sets allocated (over the push limit)", "descriptors in them",
+                                      "storage buffer descriptors built"};
 static_assert(std::size(kFineT) == FT_COUNT && std::size(kFineC) == FC_COUNT, "every section and count is named");
 const bool g_fine = env_on("RX_VK_PROF_FINE");
 int64_t fine_ns[FT_COUNT], fine_n[FC_COUNT];
@@ -6932,10 +6933,23 @@ bool index_bind_same(uint64_t buffer, uint64_t offset, uint32_t type, uint64_t c
                      uint32_t cached_type, int on) {
     return on && buffer && buffer == cached_buffer && offset == cached_offset && type == cached_type;
 }
+/// (longshot) Where a direct indexed draw binds its index buffer, and its first index (*first): at the buffer's start, the
+/// draw's offset in it counted in indices as its first, so the submeshes of one pool keep one binding (each has an offset of
+/// its own: bound at it, nearly every draw was a vkCmdBindIndexBuffer). The same indices are read, start + first * unit
+/// being the offset; robust access's bounds run from the bound offset to the buffer's end, and no index read lies below
+/// the draw's offset, so none read in or out of bounds changes. At the offset, first 0, as before: an offset no multiple
+/// of the index size, a first index and count past 32 bits, or on 0 (RX_VK_INDEX_AT_OFFSET=1, the A/B)
+uint64_t index_bind_base(uint64_t offset, uint32_t unit, uint32_t count, int on, uint32_t* first) {
+    *first = 0;
+    if (!on || !unit || offset % unit || offset / unit > (uint64_t)(UINT32_MAX - count)) return offset;
+    *first = (uint32_t)(offset / unit);
+    return 0;
+}
 void bind_index(VkCommandBuffer cmd, VkBuffer buffer, VkDeviceSize offset, VkIndexType type) {
     const uint64_t b = (uint64_t)(uintptr_t)buffer;
     if (index_bind_same(b, (uint64_t)offset, (uint32_t)type, last_ib.buffer, last_ib.offset, last_ib.type, last_ib.on))
         return;
+    FINE_N(FC_IBIND_CMDS, 1);
     vkCmdBindIndexBuffer(cmd, buffer, offset, type);
     last_ib = {b, (uint64_t)offset, (uint32_t)type, true};
 }
@@ -7949,6 +7963,7 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
         if (d.indexed) {
             BufferRef ib = gpu_buffer_bind(d.ibuf, 4, false);
             if (!ib) SKIP_HERE();
+            // (at the address NVN was given: the records' first indices, written by the GPU, count from there)
             bind_index(cmd, ib.buffer, ib.offset, itype);
             occ.issue();
             if (cnt) vkCmdDrawIndexedIndirectCount(cmd, args.buffer, args.offset, cnt.buffer, cnt.offset, std::max(d.max, 1), ind_stride);
@@ -7961,16 +7976,18 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
     } else if (d.indexed) {
         const uint32_t unit = d.itype == 0 ? 1 : d.itype == 1 ? 2 : 4;
         BufferRef ib;
+        uint32_t first = 0;
         {
             FINE_SCOPE(FT_VERTEX);
             ib = gpu_buffer_bind(d.ibuf, (uint64_t)std::max(d.count, 1) * unit, false);
             if (!ib) SKIP_HERE();
             FINE_N(FC_IBIND, 1);
-            bind_index(cmd, ib.buffer, ib.offset, itype);
+            static const bool at_offset = env_on("RX_VK_INDEX_AT_OFFSET");   // (A/B: bound at each draw's offset, as before)
+            bind_index(cmd, ib.buffer, index_bind_base(ib.offset, unit, (uint32_t)d.count, !at_offset, &first), itype);
         }
         FINE_SCOPE(FT_DRAWCALL);
         occ.issue();
-        vkCmdDrawIndexed(cmd, (uint32_t)d.count, (uint32_t)std::max(1, d.instances), 0, d.base_vertex, (uint32_t)d.base_instance);
+        vkCmdDrawIndexed(cmd, (uint32_t)d.count, (uint32_t)std::max(1, d.instances), first, d.base_vertex, (uint32_t)d.base_instance);
     } else {
         FINE_SCOPE(FT_DRAWCALL);
         occ.issue();
