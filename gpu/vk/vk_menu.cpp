@@ -4372,6 +4372,11 @@ void draw_fps(ui::Ctx& c, bool under_banner) {
     }
 }
 
+// (longshot) The player's build, as the start-up screen names it: the wordmark says OCADIM and this is the line under it. The
+// same pair is in host/hos.h (HOS_PRODUCT_NAME/VERSION) for the window's title, the console's, the log's and the dialogs; keep
+// them equal. The upstream build the sources come from stays in the log's first line, where a report needs it.
+#define OCADIM_VERSION "0.0.1"
+
 /// The start-up screen: the logo, the wordmark, what the start is doing, a bar, on a warm dark. A little below the middle; what
 /// is under the logo at 0.86 of the logo's scale. startup_fade, 0 to 1, darkens it all to black as it ends
 void draw_startup(ui::Ctx& c) {
@@ -4388,7 +4393,7 @@ void draw_startup(ui::Ctx& c) {
     ImTextureData* logo = ui::logo(&aspect);
     if (logo) c.d->AddImage(logo->GetTexRef(), ImVec2(cx - lh * aspect * 0.5f, top), ImVec2(cx + lh * aspect * 0.5f, top + lh));
     float y = top + lh + 16 * s;
-    ui::spaced(c, c.f.heading, 42 * k, ImVec2(cx, y), ui::rgba(246, 232, 204), "LONGSHOT", 6 * k);
+    ui::spaced(c, c.f.heading, 42 * k, ImVec2(cx, y), ui::rgba(246, 232, 204), "OCADIM", 6 * k);
     ui::flourish(c, cx - 190 * k, cx + 190 * k, y + 66 * k, ui::kAccent);
     ui::text_centre(c, c.f.body, 14.5f * k, ImVec2(cx, y + 78 * k), ui::kDim, v.version.c_str());
     if (!v.title.empty()) {
@@ -4460,7 +4465,7 @@ void startup_screen(const StartupView* view) {
         return;
     }
     StartupView v = *view;
-    if (v.version.empty()) v.version = version_text(LONGSHOT_VERSION);   // ("v2.0.5"; "v2.0.5 dev" between releases)
+    if (v.version.empty()) v.version = OCADIM_VERSION;   // (the player's build and its number; the build it came from is in the log)
     {
         std::lock_guard lk(startup_mu);
         startup = v;
