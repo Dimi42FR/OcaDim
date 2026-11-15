@@ -461,6 +461,9 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | Descriptor prefetch | Auto, On, Off (after a restart). Auto is On with six or more processor threads for the game | Auto |
 | | Replay segments | 32, 64, 160 draws and dispatches a thread at a time (after a restart) | 32 |
 | | Above-60 fixes | Off, On (after a restart): the floors' carry and the height-field surfaces' steps above 60 fps | On |
+| | CPU affinity (CCX) | Auto, On, Off (after a restart): the replay's workers on the upper half of the processor's logical CPUs, so the game's thread keeps its cache. Auto is On with twelve or more | Auto |
+| | Draw order barriers | Auto, On, Off (after a restart): a pass right after another waits in its fragment stages only. Auto is On on NVIDIA only, where it was measured | Auto |
+| | Batched submits | Auto, On, Off (after a restart): a frame's command submissions held and sent as one. Auto is On with Mesa's RADV only, where it was measured | Auto |
 | Audio | Volume | 0 to 100%, in steps of 5 | 100% |
 | | Mute in background | Off, On | Off |
 | | Audio output | Auto, Stereo, 5.1, Mono (layout changes after a restart; Mono/Stereo live on stereo output) | Auto |
