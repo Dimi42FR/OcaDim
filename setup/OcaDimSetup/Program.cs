@@ -67,6 +67,8 @@ static class Cli
                 case "--check": check = true; break;
                 case "--fsr": fsr = true; break;
                 case "--no-fsr": fsr = false; break;
+                case "--no-hot": setup.HotCode = false; break;
+                case "--hot": setup.HotCode = true; break;
                 case "--tools-from": setup.ToolsFrom = Next(); break;
                 case "--log": log = Next(); break;
                 case "--no-shortcuts": keepShortcuts = desktop = startMenu = false; break;
@@ -162,7 +164,7 @@ static class Cli
 
     static void Usage()
     {
-        Console.WriteLine("OcaDimSetup.exe [--cli] --nup <fichier> --out <dossier> [--fsr] [--check] [--update]");
+        Console.WriteLine("OcaDimSetup.exe [--cli] --nup <fichier> --out <dossier> [--fsr] [--no-hot] [--check] [--update]");
         Console.WriteLine("               [--game <fichier|dossier>] [--romfs <dossier> --exefs <dossier>]");
         Console.WriteLine("               [--tools-from <dossier>] [--log <fichier>] [--no-shortcuts]");
     }

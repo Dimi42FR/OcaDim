@@ -22,6 +22,10 @@ sealed class Setup
     public string? Romfs { get; private set; }
     public string? Exefs { get; private set; }
     public bool Fsr { get; set; }
+    /// (OcaDim) The hottest game functions compiled at -O2 with their callees inlined (nx2/make_game.py's hot list, from
+    /// assets/profiles/), and the renderer built with its play profile: the CPU is this game's frame's wall. Off only if a
+    /// build or the game misbehaves (the whole lifted code at -O1, as before). Added by Dimi42FR.
+    public bool HotCode { get; set; } = true;
     public string? ToolsFrom { get; set; }          // (dev: take the tools from a folder that has them)
 
     public static string DefaultInstallDir =>
@@ -151,6 +155,7 @@ sealed class Setup
         si.Environment.Remove("LONGSHOT_NGX_SDK");
         si.Environment.Remove("LONGSHOT_FFX_SDK");
         si.Environment.Remove("LONGSHOT_MSVC");
+        if (!HotCode) si.Environment["LONGSHOT_NO_HOT"] = "1";
         return si;
     }
 

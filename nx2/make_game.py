@@ -2555,8 +2555,18 @@ def main(a=None):
 
     # (made once on the development PC: lists of addresses and counts, no game code)
     # (longshot_vk.profdata: the renderer's own profile, counts over Longshot's own code)
+    # (OcaDim) the hot list and the link order also come from the sources, assets/profiles/: a player's folder has no work/, and
+    # compiling the hottest game functions at RX_HOT_OPT (O2, their callees inlined) is what moves this game's CPU wall.
+    # LONGSHOT_NO_HOT=1: the whole lifted code at -O1, as before (the setup's "maximum optimizations" unticked)
+    no_hot = os.environ.get("LONGSHOT_NO_HOT") == "1"
     for name in ("hot_funcs.txt", "hot_order.txt", "longshot_pieces.prof", VK_PROFILE, "longshot.res"):
+        if no_hot and name in ("hot_funcs.txt", "hot_order.txt"):
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(os.path.join(work, name))   # (a list an earlier build left would still turn it on)
+            continue
         src = os.path.join(ROOT, "work", name)
+        if name in ("hot_funcs.txt", "hot_order.txt") and not os.path.exists(src):
+            src = os.path.join(ROOT, "assets", "profiles", name)
         dst = os.path.join(work, name)
         # (copied only when it differs: a compiler still ending from a cancelled build keeps the profile mapped, WinError 1224)
         if os.path.exists(src) and not (os.path.exists(dst) and filecmp.cmp(src, dst, shallow=False)):

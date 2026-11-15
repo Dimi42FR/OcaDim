@@ -229,6 +229,13 @@ sealed class WizardForm : Form
         var fsrBox = Check("Compiler avec AMD FSR 4 (cartes RDNA 4 ; sinon, la mise à l'échelle du pilote)", setup.Fsr);
         fsrBox.CheckedChanged += (_, _) => setup.Fsr = fsrBox.Checked;
         Add(fsrBox);
+        var hotBox = Check("Optimisations CPU maximales — recommandé (chunk chaud à -O2, profil de jeu)", setup.HotCode);
+        hotBox.CheckedChanged += (_, _) => setup.HotCode = hotBox.Checked;
+        Add(hotBox);
+        var credit = Paragraph("Fonctions les plus chaudes compilées à -O2 et le renderer avec son profil de jeu : c'est le CPU " +
+                               "qui limite ce jeu. Plus long à compiler, aucune contrepartie en jeu.  Ajouté par Dimi42FR.");
+        credit.ForeColor = Muted;
+        Add(credit);
         Add(Paragraph("Le dossier du jeu fait une soixantaine de gigaoctets une fois compilé. Rien n'est écrit dans le jeu " +
                       "avant que votre copie soit reconnue."));
         SetFooter("Étape 2 sur 3 — le dossier", setup.Installed ? "Mettre à jour" : "Installer", true, true);
