@@ -3094,21 +3094,22 @@ struct HandleHit {
     Texture* tex;
     uint32_t level;   // (the image level the view starts at)
     uint32_t version; // (the slot's, when resolved)
-    uint64_t destroy_gen;
+    uint64_t serial;  // (the texture's own identity, when resolved: the object recycled names another texture)
+    uint64_t view_gen;   // (the texture's own, when resolved: it moved, it re-resolves — the others' retirements do not)
     bool sampling;    // (its use reads the texture's contents)
     uint64_t tex_epoch;   // (the texture epoch it was last touched in)
 };
 TLS_OBJECT(handle_hits, std::unordered_map<uint64_t, HandleHit>)
 /* (longshot) a direct-mapped front for handle_hits. The same texture bindings are resolved again and again (14.9 descriptors
    a draw, 725 draws, 10,600 a frame) and a hash map find for each was 0.9 ms a frame. The map stays the authority: this
-   answers only a lookup whose key, slot version, destroy generation and texture epoch are all the ones it was filled with,
-   so a slot re-registered or a texture destroyed misses it at once and takes the map's path. RX_VK_VIEW_FAST=0: as before. */
+   answers only a lookup whose key, slot version, view generation and texture epoch are all the ones it was filled with,
+   so a slot re-registered or the texture's views gone misses it at once and takes the map's path. RX_VK_VIEW_FAST=0: as before. */
 struct ViewFast {
     uint64_t key = ~0ull;
     VkImageView view = VK_NULL_HANDLE;
     Texture* tex = nullptr;
     uint32_t level = 0, version = 0;
-    uint64_t destroy_gen = 0, tex_epoch = 0;
+    uint64_t serial = 0, view_gen = 0, tex_epoch = 0;
     bool sampling = false;
 };
 TLS_OBJECT(view_fast, std::array<ViewFast, 1024>)
@@ -3151,11 +3152,16 @@ bool log_img_wanted(uint64_t key) {   // (longshot) RX_VK_LOG_IMG=<key prefix,..
 VkImageView texture_view_of(uint32_t handle, VkImageViewType want, ViewUse use, VkFormat storage_as = VK_FORMAT_UNDEFINED,
                             Texture** tex_out = nullptr, uint32_t* level_out = nullptr) {
     const uint32_t version = texture_slot_version((int)(handle & 0xFFFFF));
-    const uint64_t dgen = texture_destroy_generation();
+    // (longshot, OcaDim) the texture's own view generation, not the global destroy one: a retirement of another
+    // texture left every cached view standing, where the global check sent the whole cache back through the slow
+    // path after each of the eviction sweeps' retirements. The entry's texture is never freed (a tombstone), so the
+    // read through it is safe; its own view_gen moved means its views died — its own resolution is redone
     const uint64_t key = (uint64_t)(handle & 0xFFFFF) | (uint64_t)want << 20 | (uint64_t)use << 28 | (uint64_t)storage_as << 32;
     static const bool view_fast_on = !getenv("RX_VK_VIEW_FAST") || atoi(getenv("RX_VK_VIEW_FAST")) != 0;
     ViewFast* vf = view_fast_on ? &view_fast()[(key * 0x9E3779B97F4A7C15ull) >> 54] : nullptr;
-    if (vf && vf->key == key && vf->version == version && vf->destroy_gen == dgen) {
+    if (vf && vf->key == key && vf->version == version &&
+        (!vf->tex || (!vf->tex->retired.load(std::memory_order_relaxed) && vf->tex->serial == vf->serial &&
+                      vf->tex->view_gen.load(std::memory_order_relaxed) == vf->view_gen))) {
         // (the epoch's touch is done here, as the map's path does it: the map's own copy of the epoch may go stale, and then
         // the first lookup of that key through the map touches the texture again, which only marks it used twice)
         if (vf->tex && vf->tex_epoch != texture_epoch()) {
@@ -3174,14 +3180,17 @@ VkImageView texture_view_of(uint32_t handle, VkImageViewType want, ViewUse use, 
     const auto it = handle_hits().find(key);
     if (log_hits) {   // (the counters were a second search of this map on every binding, with the log off)
         if (++st_n % 200000 == 0)
-            logf("vk: handle hits %lld, new %lld, slot re-registered %lld, a texture destroyed %lld", (long long)st_hit,
+            logf("vk: handle hits %lld, new %lld, slot re-registered %lld, a texture's views gone %lld", (long long)st_hit,
                  (long long)st_new, (long long)st_ver, (long long)st_gen);
         if (it == handle_hits().end()) st_new++;
         else if (it->second.version != version) st_ver++;
-        else if (it->second.destroy_gen != dgen) st_gen++;
+        else if (it->second.tex && it->second.tex->view_gen.load(std::memory_order_relaxed) != it->second.view_gen) st_gen++;
         else st_hit++;
     }
-    if (it != handle_hits().end() && it->second.version == version && it->second.destroy_gen == dgen) {
+    if (it != handle_hits().end() && it->second.version == version &&
+        (!it->second.tex || (!it->second.tex->retired.load(std::memory_order_relaxed) &&
+                             it->second.tex->serial == it->second.serial &&
+                             it->second.tex->view_gen.load(std::memory_order_relaxed) == it->second.view_gen))) {
         if (it->second.tex && it->second.tex_epoch != texture_epoch()) {   // (once a submission: its age and contents)
             if (!texture_touch_quick(it->second.tex, it->second.sampling)) {
                 ParLock lk;
@@ -3191,7 +3200,8 @@ VkImageView texture_view_of(uint32_t handle, VkImageViewType want, ViewUse use, 
         }
         if (vf)
             vf->key = key, vf->view = it->second.view, vf->tex = it->second.tex, vf->level = it->second.level,
-            vf->version = it->second.version, vf->destroy_gen = it->second.destroy_gen, vf->tex_epoch = it->second.tex_epoch,
+            vf->version = it->second.version, vf->serial = it->second.serial, vf->view_gen = it->second.view_gen,
+            vf->tex_epoch = it->second.tex_epoch,
             vf->sampling = it->second.sampling;
         if (tex_out) *tex_out = it->second.tex;
         if (level_out) *level_out = it->second.level;
@@ -3207,6 +3217,13 @@ VkImageView texture_view_of(uint32_t handle, VkImageViewType want, ViewUse use, 
     const bool known = texture_of((int)(handle & 0xFFFFF), &t, &v, &has_view);
     if (known) {
         tex = texture_get(&t, use == ViewUse::Sample || use == ViewUse::Storage);
+        if (tex && tex->retired.load(std::memory_order_acquire)) {
+            // (longshot, OcaDim) the retirement's window — its flag set, its object still in the map until the sweep's
+            // end: resolved, its image is already leaving to the pool or the dead list, and a view of it cached here
+            // would stand for good, the texture's own generations never moving again. The dummy until the sweep is
+            // done; the game's next look at the handle makes the texture again
+            tex = nullptr;
+        }
         if (tex) view = texture_view(tex, &t, has_view ? &v : nullptr, want, use, &last_view_format, storage_as);
         if (tex) level = image_level(tex, has_view ? view_level(&v) : 0);
     }
@@ -3223,9 +3240,19 @@ VkImageView texture_view_of(uint32_t handle, VkImageViewType want, ViewUse use, 
                      has_view && v.set_format ? v.format : 0, has_view && v.set_target ? v.target : -1, (int)want, (int)use);
         }
     }
-    handle_hits()[key] = {view, tex, level, version, dgen, use == ViewUse::Sample || use == ViewUse::Storage, texture_epoch()};
-    if (vf) vf->key = key, vf->view = view, vf->tex = tex, vf->level = level, vf->version = version, vf->destroy_gen = dgen,
-            vf->tex_epoch = texture_epoch(), vf->sampling = use == ViewUse::Sample || use == ViewUse::Storage;
+    // (longshot, OcaDim) cached only when a texture came out of it: texture_get's touch defers a new ASTC texture's
+    // upload when the frame's took its budget, and returns null — the draw samples the dummy. The global destroy
+    // generation's bump at the frame's end used to make the next look resolve it again, and the texture's own
+    // generations do not move for a deferral: caching the null would keep the dummy bound until the game happened to
+    // re-register the slot (the textures jumping black, h24). Not cached, the next look resolves it, and its upload
+    if (tex) {
+        handle_hits()[key] = {view, tex, level, version, tex->serial, tex->view_gen.load(std::memory_order_relaxed),
+                              use == ViewUse::Sample || use == ViewUse::Storage, texture_epoch()};
+        if (vf) vf->key = key, vf->view = view, vf->tex = tex, vf->level = level, vf->version = version,
+                vf->serial = tex->serial,
+                vf->view_gen = tex->view_gen.load(std::memory_order_relaxed),
+                vf->tex_epoch = texture_epoch(), vf->sampling = use == ViewUse::Sample || use == ViewUse::Storage;
+    }
     if (tex_out) *tex_out = tex;
     if (level_out) *level_out = level;
     return view;

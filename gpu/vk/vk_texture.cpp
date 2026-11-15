@@ -1053,6 +1053,7 @@ bool bc_reformat(Texture& tex, VkFormat f) {
     VmaAllocation alloc = nullptr;
     if (!(compact_on() && create_image(ci, image, alloc, false, false, true)) && !create_image(ci, image, alloc)) return false;
     destroy_gen++;
+    tex.view_gen.fetch_add(1, std::memory_order_release);   // (its views die with its old image)
     Dead d{tex.last_value, tex.image, tex.allocation, {}, {}};
     for (auto& kv : tex.views)
         if (kv.second) d.views.push_back(kv.second);
@@ -1983,12 +1984,22 @@ bool texture_dirty(Texture& tex, uint32_t gen, Ranges& out) {
 
 uint64_t destroy_gen = 1;   // (bumped when textures go: what was resolved to them goes stale)
 
+// (longshot, OcaDim) a retired texture's OBJECT stays alive as a tombstone: the views' caches name it, and their
+// checks read its own view_gen instead of the global destroy generation — one texture's retirement no longer sends
+// every thread's whole cache back through the slow path. Its image, views and block attachments went to the dead
+// list above; what stays is the struct's own fields. Bounded by a session's retirements (a few hundred bytes each);
+// a recycling, if it ever grows, must give the object a fresh identity the caches would see
+std::vector<std::unique_ptr<Texture>> tex_tombstones;   // (the pool the evicted textures' objects are recycled from: bounded)
+uint64_t tex_serial = 0;   // (a fresh identity at every creation, recycled objects included)
+
 /// (A render target's image goes to the pool now rather than at the next present: between the two, the next frame is
 /// recorded, and a target of its shape made there missed it and made a new image, while the old one was destroyed unused
 /// later, 120 presents on (issue 2180's A/B: 65% more targets let go, 83% more images made new). The eviction only hands
 /// over one the GPU is done with (it skips those in flight), so the next frame's target takes it)
 void destroy_later(Texture& tex) {
     destroy_gen++;
+    tex.retired.store(true, std::memory_order_release);   // (first: a resolve in this window is refused — its views die just after)
+    tex.view_gen.fetch_add(1, std::memory_order_release);   // (its views die here: the caches re-resolve it alone)
     Dead d{tex.last_value, tex.image, tex.allocation, {}, {}};
     if (tex.pool_key && tex.allocation && tex.sparse_chunks.empty() && pool_cap()) {   // (a render target's: to the pool, its views too)
         d.pool_key = tex.pool_key, d.view_map = std::move(tex.views), d.bytes = tex.bytes + tex.pad;
@@ -2092,8 +2103,18 @@ bool low_vram_texture_mips() {
 
 Texture* create(const Key& key, const nvn_tex* t, VkFormat vf, bool astc, int bw, int bh, int bpb, bool as_target) {
     PROF_EXACT();   // (texture_get's slow path: PROF_TEXGET samples the rest)
-    auto tex = std::make_unique<Texture>();
+    // (longshot, OcaDim) a retired texture's object, reconstructed in place: every field is the fresh default again
+    // (placement new), and its fresh serial below is one no cache entry of the old texture can match
+    std::unique_ptr<Texture> tex;
+    if (!tex_tombstones.empty()) {
+        tex = std::move(tex_tombstones.back());
+        tex_tombstones.pop_back();
+        new (tex.get()) Texture();
+    } else {
+        tex = std::make_unique<Texture>();
+    }
     Texture& x = *tex;
+    x.serial = ++tex_serial;
     x.gpu = t->gpu, x.d = t->d, x.L = t->L, x.nvn_format = t->d.format;
     x.guest = host->gpu_guest(t->gpu);
     x.guest_size = t->L.size;
@@ -2616,6 +2637,14 @@ Texture* texture_get(const nvn_tex* t, bool for_sampling) {
     k.cls = format_class(fi.format, t->d.format, bpb, fi.astc);
     Texture* tex;
     auto it = textures.find(k);
+    if (it != textures.end() && it->second->retired.load(std::memory_order_acquire)) {
+        // (longshot, OcaDim) the retirement's window — its flag set, its object still here until the sweep's end, and
+        // its image already leaving to the pool or the dead list: out of the map now, its object to the tombstones, and
+        // the texture made again over its storage. texture_get never hands a texture whose views are going
+        tex_tombstones.push_back(std::move(it->second));
+        textures.erase(it);
+        it = textures.end();
+    }
     if (it == textures.end()) {
         tex = create(k, t, fi.format, fi.astc, bw, bh, bpb, !for_sampling);
         if (!tex) return nullptr;
@@ -4238,6 +4267,7 @@ void compact_step(uint64_t completed) {
         for (auto& kv : t->views)
             if (kv.second) compact.old_views.push_back(kv.second);
         t->views.clear();   // (made again when next asked for)
+        t->view_gen.fetch_add(1, std::memory_order_release);   // (its old views die with its old image)
         t->image = image;
         t->last_value = std::max(t->last_value, rec_value);   // (its end, if it goes now, waits for the copy too)
         compact.moved++, compact.moved_bytes += t->bytes + t->pad;
@@ -4967,8 +4997,10 @@ void texture_frame(uint64_t completed) {
         gone.insert(tex);
     }
     for (auto it = textures.begin(); it != textures.end() && !gone.empty();) {
-        if (gone.erase(it->second.get())) it = textures.erase(it);
-        else ++it;
+        if (gone.erase(it->second.get())) {
+            tex_tombstones.push_back(std::move(it->second));   // (the object stays: the caches' checks read its view_gen)
+            it = textures.erase(it);
+        } else ++it;
     }
     if (n_dead && frame_no >= dead_logged_at + 600) {   // (the dead transient targets let go so far, every 600 presents)
         dead_logged_at = frame_no;
@@ -4979,7 +5011,8 @@ void texture_frame(uint64_t completed) {
     if (n) {
         char why[160];
         evict_reason::describe(tally, why, sizeof why);
-        logf("vk: %zu textures retired (%zu left, %llu MB): %s", n, textures.size(), (unsigned long long)(total_bytes >> 20), why);
+        logf("vk: %zu textures retired (%zu left, %llu MB; %zu objects kept for the views' caches): %s", n, textures.size(),
+             (unsigned long long)(total_bytes >> 20), tex_tombstones.size(), why);
     }
 }
 
