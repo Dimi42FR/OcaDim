@@ -1259,11 +1259,12 @@ bool pf_neg_lookup(uint64_t addr, uint64_t n, size_t lim) {
     return false;
 }
 bool desc_prefetch_on() {
-    // (longshot, the small-PC rule) RX_VK_DESC_PREFETCH unset: on from six logical processors, where the helper's own thread does
-    // not take a core the game needs; off under it. The switch still decides when it is set.
+    // (longshot, the small-PC rule) RX_VK_DESC_PREFETCH unset: the Insert menu's Descriptor prefetch row, resolved once at the
+    // start (vk_menu.cpp menu_desc_prefetch), Auto there on from six logical processors, where the helper's own thread does not
+    // take a core the game needs; off under it. The switch still decides when it is set.
     static const bool on = [] {
         if (const char* e = getenv("RX_VK_DESC_PREFETCH")) return atoi(e) != 0;
-        return par::prefetch(usable_cpus());   // (gpu/vk/par_scale.h: its helper thread needs a core of its own)
+        return menu_desc_prefetch();   // (gpu/vk/par_scale.h par::prefetch, behind the row's Auto)
     }();
     return on;
 }
@@ -2439,18 +2440,14 @@ void maybe_split(VkCommandBuffer& cmd) {
 // that, Castle Town's market and eight other places showed no black frame on 3 to 8 threads; the Kakariko walk was not run
 // again, so it stays off. On a 9950X3D the replay's wall time in the market goes from 10.9 ms a frame to 7.75 on 3 threads.
 int par_threads() {
-    // (longshot, the small-PC rule) RX_VK_PARALLEL unset: sized to the logical processors the process may run on, one worker for
-    // every four of them and never more than four; none under six, where a 4-core machine keeps every core for the game. 6 -> 1,
-    // 8 -> 2, 12 -> 3, 16 and more -> 4. A player on a small PC gets the replay's parallelism without setting anything, and a
-    // 4-core one is never starved. RX_VK_PARALLEL still decides when it is set.
+    // (longshot, the small-PC rule) RX_VK_PARALLEL unset: the Insert menu's Replay workers row, resolved once at the start
+    // (vk_menu.cpp menu_replay_workers): Auto there is one worker for every four logical processors the process may run on and
+    // never more than four, none under six, where a 4-core machine keeps every core for the game. 6 -> 1, 8 -> 2, 12 -> 3, 16
+    // and more -> 4. A player on a small PC gets the replay's parallelism without setting anything, and a 4-core one is never
+    // starved. RX_VK_PARALLEL still decides when it is set.
     static const int n = [] {
         if (const char* e = getenv("RX_VK_PARALLEL")) return std::clamp(atoi(e), 0, 8);
-        const unsigned c = usable_cpus();
-        const int w = par::workers(c);   // (gpu/vk/par_scale.h, checked by tests/test_parallel_workers.py)
-        if (!w) return 0;
-        logf("vk: parallel replay: %d worker(s) for the %u logical processors the process may run on (RX_VK_PARALLEL overrides)",
-             w, c);
-        return w;
+        return menu_replay_workers();   // (the row, or Auto's par::workers: gpu/vk/par_scale.h)
     }();
     return n;
 }
@@ -2574,9 +2571,11 @@ const uint8_t* replay_handle(VkCommandBuffer& cmd, const uint8_t* h, bool may_st
         suspend_ok = false;
         return suspend_at;
     }
-    // (segments of ~RX_VK_PARALLEL_SEG draws and dispatches (default 32: this game's command buffers are short, and 160 never filled them), taken in order by the threads and submitted
-    // as each is done with those before it: the GPU starts on the first while the rest are recorded)
-    static const int64_t per = getenv("RX_VK_PARALLEL_SEG") ? std::max(32, atoi(getenv("RX_VK_PARALLEL_SEG"))) : 32;
+    // (segments of ~RX_VK_PARALLEL_SEG draws and dispatches (the Insert menu's Replay segments row, 32 by default: this game's
+    // command buffers are short, and 160 never filled them), taken in order by the threads and submitted as each is done with
+    // those before it: the GPU starts on the first while the rest are recorded)
+    static const int64_t per = getenv("RX_VK_PARALLEL_SEG") ? std::max(32, atoi(getenv("RX_VK_PARALLEL_SEG")))
+                                                           : menu_replay_seg();   // (the row, resolved once at the start)
     // (too little work for two segments: recorded here, as with parallel replay off. The dry pass would apply the stream's
     // state for nothing, and its one segment would walk the stream again here on this thread. RX_VK_NO_DRY_SHORT=1: as
     // before, the dry pass and the segment)
@@ -2585,12 +2584,13 @@ const uint8_t* replay_handle(VkCommandBuffer& cmd, const uint8_t* h, bool may_st
     if (!no_short && stream_work(h, 2 * per) < 2 * per) {
         shorts++;
         // (longshot) the segment size's default assumes command buffers far bigger than this game's: after many
-        // short ones, one hint, so that RX_VK_PARALLEL without RX_VK_PARALLEL_SEG is not silently idle. The same
+        // short ones, one hint, so that the parallel replay with the default segment is not silently idle. The same
         // walk measured this game's buffers against 160 and 32 (OoT: none of the first reached 320 work)
         static int told;
         if (shorts == 2000 && told++ < 2)
             logf("vk: parallel replay: %lld command buffers were too small for segments of ~%lld draws and "
-                 "dispatches, so it has not engaged: lower RX_VK_PARALLEL_SEG (32 measured for this game)",
+                 "dispatches, so it has not engaged: lower the Replay segments row (or RX_VK_PARALLEL_SEG; 32 measured for "
+                 "this game)",
                  (long long)shorts, (long long)per);
         const bool was_split = split_off;
         split_off = true;   // (the segment the dry pass would have recorded is one, and a segment is not split)
@@ -2806,7 +2806,7 @@ const uint8_t* replay_handle(VkCommandBuffer& cmd, const uint8_t* h, bool may_st
         logf("vk: parallel replay, a command buffer: dry pass %.2f ms, segments %.2f ms (%.1f of them), lock taken %.0f "
              "times, waited for %.2f ms (all threads); %lld short ones recorded here%s", dry_ms / 240, seg_ms / 240,
              segs_n / 240, locks_n / 240, wait_ms / 240, (long long)shorts,
-             desc_prefetch_on() ? "" : " (descriptor prefetch off: RX_VK_DESC_PREFETCH)");
+             desc_prefetch_on() ? "" : " (descriptor prefetch off: the Descriptor prefetch row, or RX_VK_DESC_PREFETCH)");
         if (desc_prefetch_on())
             logf("vk: descriptor prefetch: %lld overlays served, %lld built by the record (of %lld lookups a "
                  "window); the helper published %lld, %lld stretches queued ahead were dropped",
@@ -6703,6 +6703,7 @@ void fill_replay_table(MkwVkRenderer& t) {
         if (id == HOS_OPT_HOLD_TOGGLE) return opts.hold_toggle;
         if (id == HOS_OPT_SKIP_TITLE) return opts.skip_title != 0;
         if (id == HOS_OPT_RENDER_THREAD) return async_on();   // (host/nvn_native.c: the present poll answered at once)
+        if (id == HOS_OPT_ABOVE60_FIXES) return menu_above60_fixes() ? 1 : 0;   // (host/oot_high_fps.c: the Above-60 fixes row)
         return id == 0 ? opts.realtime : id == 1 ? menu_is_open() : id == 2 ? resolution_auto() && !temporal_full_scale() : id == 3 ? (temporal_full_scale() ? 10000 : resolution_scale()) : id == 4 ? opts.pad_background : id == 5 ? opts.text_speed : id == 6 ? opts.mouse_native :
                id == 7 ? opts.mouse_sens : id == 8 ? opts.mouse_invert : id == 9 ? opts.rumble : id == 16 ? opts.invert_cam_x : id == 17 ? opts.invert_cam_y : id == HOS_OPT_GYRO ? opts.gyro : id == HOS_OPT_GYRO_SENS_X ? opts.gyro_sens_x : id == HOS_OPT_GYRO_SENS_Y ? opts.gyro_sens_y : id == HOS_OPT_GYRO_INV_X ? opts.gyro_inv_x : id == HOS_OPT_GYRO_INV_Y ? opts.gyro_inv_y : id == HOS_OPT_GYRO_DEADZONE ? opts.gyro_deadzone :
                id == HOS_OPT_DLSS_JITTER_W || id == HOS_OPT_DLSS_JITTER_H || id == HOS_OPT_DLSS_JITTER_PHASES ? jitter_option(id) : 0;

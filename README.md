@@ -451,6 +451,10 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | Anisotropic filtering | Game's, 2x, 4x, 8x, 16x | 16x |
 | | GPU device | Auto, or each graphics card by name (after a restart) | Auto |
 | | Threaded rendering | Auto, On, Off (after a restart). Auto is On with 12 or more processor threads for the game | Auto |
+| | Replay workers | Auto, 1, 2, 3, 4 threads recording each command buffer (after a restart). Auto is one thread for every four processor threads for the game, at most four, none under six | Auto |
+| | Descriptor prefetch | Auto, On, Off (after a restart). Auto is On with six or more processor threads for the game | Auto |
+| | Replay segments | 32, 64, 160 draws and dispatches a thread at a time (after a restart) | 32 |
+| | Above-60 fixes | Off, On (after a restart): the floors' carry and the height-field surfaces' steps above 60 fps | On |
 | Audio | Volume | 0 to 100%, in steps of 5 | 100% |
 | | Mute in background | Off, On | Off |
 | | Audio output | Auto, Stereo, 5.1, Mono (layout changes after a restart; Mono/Stereo live on stereo output) | Auto |

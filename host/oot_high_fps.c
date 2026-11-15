@@ -2,8 +2,10 @@
    surfaces' fixed steps and the ocarina recorder's clock, under a Frame rate cap above 60: the lifted code calls these
    (nx2/oot_patches.py); host/oot_high_fps.h has why and the logic. The last three come from NX2navi (its recomp/patches-v111.txt,
    public domain / MIT), as merged into Triforce. HOS_FPS_LOG (on, by the switches' rule: =0 is off): what they do, every 600
-   calls. (SRWLOCK and InterlockedIncrement64 are <windows.h>'s on Windows and host/posix/windows.h's on Linux: a pthread
-   rwlock and __atomic_add_fetch, so this compiles for both.) */
+   calls. The Insert menu's Above-60 fixes row (HOS_OPT_ABOVE60_FIXES, above60_fixes): off, hos_oot_floor_cut and
+   hos_oot_sim_steps return what the game computes, as before those two fixes; the sound job's gate and the solver's steps
+   stay as the fixes have them. (SRWLOCK and InterlockedIncrement64 are <windows.h>'s on Windows and host/posix/windows.h's on
+   Linux: a pthread rwlock and __atomic_add_fetch, so this compiles for both.) */
 #include "hos.h"
 #include "oot_high_fps.h"
 #define WIN32_LEAN_AND_MEAN
@@ -11,8 +13,20 @@
 #include <stdlib.h>
 
 #include "../gpu/vk/compat/longshot_env.h" /* (env_on: the switches' one rule) */
+#include "../gpu/vk/vk_api.h"   /* (HOS_OPT_ABOVE60_FIXES: the Insert menu's Above-60 fixes row) */
 
 extern volatile uint32_t hos_frame_seconds_bits;   /* (host/nn_vi.c: the frame's seconds, 0 at a cap of 60) */
+int rx_option(int id, int otherwise);   /* (host/rx_backend.c: the Insert menu's rows, the renderer answering) */
+
+/* (longshot) The Insert menu's Above-60 fixes row (gpu/vk/vk_api.h HOS_OPT_ABOVE60_FIXES; the renderer answers it from
+   gpu/vk/vk_menu.cpp menu_above60_fixes): on, the fixes below; off, the game's own cut and count, as before them. Read once,
+   a change of the row taking a restart, and 1 (the default) where no renderer answers */
+static int above60_fixes(void) {
+    static int on = -1;   /* (the game's threads read it) */
+    int v = __atomic_load_n(&on, __ATOMIC_RELAXED);
+    if (v < 0) v = rx_option(HOS_OPT_ABOVE60_FIXES, 1), __atomic_store_n(&on, v, __ATOMIC_RELAXED);
+    return v;
+}
 
 static int timed(void) { return __atomic_load_n(&hos_frame_seconds_bits, __ATOMIC_RELAXED) != 0; }
 static int fps_log(void) {
@@ -72,6 +86,7 @@ uint32_t hos_oot_solver_steps(uint32_t game, uint32_t scaled_bits, uint32_t per_
 
 /* The follow-surface updates' compare (f_8015d490, f_80159dc0, f_838baa40): what the physics' inverse step is compared with */
 uint32_t hos_oot_floor_cut(void) {
+    if (!above60_fixes()) return 0x42c80000u;   /* (Above-60 fixes off: the game's own 100.0, as before the fix) */
     const uint32_t cut = oot_floor_cut(__atomic_load_n(&hos_frame_seconds_bits, __ATOMIC_RELAXED));
     if (fps_log()) {
         static volatile LONG64 calls;
@@ -90,6 +105,7 @@ static SRWLOCK sim_lock = SRWLOCK_INIT;   /* (the physics step's jobs) */
 /* The fixed steps of f_83895f20 and f_838a2660: object, the water manager (its x19); quotient_bits, the update's seconds over
    1/60 s. The float the game's cut then takes */
 uint32_t hos_oot_sim_steps(uint64_t object, uint32_t quotient_bits) {
+    if (!above60_fixes()) return quotient_bits;   /* (off: the game's own quotient, for its own cut, as before the fix) */
     const int t = timed();
     long long given = -1;
     AcquireSRWLockExclusive(&sim_lock);

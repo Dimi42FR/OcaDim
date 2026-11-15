@@ -1,4 +1,4 @@
-"""The Insert menu's Rumble strength row (Controls): Off, 25% to 150% in steps of 25, stopping at its ends.
+﻿"""The Insert menu's Rumble strength row (Controls): Off, 25% to 150% in steps of 25, stopping at its ends.
 
 gpu/vk/vk_menu.cpp's row, set_row (the arrows, Enter and a click on the value) and the ini's snap to the row's steps are
 compiled from the source with stubs and run: one step below Off stays Off, one above 150% stays 150%, however it is
@@ -81,6 +81,7 @@ namespace mr { constexpr int kMax = 8; }
 namespace i18n { inline void set_game_language(int) {} }
 void restart_values(int*) {}
 struct { void note(const int*) {} } restart_state;
+int perf_value = 0;   // (the Performance tab's rows: stops_at_ends names it)
 %(is_slider)s
 %(stops)s
 %(snap)s
@@ -229,3 +230,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
