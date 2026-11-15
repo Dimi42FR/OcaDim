@@ -18,6 +18,18 @@ struct Options {
     int threaded_rendering = 0;   // (longshot) Threaded rendering (threaded_rendering.h): 0 Auto (by the CPU; off everywhere were
                           // threaded::kAutoEnabled off), 1 On (the render thread and the recorder thread), 2 Off. Read once, at the
                           // start (menu_threaded_rendering); RX_VK_ASYNC and RX_VK_RECORDER, when set, over it
+    int replay_workers = 0;   // (longshot) Replay workers: 0 Auto (par_scale.h par::workers: one thread for every four logical
+                          // processors the process may run on, never more than four), else 1 to 4 threads recording each command
+                          // buffer, the replay's own one of them (1: the parallel replay off). Read once, at the start
+                          // (menu_replay_workers); RX_VK_PARALLEL, when set, over it
+    int desc_prefetch = 0;    // (longshot) Descriptor prefetch: 0 Auto (par_scale.h par::prefetch: on from six logical processors),
+                          // 1 On, 2 Off. Read once, at the start (menu_desc_prefetch); RX_VK_DESC_PREFETCH, when set, over it
+    int replay_seg = 0;       // (longshot) Replay segments: 0 32 draws and dispatches a worker at a time (the value this game's
+                          // command buffers need), 1 64, 2 160. Read once, at the start (menu_replay_seg); RX_VK_PARALLEL_SEG, when
+                          // set, over it
+    int above60_fixes = 1;    // (longshot) Above-60 fixes: 1 the floors' carry cut and the height-field surfaces' fixed steps as
+                          // the fixes for frame rates above 60 do them (host/oot_high_fps.c), 0 the game's own 100.0 cut and its
+                          // own step count, as before them. Read once, at the start (menu_above60_fixes, HOS_OPT_ABOVE60_FIXES)
     int hdr = 0;          // (longshot) HDR10 out (vk_framegen.cpp framegen_hdr): 0 off, 1 the SDR picture expanded, 2 the game's own (native) HDR; when the display has it (the swapchain made again at once)
     int hdr_white = 200;  // HDR paper white, nits (the picture's white)
     int hdr_peak = 1000;  // HDR peak brightness, nits (its brightest highlights)
@@ -129,6 +141,22 @@ int menu_vsync();
 /// switches: RX_VK_ASYNC and RX_VK_RECORDER, when set, are read over it by their own readers (vk_replay.cpp
 /// render_thread_mode, vk_recorder.h mode_from_env). A change of the row applies at the next start. Any thread
 bool menu_threaded_rendering();
+/// (longshot) The Replay workers row as this run resolved it, once, at the start: Auto is par_scale.h's rule for the logical
+/// processors the process may run on (par::workers), 1 to 4 the row's own. The threads the replay records each command buffer
+/// with, its own one of them (vk_replay.cpp par_threads, where 1 is the parallel replay off; RX_VK_PARALLEL, when set, is read
+/// over it there). A change of the row applies at the next start
+int menu_replay_workers();
+/// (longshot) The Descriptor prefetch row as this run resolved it, once, at the start: Auto is par_scale.h's rule
+/// (par::prefetch). vk_replay.cpp desc_prefetch_on asks it when RX_VK_DESC_PREFETCH is unset. A change of the row applies at
+/// the next start
+bool menu_desc_prefetch();
+/// (longshot) The Replay segments row as this run resolved it, once, at the start: the draws and dispatches (32, 64 or 160)
+/// a replay worker takes at a time (vk_replay.cpp's per, when RX_VK_PARALLEL_SEG is unset). A change of the row applies at the
+/// next start
+int menu_replay_seg();
+/// (longshot) The Above-60 fixes row as this run resolved it, once, at the start: false restores the game's own behaviour
+/// before the fixes for frame rates above 60 (host/oot_high_fps.c, answered through HOS_OPT_ABOVE60_FIXES)
+bool menu_above60_fixes();
 void menu_set_gpu_count(int count);
 std::string driver_text();   // (vk_main.cpp: the driver as it names itself, for the log and Save my pipeline list)
 void menu_tick();             // (each frame shown: the keys, while the game's window has the focus)

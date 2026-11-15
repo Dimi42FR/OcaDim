@@ -1,4 +1,4 @@
-"""Quality presets preserve the player's frame-generation choice.
+﻿"""Quality presets preserve the player's frame-generation choice.
 
 Compile the menu's actual preset and row handlers with small stand-ins.
 Check that the game FPS cap keeps its saved key when its label changes. Preset
@@ -64,6 +64,7 @@ namespace mr { constexpr int kMax = 8; }
 namespace i18n { inline void set_game_language(int) {} }
 void restart_values(int*) {}
 struct { void note(const int*) {} } restart_state;
+int perf_value = 0;   // (the Performance tab's rows: stops_at_ends names it)
 bool can_mic() { return false; }
 void mic_chosen() {}
 void samplers_changed() {}
@@ -190,3 +191,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

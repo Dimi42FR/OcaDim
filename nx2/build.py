@@ -1222,9 +1222,11 @@ def main():
     if build_vk:
         cxx = toolchain.need(toolchain.find("clang++"))
         vk = os.path.join(GPU, "vk")
-        # (longshot) the start-up screen's logo, assets/longshot.png as RGBA bytes in a header of the build's own (nx2/logo_rgba.py);
-        # its bytes are part of vk_imgui.cpp's dependencies. The AppImage carries third_party/fonts and the back end's sources for
-        # it: a player's build there once stopped at the fonts (FileNotFoundError: LibertinusSans-Regular.ttf, 2026-11-10)
+        # (longshot) the start-up screen's pictures, a header of the build's own each (nx2/logo_rgba.py): its logo,
+        # assets/longshot.png as RGBA bytes, and beside it the backdrop, assets/ocadim-backdrop.png (the player's own artwork,
+        # Dimi42FR) as RGB bytes; both their bytes are part of vk_imgui.cpp's dependencies. The AppImage carries third_party/fonts
+        # and the back end's sources for it: a player's build there once stopped at the fonts (FileNotFoundError:
+        # LibertinusSans-Regular.ttf, 2026-11-10)
         logo_text = logo_rgba.write(os.path.join(gen_dir, "longshot_logo.h")).encode()
         # (the overlays' bundled fonts, third_party/fonts/libertinus, as a C++ file of the build's own: nx2/ui_fonts.py)
         fonts_cpp = os.path.join(gen_dir, "ui_fonts.cpp")

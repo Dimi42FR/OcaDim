@@ -71,6 +71,10 @@ enum { HOS_OPT_AUTO_RUN = 56 };
    start (gpu/vk/vk_replay.cpp async_on: RX_VK_ASYNC=1, or unset and the Insert menu's Threaded rendering On, or its Auto's
    choice). host/nvn_native.c answers the game's present poll at once with it. The existing option callback: no new member.) */
 enum { HOS_OPT_RENDER_THREAD = 58 };
+/* (HOS_OPT_ABOVE60_FIXES, 59: the Insert menu's Above-60 fixes row, host/oot_high_fps.c hos_oot_floor_cut and hos_oot_sim_steps:
+   1 the fixes for frame rates above 60 (the default), 0 the game's own 100.0 cut of a floor's carry and its own count of the
+   height-field surfaces' steps, as before them. Read once. The existing option callback: no new member.) */
+enum { HOS_OPT_ABOVE60_FIXES = 59 };
 
 /* (longshot) the controls' names (host/nn_hid.c, host/pad_sdl.c, the pad_ and key_ lines of longshot_options.ini):
    the Switch's buttons in nn::hid's bit order, and a gamepad's inputs by position (the bottom face button first:

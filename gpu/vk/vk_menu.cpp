@@ -52,6 +52,7 @@
 #include "auto_settings.h"
 #include "menu_restart.h"
 #include "threaded_rendering.h"   // (the Threaded rendering row's rule, and the one gate over its Auto)
+#include "par_scale.h"   // (the Replay workers and Descriptor prefetch rows' Auto: the small-PC rule, as the replay applies it)
 #include "vk_menu_i18n.h"
 #include "display_modes.h"   // (the Aspect ratio and Output resolution rows: the screen's sizes and their shapes)
 #ifndef LONGSHOT_ENV_H   // (env_on: the switches' one rule)
@@ -1067,6 +1068,62 @@ const char* hn_threaded(int v, int variant) {
     }
     return variant <= 0 ? t[std::clamp(v, 0, 2)] : nullptr;
 }
+const char* tx_replay_workers(int v) {
+    static const char* const t[] = {"Auto", "1", "2", "3", "4"};
+    return t[std::clamp(v, 0, 4)];
+}
+/// (the environment's switch for this run, over the Replay workers row: RX_VK_PARALLEL names the workers itself)
+const char* workers_env() { return getenv("RX_VK_PARALLEL") ? "RX_VK_PARALLEL" : nullptr; }
+const char* hn_replay_workers(int v, int variant) {
+    static const char* const t[] = {
+        "One thread for every four the game may use, never more than four, none under six: as before, the replay's own one "
+        "of them.",
+        "One thread only: the replay records the command buffer on its own, as with the parallel replay off.",
+        "Two threads record a command buffer, the replay's own one of them.",
+        "Three threads record a command buffer, the replay's own one of them.",
+        "Four threads: the most the replay takes."};
+    if (variant == 1 || (variant < 0 && workers_env())) {
+        static char b[96];
+        snprintf(b, sizeof b, "%s is set: it chooses for this run.", workers_env() ? workers_env() : "RX_VK_PARALLEL");
+        return b;
+    }
+    return variant <= 0 ? t[std::clamp(v, 0, 4)] : nullptr;
+}
+/// (the environment's switch for this run, over the Descriptor prefetch row: RX_VK_DESC_PREFETCH chooses on or off)
+const char* prefetch_env() { return getenv("RX_VK_DESC_PREFETCH") ? "RX_VK_DESC_PREFETCH" : nullptr; }
+const char* hn_desc_prefetch(int v, int variant) {
+    static const char* const t[] = {
+        "On from six threads the game may use: under that, the helper's own thread would take a core the game needs.",
+        "Each buffer's descriptors are read on a helper thread ahead of the replay, for less waiting in a draw.",
+        "The replay reads them itself."};
+    if (variant == 1 || (variant < 0 && prefetch_env())) {
+        static char b[96];
+        snprintf(b, sizeof b, "%s is set: it chooses for this run.", prefetch_env() ? prefetch_env() : "RX_VK_DESC_PREFETCH");
+        return b;
+    }
+    return variant <= 0 ? t[std::clamp(v, 0, 2)] : nullptr;
+}
+const char* tx_replay_seg(int v) {
+    static const char* const t[] = {"32", "64", "160"};
+    return t[std::clamp(v, 0, 2)];
+}
+/// (the environment's switch for this run, over the Replay segments row: RX_VK_PARALLEL_SEG names the size itself)
+const char* seg_env() { return getenv("RX_VK_PARALLEL_SEG") ? "RX_VK_PARALLEL_SEG" : nullptr; }
+const char* hn_replay_seg(int v, int variant) {
+    static const char* const t[] = {
+        "32 draws and dispatches a worker at a time: the size this game's command buffers fill, and the default.",
+        "64 at a time: fewer hand-overs, for command buffers long enough to fill them.",
+        "160 at a time: for long command buffers; these may leave the workers waiting."};
+    if (variant == 1 || (variant < 0 && seg_env())) {
+        static char b[96];
+        snprintf(b, sizeof b, "%s is set: it chooses for this run.", seg_env() ? seg_env() : "RX_VK_PARALLEL_SEG");
+        return b;
+    }
+    return variant <= 0 ? t[std::clamp(v, 0, 2)] : nullptr;
+}
+MENU_HINTS(hn_above60_fixes, 0,
+           "The game's own 100.0 cut for the floors' carry and its own count of the surfaces' steps: as before the fixes.",
+           "The floors' carry is cut where it was at 60 fps, and the height-field surfaces keep their 60 steps a second.")
 /// The Output resolution: the game's own reduced size, the player's own, or one of the screen's sizes as it compares with the
 /// screen (its own, larger, smaller; nothing where the screen's size is not known)
 const char* hn_output_res(int v, int variant) {
@@ -1380,6 +1437,23 @@ Row rows[] = {
     {TAB_GRAPHICS, "Threaded rendering", &opts.threaded_rendering, 0, 2, 1, tx_vsync,
      "Draws the picture on threads of its own, beside the game's, on a processor with threads to spare. Applies after a "
      "restart.", hn_threaded, true, true},
+    // (longshot, the replay's own threads and segments, and the above-60 fixes, the four rows those readers take. Read once,
+    // at the start: menu_replay_workers, menu_desc_prefetch, menu_replay_seg, menu_above60_fixes)
+    {TAB_GRAPHICS, "Replay workers", &opts.replay_workers, 0, 4, 1, tx_replay_workers,
+     "The threads the replay records the picture's command buffers with, its own one of them, on a processor with threads to "
+     "spare: more records a buffer's segments at once. Auto sizes them from the logical processors the game may use, as "
+     "before. Applies after a restart. Added by Dimi42FR.", hn_replay_workers, true, true},
+    {TAB_GRAPHICS, "Descriptor prefetch", &opts.desc_prefetch, 0, 2, 1, tx_vsync,
+     "Reads each command buffer's descriptors on a helper thread ahead of the replay, for less waiting in a draw. Auto "
+     "turns it on where the processor has threads to spare. Applies after a restart. Added by Dimi42FR.", hn_desc_prefetch,
+     true, true},
+    {TAB_GRAPHICS, "Replay segments", &opts.replay_seg, 0, 2, 1, tx_replay_seg,
+     "How many draws and dispatches a replay worker takes at a time. 32 suits this game's command buffers; 64 and 160 are "
+     "for longer ones. Applies after a restart. Added by Dimi42FR.", hn_replay_seg, true, true},
+    {TAB_GRAPHICS, "Above-60 fixes", &opts.above60_fixes, 0, 1, 1, tx_onoff,
+     "The two places in the game that need whole 60 fps frames, mended above 60: the floors that carry a character, and the "
+     "height-field surfaces' fixed steps. Off: the game's own 100.0 cut and its own step count, the behaviour before the "
+     "fixes. Applies after a restart. Added by Dimi42FR.", hn_above60_fixes, true, true},
     // (no Mesh shaders row: changing it translated every shader again at the next start, for nothing a player gains. A launch
     // switch now, RX_VK_MESH_SHADERS: gpu/vk/mesh_mode.h)
 
@@ -1960,6 +2034,10 @@ const char* ini_key(const Row& r) {
     if (r.value == &opts.dlss) return "dlss";   // (as opts.dlss and RX_VK_DLSS)
     if (r.value == &opts.handheld) return "handheld_profile";   // (the Profile row; host/nn_applet.c reads it at the start)
     if (r.value == &opts.ultrawide) return "ultrawide";   // (the Aspect ratio row; host/hos_main.c reads it at the start)
+    // (longshot) the three whose keys are shorter than their names: the ones the players' files have
+    if (r.value == &opts.desc_prefetch) return "desc_prefetch";
+    if (r.value == &opts.replay_seg) return "replay_seg";
+    if (r.value == &opts.above60_fixes) return "above60_fixes";
     static char k[32];
     size_t n = 0;
     for (const char* p = r.name; *p && n + 1 < sizeof k; p++) k[n++] = *p == ' ' ? '_' : (char)tolower(*p);
@@ -4372,8 +4450,14 @@ void draw_fps(ui::Ctx& c, bool under_banner) {
     }
 }
 
-/// The start-up screen: the logo, the wordmark, what the start is doing, a bar, on a warm dark. A little below the middle; what
-/// is under the logo at 0.86 of the logo's scale. startup_fade, 0 to 1, darkens it all to black as it ends
+// (longshot) The player's build, as the start-up screen names it: the wordmark says OCADIM and this is the line under it. The
+// same pair is in host/hos.h (HOS_PRODUCT_NAME/VERSION) for the window's title, the console's, the log's and the dialogs; keep
+// them equal. The upstream build the sources come from stays in the log's first line, where a report needs it.
+#define OCADIM_VERSION "0.0.1"
+
+/// The start-up screen: the logo, the wordmark, what the start is doing, a bar, over the player's own artwork darkened to a
+/// warm dark. A little below the middle; what is under the logo at 0.86 of the logo's scale. startup_fade, 0 to 1, darkens it
+/// all to black as it ends
 void draw_startup(ui::Ctx& c) {
     StartupView v;
     {
@@ -4381,14 +4465,33 @@ void draw_startup(ui::Ctx& c) {
         v = startup;
     }
     const float s = c.s, w = c.w, h = c.h, cx = w * 0.5f, k = s * 0.86f;   // (k: the scale of what is under the logo)
-    c.d->AddRectFilled(ImVec2(0, 0), ImVec2(w, h), ui::rgba(14, 10, 6));
+    // (the backdrop first: the player's own artwork (assets/ocadim-backdrop.png, Dimi42FR), scaled to cover the whole window
+    // with the overflow cropped, never stretched; then a scrim of the warm dark this screen had, so the wordmark, the version
+    // and the bar keep their contrast over it)
+    int bw = 0, bh = 0;
+    ImTextureData* art = ui::backdrop(&bw, &bh);
+    if (art && bw > 0 && bh > 0) {
+        ImVec2 uv0(0, 0), uv1(1, 1);
+        const float pic = (float)bw / (float)bh, win = w / h;
+        if (pic > win) {   // (wider than the window: its sides cropped)
+            const float seen = win / pic;
+            uv0.x = (1 - seen) * 0.5f, uv1.x = (1 + seen) * 0.5f;
+        } else if (pic < win) {   // (taller: its top and bottom cropped)
+            const float seen = pic / win;
+            uv0.y = (1 - seen) * 0.5f, uv1.y = (1 + seen) * 0.5f;
+        }
+        c.d->AddImage(art->GetTexRef(), ImVec2(0, 0), ImVec2(w, h), uv0, uv1);
+        c.d->AddRectFilled(ImVec2(0, 0), ImVec2(w, h), ui::rgba(14, 10, 6, 153));   // (60% of the screen's own dark)
+    } else {
+        c.d->AddRectFilled(ImVec2(0, 0), ImVec2(w, h), ui::rgba(14, 10, 6));
+    }
     const float lh = 112 * s, top = h * 0.5f - 176 * s;
     for (int i = 40; i >= 1; i--) c.d->AddCircleFilled(ImVec2(cx, top + lh * 0.5f + 70 * s), h * 0.021f * i, ui::rgba(46, 33, 18, 4), 128);
     float aspect = 1;
     ImTextureData* logo = ui::logo(&aspect);
     if (logo) c.d->AddImage(logo->GetTexRef(), ImVec2(cx - lh * aspect * 0.5f, top), ImVec2(cx + lh * aspect * 0.5f, top + lh));
     float y = top + lh + 16 * s;
-    ui::spaced(c, c.f.heading, 42 * k, ImVec2(cx, y), ui::rgba(246, 232, 204), "LONGSHOT", 6 * k);
+    ui::spaced(c, c.f.heading, 42 * k, ImVec2(cx, y), ui::rgba(246, 232, 204), "OCADIM", 6 * k);
     ui::flourish(c, cx - 190 * k, cx + 190 * k, y + 66 * k, ui::kAccent);
     ui::text_centre(c, c.f.body, 14.5f * k, ImVec2(cx, y + 78 * k), ui::kDim, v.version.c_str());
     if (!v.title.empty()) {
@@ -4460,7 +4563,7 @@ void startup_screen(const StartupView* view) {
         return;
     }
     StartupView v = *view;
-    if (v.version.empty()) v.version = version_text(LONGSHOT_VERSION);   // ("v2.0.5"; "v2.0.5 dev" between releases)
+    if (v.version.empty()) v.version = OCADIM_VERSION;   // (the player's build and its number; the build it came from is in the log)
     {
         std::lock_guard lk(startup_mu);
         startup = v;
@@ -4692,6 +4795,66 @@ bool menu_threaded_rendering() {
             break;
         }
         return c.on;
+    }();
+    return on;
+}
+/// (longshot) The Replay workers row, resolved once for the run (par_scale.h): Auto is the rule there, one thread for every
+/// four logical processors the process may run on and never more than four, none under six; the row's 1 to 4 are the threads
+/// themselves, the replay's own one of them (1: it records alone, the parallel replay off). vk_replay.cpp par_threads asks it
+/// when RX_VK_PARALLEL is unset (the switch is read over it there), so a change of the row applies at the next start
+int menu_replay_workers() {
+    static const int n = [] {
+        menu_init();
+        const int row = std::clamp(opts.replay_workers, 0, 4);
+        if (row) {
+            logf("vk: Replay workers: %d (the Insert menu's row)", row);
+            return row;
+        }
+        const unsigned cpus = usable_cpus();
+        const int w = par::workers(cpus);   // (gpu/vk/par_scale.h, checked by tests/test_parallel_workers.py)
+        logf("vk: Replay workers: Auto: %d for the %u logical processors the process may run on", w, cpus);
+        return w;
+    }();
+    return n;
+}
+/// (longshot) The Descriptor prefetch row, resolved once for the run: Auto is par_scale.h's rule (on from six logical
+/// processors, where the helper's own thread does not take a core the game needs). vk_replay.cpp desc_prefetch_on asks it when
+/// RX_VK_DESC_PREFETCH is unset. A change of the row applies at the next start
+bool menu_desc_prefetch() {
+    static const bool on = [] {
+        menu_init();
+        const int row = std::clamp(opts.desc_prefetch, 0, 2);
+        if (row != 0) {
+            logf("vk: Descriptor prefetch: %s (the Insert menu's row)", row == 1 ? "on" : "off");
+            return row == 1;
+        }
+        const unsigned cpus = usable_cpus();
+        const bool pick = par::prefetch(cpus);   // (gpu/vk/par_scale.h)
+        logf("vk: Descriptor prefetch: Auto: %s (%u logical processors)", pick ? "on" : "off", cpus);
+        return pick;
+    }();
+    return on;
+}
+/// (longshot) The Replay segments row, resolved once for the run: the draws and dispatches a replay worker takes at a time
+/// (32, the value this game's command buffers need, 64 or 160). vk_replay.cpp's per asks it when RX_VK_PARALLEL_SEG is unset.
+/// A change of the row applies at the next start
+int menu_replay_seg() {
+    static const int n = [] {
+        menu_init();
+        const int row = std::clamp(opts.replay_seg, 0, 2);
+        const int seg = row == 1 ? 64 : row == 2 ? 160 : 32;
+        logf("vk: Replay segments: %d draws and dispatches a segment%s", seg, row ? "" : " (the default)");
+        return seg;
+    }();
+    return n;
+}
+/// (longshot) The Above-60 fixes row, resolved once for the run: true, the fixes for frame rates above 60 as host/oot_high_fps.c
+/// has them; false, the game's own behaviour before them. The host asks it through the option callback (HOS_OPT_ABOVE60_FIXES)
+bool menu_above60_fixes() {
+    static const bool on = [] {
+        menu_init();
+        logf("vk: Above-60 fixes: %s", opts.above60_fixes ? "on" : "off (the game's own, as before the fixes)");
+        return opts.above60_fixes != 0;
     }();
     return on;
 }
