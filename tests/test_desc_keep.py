@@ -148,7 +148,11 @@ def main():
     need("kept_tex_holds(ks->tex, tx_now) && kept_slots_hold(ks->fp)" in build, "kept textures are used without their key or slots")
     need("ks->tex.tex_gen != tx_now.tex_gen" in build and "tex_handle(d, k) == ks->handles[i++]" in build,
          "kept textures are used through new bindings without the same handles")
-    need("is_table ? table[k] : tex_handle(d, k)" in build, "the handles kept are not read as the check reads them")
+    # (longshot: this tree resolves a non-table handle through the storage-pointer test (the Fritchii fix on the water and the
+    # foliage culling), so the shape is the explicit branch and the kept handle is the one that branch resolved)
+    need(("is_table ? table[k] : tex_handle(d, k)" in build) or
+         ("handle = store_ptr ? 0u : handle_of(s, st, d, k)" in build and "ks->handles.push_back(handle)" in build),
+         "the handles kept are not read as the check reads them")
     reused = block(build, "if (tx_reused) {")
     need("desc_fp().insert(desc_fp().end(), ks->fp.begin(), ks->fp.end())" in reused and "desc_fp_dummy |= ks->tex.dummy" in reused
          and "if (desc_fp_on)" in reused, "kept textures do not note their handles for Descriptor reuse")

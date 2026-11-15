@@ -560,14 +560,14 @@ def logic_checks(exe, menu, tmp, form):
     crash = record("crash", reason="unhandled exception", exception="0xc0000005", module_offset="longshot.exe+0x1234")
     plain = log()
     v = verdict(crash, plain)
-    assert v[:3] == (CRASH, UNKNOWN, 0) and v[3] == "Longshot closed unexpectedly", v
-    assert v[4].startswith("Longshot closed unexpectedly during the start.") and "An unexpected error." in v[4]
-    assert "Report copies" in v[4] and "Longshot itself sends nothing" in v[4]
+    assert v[:3] == (CRASH, UNKNOWN, 0) and v[3] == "OcaDim closed unexpectedly", v
+    assert v[4].startswith("OcaDim closed unexpectedly during the start.") and "An unexpected error." in v[4]
+    assert "Report copies" in v[4] and "OcaDim itself sends nothing" in v[4]
     assert verdict(crash, log("[hos Main] map: Hyrule Field"))[:3] == (CRASH, UNKNOWN, 2)
     assert "while you were playing" in verdict(crash, log("[hos Main] map: Hyrule Field"))[4]
     assert "while it prepared the shaders" in verdict(crash, log("[hos host] vk: precompile: 1 programs"))[4]
     v = verdict(crash, None)
-    assert v[0] == CRASH and v[2] == 3 and v[4].startswith("Longshot closed unexpectedly.\n"), \
+    assert v[0] == CRASH and v[2] == 3 and v[4].startswith("OcaDim closed unexpectedly.\n"), \
         "no log found: nothing said about when (not \"during the start\" for a crash in play)"
     assert verdict(crash, plain, 1, 0)[0] == CRASH, "a crash record shows whatever the exit code"
     assert verdict(crash, plain, 0, 0, 1)[0] == QUIET, "a run another took the place of says nothing"
@@ -628,15 +628,15 @@ def logic_checks(exe, menu, tmp, form):
         assert int(run(exe, "shown", name, value)) == want, (name, value)
     print("PASS: a setting's value only when it is a number, a size or on/off; never for a secret's name")
     # the issue link
-    url = run(exe, "url", "Game: Longshot closed unexpectedly during the start", "v3.1.0 (source 1234abcd)",
+    url = run(exe, "url", "Game: OcaDim closed unexpectedly during the start", "v3.1.0 (source 1234abcd)",
               "NVIDIA GeForce RTX 3090, NVIDIA 580.95.05", "Ryzen 7 7700 (16 threads), 32 GB, Windows 11 (build 26100)",
-              "Longshot closed unexpectedly during the start. An unexpected error.").strip()
+              "OcaDim closed unexpectedly during the start. An unexpected error.").strip()
     assert url.startswith(form + "&") and len(url) <= 2000, url
     q = parse_qs(urlsplit(url).query)
     assert q["template"] == [".forgejo/ISSUE_TEMPLATE/1-game-problem.yml"]
     assert (ROOT / q["template"][0]).is_file()
     assert q["field:version"] == ["v3.1.0 (source 1234abcd)"] and q["field:gpu"] == ["NVIDIA GeForce RTX 3090, NVIDIA 580.95.05"]
-    assert q["title"] == ["Game: Longshot closed unexpectedly during the start"] and "field:what" in q and "field:system" in q
+    assert q["title"] == ["Game: OcaDim closed unexpectedly during the start"] and "field:what" in q and "field:system" in q
     long_url = run(exe, "url", "T", "v1", "G", "S", "w" * 3000).strip()
     assert len(long_url) <= 2000 and "field:what" not in parse_qs(urlsplit(long_url).query) and "field:version=v1" in long_url, \
         "what does not fit is left out, the rest kept"

@@ -54,6 +54,15 @@ thread_local int step = 0;
 thread_local size_t ub_limit = SIZE_MAX;
 size_t ub_first_of_recording = 0;
 uint64_t rec_value_now = 1;
+// (longshot) the descriptor prefetch's own symbols, defined above the slice in vk_replay.cpp: stubbed here, so this fixture
+// checks the buckets alone (the prefetch's work has its own checks)
+constexpr uint64_t kPfMaxBytes = 16384;
+static bool pf_neg_lookup(uint64_t, uint64_t, size_t) { return false; }
+static bool pf_ub_lookup(uint64_t, uint64_t, size_t, uint8_t*) { return false; }
+thread_local std::vector<uint8_t> pf_got;
+std::atomic<int64_t> st_pf_hit{0}, st_pf_miss{0};
+static void pf_learn(uint64_t, uint64_t) {}
+static uint64_t pf_asked(uint64_t) { return 0; }
 std::atomic<int64_t> st_ub_overlays{0};
 bool env_on(const char* name) { const char* e = std::getenv(name); return e && std::atoi(e); }
 uint64_t memory_capture_view() { return 1; }

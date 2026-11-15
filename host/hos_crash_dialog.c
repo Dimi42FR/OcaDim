@@ -533,7 +533,7 @@ static char *report_text(const Report *in, size_t *len) {
     Buf b = {0};
     char now[17];
     utc_now(now);
-    putf(&b, "Longshot crash report, made by the window Longshot shows after a crash (%s UTC). Longshot sent nothing: paste "
+    putf(&b, "OcaDim crash report, made by the window OcaDim shows after a crash (%s UTC). OcaDim sent nothing: paste "
              "this into the issue form, and attach the game folder's logs/longshot_log.txt if you can.\n\n", now);
     put(&b, "### What happened\n\n");
     char message[1024];
@@ -547,7 +547,7 @@ static char *report_text(const Report *in, size_t *len) {
     Recent recent = {(int64_t)time(NULL), 0};
     if (pending_of(in->dir, pending, sizeof pending)) each_name(pending, count_recent, &recent);
     putf(&b, "Crash and unclean-end records in the last day: %d.\n\n", recent.count);
-    putf(&b, "### Longshot version\n\n%s\nChannel (from the version): %s\n\n", in->version, channel_of(in->version));
+    putf(&b, "### OcaDim version\n\n%s\nChannel (from the version): %s\n\n", in->version, channel_of(in->version));
     putf(&b, "### Graphics card and driver version\n\n%s\n", in->gpu);
     if (in->log->facts.devices[0]) putf(&b, "Devices the log lists: %s\n", in->log->facts.devices);
     putf(&b, "\n### CPU, RAM and operating system\n\n%s\nBuilt for: %s\n\n", in->system, built_for());
@@ -942,7 +942,7 @@ static void report(const Shown *s) {
     if (m) hos_crash_ready_text(m, PATH_MAX_UTF8 + 1024, copied, opened, saved ? local : NULL, HOS_CRASH_ISSUES);
     const char *const buttons[] = {"Open the report", "Done"};
     for (int shown = 0;; shown++) {
-        const int hit = box_serving("Longshot: report ready", m ? m : "", saved ? buttons : buttons + 1, saved ? 2 : 1);
+        const int hit = box_serving("OcaDim: report ready", m ? m : "", saved ? buttons : buttons + 1, saved ? 2 : 1);
         /* (no box could be shown at all: the saved report opened instead, so the player has it in front of them) */
         if (hit == -2 && !shown && saved) open_thing(local);
         if (!saved || hit != 0) break;

@@ -2593,7 +2593,8 @@ const uint8_t* replay_handle(VkCommandBuffer& cmd, const uint8_t* h, bool may_st
         PfItem it{{h, start, ub0, par_conds.size(), 0}, nullptr, false, true, ub0, {}};
         // (the updates before this buffer, copied now: the list is pruned between submissions and the helper may
         // only get here after — its overlays apply these by copy, never by the list's place)
-        for (size_t i = 0; i < ub0; i++) it.ubs.push_back({ub_updates[i].dst, ub_updates[i].bytes});
+        for (size_t i = 0; i < ub0; i++)
+            it.ubs.push_back({ub_updates[i].dst, std::vector<uint8_t>(ub_updates[i].bytes, ub_updates[i].bytes + ub_updates[i].size)});
         {
             std::lock_guard pfl(pf_mu);
             pf_queue.push_back(std::move(it));

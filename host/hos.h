@@ -63,7 +63,11 @@ extern const char hos_main_build_id[];                 /* (gen/hos_image.c: main
 /* (oot-recomp) MKW's own hooks at fixed guest addresses (its frame pacer in nvn_native.c / nn_vi.c, its idle loop in
    hos_thread.c) run only when the lifted main is Mario Kart World's: any other game has other code there */
 int hos_game_is_mkw(void);
-#define HOS_GAME_TITLE "Longshot"
+/* (OcaDim) the player sees the build's own name: the window's title, the taskbar's, the console's and the dialogs'. The
+   version is this build's, not the upstream release the sources come from (LONGSHOT_VERSION, logged beside it) */
+#define HOS_PRODUCT_NAME "OcaDim"
+#define HOS_PRODUCT_VERSION "0.0.1"
+#define HOS_GAME_TITLE HOS_PRODUCT_NAME " " HOS_PRODUCT_VERSION
 uint64_t hos_used_memory(uint64_t base);   /* (hos_mem.c) base + heap + the game's mapped pages: the used memory it is told */
 int hos_commit(uint64_t addr, uint64_t size);          /* (mkw_glue.c) guest pages made usable by host APIs: 1, or 0 if refused */
 int hos_mem_region(uint64_t addr, uint64_t size);      /* (hos_mem.c) the control bridge: 0 if not wholly in mapped guest memory */

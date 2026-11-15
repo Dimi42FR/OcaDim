@@ -1715,7 +1715,7 @@ static void memory_notice(void) {
     int hos_sdl_load(void);
     hos_sdl_load();   /* (host/posix MessageBoxA shows it through the SDL already loaded) */
 #endif
-    MessageBoxA(NULL, text, "Longshot", MB_OK | MB_ICONWARNING);
+    MessageBoxA(NULL, text, HOS_GAME_TITLE, MB_OK | MB_ICONWARNING);
 }
 #endif
 #ifdef _WIN32
@@ -1742,13 +1742,13 @@ static int narrow_paths_ok(int argc, char **argv) {
     if (!quiet) {
         wchar_t text[MAX_PATH * 2 + 640];
         _snwprintf(text, sizeof text / sizeof text[0],
-                   L"Longshot can't open its files in this folder:\n\n%ls\n\n"
-                   L"%ls\n\nMove the game folder somewhere with a shorter name of plain letters and digits (for example C:\\Games\\Longshot), "
+                   L"OcaDim can't open its files in this folder:\n\n%ls\n\n"
+                   L"%ls\n\nMove the game folder somewhere with a shorter name of plain letters and digits (for example C:\\Games\\OcaDim), "
                    L"or update Windows.",
                    w, GetACP() == CP_UTF8 ? L"The path is too long."
                                           : L"Its name has characters this Windows can only give the game from Windows 10 version 1903 on.");
         text[sizeof text / sizeof text[0] - 1] = 0;
-        MessageBoxW(NULL, text, L"Longshot", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
+        MessageBoxW(NULL, text, L"OcaDim 0.0.1", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
     }
     return 0;
 }
@@ -1826,7 +1826,7 @@ static int game_main(int argc, char **argv) {
             if (freopen(path, "w", stderr)) setvbuf(stderr, NULL, _IONBF, 0);
         } else hos_crash_record_prepare(NULL);   /* an externally supplied stderr, not the game's log */
     }
-    hos_log("longshot %s", LONGSHOT_VERSION);   /* (the log's first line: which build a report comes from) */
+    hos_log("%s %s (longshot %s)", HOS_PRODUCT_NAME, HOS_PRODUCT_VERSION, LONGSHOT_VERSION);   /* (the log's first line: which build a report comes from) */
     const char *hos_report_run_id(void);
     hos_log("run_id: %s", hos_report_run_id());
     hos_game_layout_log();

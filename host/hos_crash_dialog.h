@@ -309,13 +309,13 @@ static inline int hos_crash_cause(int verdict, const HosCrashRecord *r, const Ho
     return HOS_CAUSE_UNKNOWN;
 }
 static inline const char *hos_crash_title(int verdict) {
-    return verdict == HOS_CRASH_SHOW_START ? "Longshot couldn't start" : "Longshot closed unexpectedly";
+    return verdict == HOS_CRASH_SHOW_START ? "OcaDim couldn't start" : "OcaDim closed unexpectedly";
 }
 static inline const char *hos_crash_stage_text(int stage) {
     return stage == HOS_STAGE_PLAY ? "while you were playing" : stage == HOS_STAGE_PREPARING ? "while it prepared the shaders"
          : stage == HOS_STAGE_UNKNOWN ? "" : "during the start";
 }
-/* What happened and when, as a sentence without its full stop: "Longshot closed unexpectedly while you were playing" */
+/* What happened and when, as a sentence without its full stop: "OcaDim closed unexpectedly while you were playing" */
 static inline void hos_crash_headline(char *out, size_t cap, const char *what, int stage) {
     const char *when = hos_crash_stage_text(stage);
     snprintf(out, cap, "%s%s%s", what, when[0] ? " " : "", when);
@@ -323,18 +323,18 @@ static inline void hos_crash_headline(char *out, size_t cap, const char *what, i
 static inline const char *hos_crash_cause_text(int cause) {
     switch (cause) {
     case HOS_CAUSE_FILES:
-        return "Longshot's game files are missing or don't match each other. Build the game again with the Longshot Launcher.";
+        return "OcaDim's game files are missing or don't match each other. Build the game again with the launcher.";
     case HOS_CAUSE_VULKAN:
-        return "Vulkan didn't start on your graphics card. Update your graphics driver: Longshot needs a graphics card and "
+        return "Vulkan didn't start on your graphics card. Update your graphics driver: OcaDim needs a graphics card and "
                "driver with Vulkan 1.3.";
-    case HOS_CAUSE_WINDOW: return "Longshot couldn't open its window. Restart your PC, and update your graphics driver.";
+    case HOS_CAUSE_WINDOW: return "OcaDim couldn't open its window. Restart your PC, and update your graphics driver.";
     case HOS_CAUSE_MEMORY:
-        return "Your PC ran out of memory. Close other programs and try again; Longshot needs 16 GB of RAM, and on Windows a "
+        return "Your PC ran out of memory. Close other programs and try again; OcaDim needs 16 GB of RAM, and on Windows a "
                "page file Windows manages.";
     case HOS_CAUSE_GPU_DRIVER:
         return "The graphics driver failed. Update your graphics driver, and turn off overlays and tools hooked into the game.";
     case HOS_CAUSE_ENDED:
-        return "Longshot ended without a crash report: it was closed from outside (Task Manager, a kill), or the system "
+        return "OcaDim ended without a crash report: it was closed from outside (Task Manager, a kill), or the system "
                "stopped it, often for running out of memory.";
     default: return "An unexpected error.";
     }
@@ -342,13 +342,13 @@ static inline const char *hos_crash_cause_text(int cause) {
 /* The window's text: what happened and when, why, and what Report does */
 static inline size_t hos_crash_message(char *out, size_t cap, int verdict, int stage, int cause) {
     char headline[160];
-    hos_crash_headline(headline, sizeof headline, verdict == HOS_CRASH_SHOW_START ? "Longshot stopped" : "Longshot closed unexpectedly",
+    hos_crash_headline(headline, sizeof headline, verdict == HOS_CRASH_SHOW_START ? "OcaDim stopped" : "OcaDim closed unexpectedly",
                        stage);
     const int n = snprintf(out, cap,
                            "%s.\n\nWhat went wrong: %s\n\n"
                            "Report copies a report to your clipboard (the error, your PC's hardware and the end of the log, "
-                           "with your home folder and user name taken out) and opens Longshot's issue form in your browser, "
-                           "for you to paste it into. Longshot itself sends nothing.",
+                           "with your home folder and user name taken out) and opens the project's issue form in your browser, "
+                           "for you to paste it into. OcaDim itself sends nothing.",
                            headline, hos_crash_cause_text(cause));
     return n < 0 ? 0 : (size_t)n < cap ? (size_t)n : cap ? cap - 1 : 0;
 }
