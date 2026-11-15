@@ -1531,6 +1531,10 @@ Row rows[] = {
      "A draw pass right after another waits in its fragment stages only, and a compute dispatch right after another gets no "
      "barrier, as the game's own barriers order them. Auto: NVIDIA only, where it was measured; On tries it on this card. "
      "Applies after a restart. Added by Dimi42FR.", nullptr, true, true},
+    {TAB_GRAPHICS, "Batched submits", &opts.batch_submits, 0, 2, 1, tx_vsync,
+     "Holds a frame's command submissions and sends them as one at the next wait, readback or present: on Mesa's RADV it took "
+     "Kokiri Forest from 33-41 to 46-61 fps. Auto: RADV only, where it was measured; On tries it on this driver. Added by "
+     "Dimi42FR.", nullptr, true, true},
     // (no Mesh shaders row: changing it translated every shader again at the next start, for nothing a player gains. A launch
     // switch now, RX_VK_MESH_SHADERS: gpu/vk/mesh_mode.h)
 
@@ -5190,6 +5194,15 @@ bool menu_ccx_split() {
         return v;
     }();
     return on;
+}
+int menu_batch_submits() {   // (OcaDim) 0 Auto, 1 On, 2 Off (vk_replay.cpp batch_on reads RX_VK_BATCH before it)
+    static const int n = [] {
+        menu_init();
+        const int row = std::clamp(opts.batch_submits, 0, 2);
+        logf("vk: batched submits row: %s", row == 1 ? "on" : row == 2 ? "off" : "Auto (RADV only)");
+        return row;
+    }();
+    return n;
 }
 bool intel_compiles_side_by_side() {   // (RX_VK_NO_INTEL_SERIAL in the row: menu_init. Asked once the device is made)
     return intel_side_by_side_chosen(opts.intel_compiles, dev.props.deviceID, dev.props.driverVersion);

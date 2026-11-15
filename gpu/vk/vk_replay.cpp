@@ -234,8 +234,11 @@ bool batch_on() {
         const char* e = getenv("RX_VK_BATCH");
         // (k10) not on GCN (no stage pinned to 32 lanes, 64-lane waves): an RX 580 ran Kokiri Forest at 24 fps without and 20 with
         const bool gcn = dev.sg32_stages == 0 && dev.subgroup_size > 32;
-        const bool v = e ? atoi(e) != 0 : radv && !gcn;
-        logf("vk: batched submits %s (RX_VK_BATCH%s)", v ? "on" : "off", !e && radv ? gcn ? ", off on GCN" : ", on with RADV" : "");
+        bool v;
+        if (e) v = atoi(e) != 0;
+        else if (const int row = menu_batch_submits()) v = row == 1;   // (OcaDim) the Insert menu's row
+        else v = radv && !gcn;
+        logf("vk: batched submits %s (RX_VK_BATCH%s)", v ? "on" : "off", !e && !menu_batch_submits() && radv ? gcn ? ", off on GCN" : ", on with RADV" : "");
         return v;
     }();
     return on && batch_tl != VK_NULL_HANDLE;

@@ -35,6 +35,8 @@ struct Options {
                           // RX_VK_CCX_SPLIT over it
     int draw_order = 0;   // (OcaDim) Draw order barriers: 0 Auto (NVIDIA only, as upstream measured), 1 On, 2 Off. Read once, at the
                           // start (menu_draw_order); RX_VK_GAME_ORDER over it
+    int batch_submits = 0;   // (OcaDim) Batched submits: 0 Auto (Mesa's RADV only, where it was measured 33-41 -> 46-61 fps in Kokiri
+                          // Forest), 1 On, 2 Off. Read once (menu_batch_submits); RX_VK_BATCH over it (vk_replay.cpp batch_on)
     int hdr = 0;          // (longshot) HDR10 out (vk_framegen.cpp framegen_hdr): 0 off, 1 the SDR picture expanded, 2 the game's own (native) HDR; when the display has it (the swapchain made again at once)
     int hdr_white = 200;  // HDR paper white, nits (the picture's white)
     int hdr_peak = 1000;  // HDR peak brightness, nits (its brightest highlights)
@@ -171,6 +173,9 @@ bool menu_ccx_split();
 /// (OcaDim) Draw order barriers: a draw pass right after another waits in its fragment stages only, and a compute dispatch right
 /// after another gets no barrier, as the game's own barriers order them. Auto: NVIDIA only (measured there). Read once, at the start
 bool menu_draw_order();
+/// (OcaDim) Batched submits: a frame's command submissions held and sent as one vkQueueSubmit2 at the next wait, readback or
+/// present. 0 Auto (Mesa's RADV only, where it was measured), 1 On, 2 Off. Read once, at the start (vk_replay.cpp batch_on)
+int menu_batch_submits();
 void menu_set_gpu_count(int count);
 std::string driver_text();   // (vk_main.cpp: the driver as it names itself, for the log and Save my pipeline list)
 std::string device_name_text();   // (vk_main.cpp: the GPU the game runs on, as its driver names it)
