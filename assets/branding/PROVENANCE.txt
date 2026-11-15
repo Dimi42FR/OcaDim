@@ -7,4 +7,4 @@ Grappling Hook Bean Sticker.png supplied November 12 as the replacement hero, co
 Glowing Fairy Bean Sticker.png supplied November 12 for the three-click Easter egg, copied unchanged as glowing-fairy-bean.png.
 Team logo identified by user: https://magicbean.dev/logo.webp, retrieved November 12, 2026.
 Saved unchanged as magicbean-team-logo.webp (512x512 RGBA WebP); SHA-256 ab917dbf23483b73e1caa80b38bdbbbe1b136943e70db386e89605fc1d33d80c.
-OcaDim's artwork (the shield: OCADIM, RECOMPIL NATIVE DE OCARINA OF TIME, PC EDITION NATIVE PORT) supplied by Dimi42FR on November 15, 2026 as Desktop\ec24b5c2-bf66-4eef-b014-ce4822eb9d2f.webp (1024x559); converted losslessly to PNG as ocadim-setup.png for the setup's welcome page. No other modification.
+OcaDim's artwork (the shield: OCADIM, RECOMPIL NATIVE DE OCARINA OF TIME, PC EDITION NATIVE PORT) supplied by Dimi42FR on November 15, 2026 as Desktop\ec24b5c2-bf66-4eef-b014-ce4822eb9d2f.webp (1024x559); converted losslessly to PNG as ocadim-setup.png for the setup's welcome page, and cropped 512x512 as ocadim-discord.png for the Discord application's Rich Presence art (key "ocadim"). No other modification.

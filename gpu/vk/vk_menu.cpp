@@ -1493,7 +1493,7 @@ Row rows[] = {
     {TAB_GAMEPLAY, "Menu language", &opts.menu_lang, 0, i18n::lang_count(), 1, tx_menu_lang, "The language of this menu.",
      hn_menu_lang, false, true},
     {TAB_GAMEPLAY, "Discord status", &opts.discord, 0, 1, 1, tx_onoff,
-     "Shows \"Playing Longshot\" and the time played in your Discord status, while Discord runs on this PC.", nullptr, false,
+     "Shows \"Playing OcaDim\" and the time played in your Discord status, while Discord runs on this PC.", nullptr, false,
      true},
     {TAB_GAMEPLAY, "Skip opening", &opts.skip_opening, 0, 1, 1, tx_onoff,
      "Skips the new-game opening (the story movie and Navi waking Link) and leaves later cutscenes, the Deku Tree "

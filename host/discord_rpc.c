@@ -1,11 +1,12 @@
-/* (longshot) Discord Rich Presence: "Playing Longshot" with the time played in the player's Discord status, through the local
+/* (OcaDim) Discord Rich Presence: "Playing OcaDim" with the time played in the player's Discord status, through the local
    IPC of a Discord client running on this PC. Nothing leaves the machine but the activity itself, and nothing is sent while the
    Insert menu's "Discord status" row is off (on by default; it does nothing without a Discord client running).
 
    Discord shows the *application's* name above the status ("Playing <name>") and its art: the status needs a Discord application
-   of its own (discord.com/developers/applications, named Longshot, its art uploaded under Rich Presence > Art Assets with the key
+   of its own (discord.com/developers/applications, named OcaDim, its art uploaded under Rich Presence > Art Assets with the key
    below). Its Application ID goes into LONGSHOT_DISCORD_APP_ID_DEFAULT; longshot_options.ini's discord_app_id= or
-   HOS_DISCORD_APP_ID override it. With no id the thread stays idle and says so once in the log.
+   HOS_DISCORD_APP_ID override it. With no id the thread stays idle and says so once in the log: Longshot's application id
+   made Discord say "Playing Longshot", which is not this build's name.
 
    One host thread owns the connection. It connects to the first of Discord's discord-ipc-0..9 that completes a handshake and
    writes the activity again every 60 s: that write is the keep-alive, and one that fails closes the connection and tries again
@@ -36,8 +37,8 @@
 
 #include "../gpu/vk/vk_api.h"
 
-#define LONGSHOT_DISCORD_APP_ID_DEFAULT "1570559772111933578"   /* (the Longshot application's id, digits) */
-#define LONGSHOT_DISCORD_IMAGE_DEFAULT "longshot"     /* (its large-image art asset key) */
+#define LONGSHOT_DISCORD_APP_ID_DEFAULT ""   /* (OcaDim's own application: empty until it exists, never another one's name) */
+#define LONGSHOT_DISCORD_IMAGE_DEFAULT "ocadim"     /* (its large-image art asset key) */
 
 void hos_log(const char *fmt, ...);
 int rx_option(int id, int otherwise);
@@ -219,9 +220,9 @@ static int send_activity(Ipc p, long long started) {
     snprintf(version, sizeof version, "%s", hos_version());
     version[strcspn(version, " +")] = 0;   /* ("v2.0.12 (source ...)": the release alone) */
     snprintf(json, sizeof json,
-             "{\"cmd\":\"SET_ACTIVITY\",\"nonce\":\"%u\",\"args\":{\"pid\":%lu,\"activity\":{\"details\":\"OcaDim 0.0.1\","
-             "\"state\":\"longshot %s\",\"timestamps\":{\"start\":%lld},\"assets\":{\"large_image\":\"%s\",\"large_text\":"
-             "\"OcaDim 0.0.1\"}}}}",
+             "{\"cmd\":\"SET_ACTIVITY\",\"nonce\":\"%u\",\"args\":{\"pid\":%lu,\"activity\":{\"details\":\"OcaDim %s\","
+             "\"state\":\"the native port\",\"timestamps\":{\"start\":%lld},\"assets\":{\"large_image\":\"%s\",\"large_text\":"
+             "\"OcaDim %s\"}}}}",
              ++nonce, process_id(), version, started, LONGSHOT_DISCORD_IMAGE_DEFAULT, version);
     if (!write_frame(p, OP_FRAME, json)) return 0;
     uint32_t op = 0;
@@ -262,7 +263,7 @@ static void presence_main(void) {
         if (!app_id[0]) {
             if (!said_no_app)
                 hos_log("discord: no application id: discord_app_id= in longshot_options.ini or HOS_DISCORD_APP_ID (the "
-                        "Discord application named Longshot); the status stays off");
+                        "Discord application named OcaDim); the status stays off");
             said_no_app = 1;
             continue;
         }
