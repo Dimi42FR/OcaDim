@@ -1022,11 +1022,112 @@ void gpu_write(VkCommandBuffer cmd, uint64_t gpu, const void* data, uint64_t n) 
 struct UbUpdate {
     uint64_t value;   // the submission that writes it
     uint64_t dst;
-    std::vector<uint8_t> bytes;
+    const uint8_t* bytes;   // (in ub_chunks, until the update is pruned)
+    uint64_t size;
 };
 std::deque<UbUpdate> ub_updates;   // in stream order, oldest first
 std::atomic<uint64_t> ub_list_epoch{1};   // (bumped when that deque gains or loses an update)
 thread_local uint64_t ub_gen = 0;   // (each recording thread's: its draws' overlays change with what it passed)
+uint64_t ub_seq0 = 0;   // (ub_updates[i]'s number in the stream: ub_seq0 + i; a prune moves it on)
+
+// (the updates' bytes, one after another in chunks of 256 KB, freed as the updates are pruned, oldest first: an update is
+// not a heap block of its own. A chunk holds updates first to last, by seq)
+constexpr uint64_t kUbChunk = 256 << 10;
+struct UbChunk {
+    std::unique_ptr<uint8_t[]> p;
+    uint64_t size = 0, used = 0, first = 0, last = 0;
+};
+std::deque<UbChunk> ub_chunks;
+UbChunk ub_spare;   // (the last one freed, for the next)
+const uint8_t* ub_store(const uint8_t* src, uint64_t n, uint64_t seq) {
+    if (ub_chunks.empty() || ub_chunks.back().size - ub_chunks.back().used < n) {
+        UbChunk c;
+        if (ub_spare.p && ub_spare.size >= n) c = std::move(ub_spare);
+        else c.size = std::max(n, kUbChunk), c.p.reset(new uint8_t[c.size]);
+        c.used = 0, c.first = seq;
+        ub_chunks.push_back(std::move(c));
+    }
+    UbChunk& c = ub_chunks.back();
+    uint8_t* at = c.p.get() + c.used;
+    std::memcpy(at, src, n);
+    c.used += n, c.last = seq;
+    return at;
+}
+void ub_chunk_free(UbChunk& c) {
+    if (c.size == kUbChunk) ub_spare = std::move(c);
+}
+void ub_chunks_release() {   // (those whose updates are all pruned)
+    while (!ub_chunks.empty() && (ub_updates.empty() || ub_chunks.front().last < ub_seq0))
+        ub_chunk_free(ub_chunks.front()), ub_chunks.pop_front();
+}
+
+// (where the updates are: each 1 KB of guest memory an update touches lists it, in stream order, and a range's lookup
+// reads the buckets it touches, not the whole list, which spans the submissions still in flight. Kept as the list changes
+// (the replay thread, replay_mu); the parallel replay's workers only read it, while the list holds still. An update over
+// more than 128 buckets, or that wraps, is in ub_odd instead: a lookup that would see one walks the list, as before)
+constexpr int kUbShift = 10;
+constexpr uint64_t kUbBucketsMost = 128;
+struct UbEntry {
+    uint64_t dst, end, seq;
+    const uint8_t* bytes;
+};
+struct UbBucket {
+    std::vector<UbEntry> e;   // (from head on: by seq)
+    size_t head = 0;
+};
+std::map<uint64_t, UbBucket> ub_buckets;   // (by dst >> kUbShift)
+std::deque<uint64_t> ub_odd;               // (their seqs)
+bool ub_is_odd(const UbUpdate& u) {
+    const uint64_t end = u.dst + u.size;
+    return end <= u.dst || ((end - 1) >> kUbShift) - (u.dst >> kUbShift) >= kUbBucketsMost;
+}
+void ub_index_add(const UbUpdate& u, uint64_t seq) {
+    if (ub_is_odd(u)) {
+        ub_odd.push_back(seq);
+        return;
+    }
+    const uint64_t end = u.dst + u.size;
+    for (uint64_t b = u.dst >> kUbShift; b <= (end - 1) >> kUbShift; b++) {
+        UbBucket& k = ub_buckets[b];
+        if (k.e.empty()) k.e.reserve(4);
+        k.e.push_back({u.dst, end, seq, u.bytes});
+    }
+}
+void ub_index_drop_front(const UbUpdate& u, uint64_t seq) {   // (the oldest: first in its buckets)
+    if (ub_is_odd(u)) {
+        if (!ub_odd.empty() && ub_odd.front() == seq) ub_odd.pop_front();
+        return;
+    }
+    for (uint64_t b = u.dst >> kUbShift; b <= (u.dst + u.size - 1) >> kUbShift; b++) {
+        const auto it = ub_buckets.find(b);
+        if (it == ub_buckets.end()) continue;
+        UbBucket& k = it->second;
+        if (k.head < k.e.size() && k.e[k.head].seq == seq) k.head++;
+        if (k.head == k.e.size()) ub_buckets.erase(it);
+        else if (k.head >= 32 && k.head * 2 >= k.e.size()) k.e.erase(k.e.begin(), k.e.begin() + (ptrdiff_t)k.head), k.head = 0;
+    }
+}
+/// An update the stream made (UPDATE_UB): its bytes kept, at the list's end
+void ub_push(uint64_t value, uint64_t dst, const uint8_t* src, uint64_t size) {
+    const uint64_t seq = ub_seq0 + ub_updates.size();
+    ub_updates.push_back({value, dst, ub_store(src, size, seq), size});
+    ub_index_add(ub_updates.back(), seq);
+    ub_list_epoch.fetch_add(1, std::memory_order_relaxed);
+}
+/// The list cut back to its first n (the benchmark's replays: as if the last time's updates were pruned)
+void ub_truncate(size_t n) {
+    if (ub_updates.size() <= n) return;
+    ub_updates.resize(n);
+    const uint64_t keep = ub_seq0 + n;   // (the updates before it stay: the chunk of the last one goes on after it)
+    while (!ub_chunks.empty() && (!n || ub_chunks.back().first >= keep)) ub_chunk_free(ub_chunks.back()), ub_chunks.pop_back();
+    if (n) {
+        UbChunk& c = ub_chunks.back();
+        c.used = (uint64_t)(ub_updates.back().bytes + ub_updates.back().size - c.p.get()), c.last = keep - 1;
+    }
+    ub_buckets.clear(), ub_odd.clear();
+    for (size_t i = 0; i < n; i++) ub_index_add(ub_updates[i], ub_seq0 + i);
+    ub_list_epoch.fetch_add(1, std::memory_order_relaxed);
+}
 
 // ---- parallel replay (RX_VK_PARALLEL=<threads>): MKW hands over nearly a frame's draws in one command buffer with
 // its present, and waits for the last frame's GPU work before it submits the next: the replay of that command buffer
@@ -1392,9 +1493,11 @@ bool deferred_late() {   // (RX_VK_DEFERRED_LATE=1: deferred binds read from the
 void ub_prune(uint64_t done) {
     if (ub_updates.empty() || ub_updates.front().value > done) return;
     while (!ub_updates.empty() && ub_updates.front().value <= done) {
+        ub_index_drop_front(ub_updates.front(), ub_seq0++);
         ub_updates.pop_front();
         if (ub_first_of_recording) ub_first_of_recording--;
     }
+    ub_chunks_release();
     ub_list_epoch.fetch_add(1, std::memory_order_relaxed);
 }
 
@@ -1420,6 +1523,78 @@ bool ub_gap(const uint64_t* dst, const uint64_t* end, int n, uint64_t addr, uint
     *hi = right;
     return true;
 }
+/// Whether the buckets cannot say for [addr, addr+n) and the list's [first, lim): a range of no bytes or that wraps, or an
+/// update of ub_odd among them. The list is walked then, as before the buckets
+bool ub_walk(size_t first, size_t lim, uint64_t addr, uint64_t n) {
+    if (!n || addr + n < addr) return true;
+    if (first >= lim || ub_odd.empty()) return false;   // (none: and a background thread reads nothing of the replay's)
+    const auto o = std::lower_bound(ub_odd.begin(), ub_odd.end(), ub_seq0 + first);
+    return o != ub_odd.end() && *o < ub_seq0 + lim;
+}
+/// Whether an update of the list's [first, lim) overlaps [addr, addr+n), from ub_buckets: 1; 0: none, and [lo, hi) is a
+/// gap round the range that none of them covers (to the buckets either side that have updates); -1: ub_walk
+int ub_find(size_t first, size_t lim, uint64_t addr, uint64_t n, uint64_t* lo, uint64_t* hi) {
+    if (ub_walk(first, lim, addr, n)) return -1;
+    if (first >= lim) {
+        *lo = 0, *hi = ~uint64_t{0};
+        return 0;
+    }
+    const uint64_t s0 = ub_seq0 + first, s1 = ub_seq0 + lim, stop = addr + n;
+    auto it = ub_buckets.lower_bound(addr >> kUbShift);
+    uint64_t left = it == ub_buckets.begin() ? 0 : (std::prev(it)->first + 1) << kUbShift, right = ~uint64_t{0};
+    for (; it != ub_buckets.end() && it->first <= (stop - 1) >> kUbShift; ++it)
+        for (size_t k = it->second.head; k < it->second.e.size(); k++) {
+            const UbEntry& e = it->second.e[k];
+            if (e.seq < s0) continue;
+            if (e.seq >= s1) break;
+            if (e.dst < stop && addr < e.end) return 1;
+            if (e.end <= addr) left = std::max(left, e.end);
+            if (e.dst >= stop) right = std::min(right, e.dst);
+        }
+    if (it != ub_buckets.end()) right = std::min(right, it->first << kUbShift);
+    *lo = left, *hi = right;
+    return 0;
+}
+bool ub_overlaps(size_t first, size_t lim, uint64_t addr, uint64_t n) {
+    uint64_t lo = 0, hi = 0;
+    const int found = ub_find(first, lim, addr, n, &lo, &hi);
+    if (found >= 0) return found;
+    for (size_t i = first; i < lim; i++) {
+        const UbUpdate& u = ub_updates[i];
+        if (u.dst < addr + n && addr < u.dst + u.size) return true;
+    }
+    return false;
+}
+/// The updates of [first, lim) copied over p, the bytes of [addr, addr+n): in stream order, the last one's bytes where
+/// they overlap. By bucket, each its part of the range, from the last update that covers all that part
+void ub_apply(size_t first, size_t lim, uint64_t addr, uint64_t n, uint8_t* p) {
+    if (first >= lim) return;
+    if (ub_walk(first, lim, addr, n)) {
+        for (size_t i = first; i < lim; i++) {
+            const UbUpdate& u = ub_updates[i];
+            const uint64_t l = std::max(addr, u.dst), h = std::min(addr + n, u.dst + u.size);
+            if (l < h) std::memcpy(p + (l - addr), u.bytes + (l - u.dst), h - l);
+        }
+        return;
+    }
+    const uint64_t s0 = ub_seq0 + first, s1 = ub_seq0 + lim, stop = addr + n, last = (stop - 1) >> kUbShift;
+    for (auto it = ub_buckets.lower_bound(addr >> kUbShift); it != ub_buckets.end() && it->first <= last; ++it) {
+        const std::vector<UbEntry>& e = it->second.e;
+        const uint64_t a = std::max(addr, it->first << kUbShift), b = it->first == last ? stop : (it->first + 1) << kUbShift;
+        const auto by_seq = [](const UbEntry& x, uint64_t s) { return x.seq < s; };
+        size_t k0 = (size_t)(std::lower_bound(e.begin() + (ptrdiff_t)it->second.head, e.end(), s0, by_seq) - e.begin());
+        const size_t k1 = (size_t)(std::lower_bound(e.begin() + (ptrdiff_t)k0, e.end(), s1, by_seq) - e.begin());
+        for (size_t k = k1; k-- > k0;)
+            if (e[k].dst <= a && e[k].end >= b) {
+                k0 = k;
+                break;
+            }
+        for (size_t k = k0; k < k1; k++) {
+            const uint64_t l = std::max(a, e[k].dst), h = std::min(b, e[k].end);
+            if (l < h) std::memcpy(p + (l - addr), e[k].bytes + (l - e[k].dst), h - l);
+        }
+    }
+}
 struct UbGapCache {
     uint64_t epoch = 0, lo = 0, hi = 0;
     size_t first = 0, lim = 0;
@@ -1434,17 +1609,21 @@ bool ub_gap_holds(uint64_t addr, uint64_t n, size_t first, size_t lim) {
 bool ub_try_gap(size_t first, size_t lim, uint64_t addr, uint64_t n) {
     if (first > lim) return false;
     const uint64_t epoch = ub_list_epoch.load(std::memory_order_relaxed);
-    static thread_local std::vector<uint64_t> dst, end;
-    dst.clear();
-    end.clear();
-    dst.reserve(lim - first);
-    end.reserve(lim - first);
-    for (size_t i = first; i < lim; i++) {
-        dst.push_back(ub_updates[i].dst);
-        end.push_back(ub_updates[i].dst + ub_updates[i].bytes.size());
-    }
     uint64_t lo = 0, hi = 0;
-    if (!ub_gap(dst.data(), end.data(), (int)dst.size(), addr, n, &lo, &hi)) return false;
+    const int found = ub_find(first, lim, addr, n, &lo, &hi);
+    if (found > 0) return false;
+    if (found < 0) {   // (ub_walk: the whole list's)
+        static thread_local std::vector<uint64_t> dst, end;
+        dst.clear();
+        end.clear();
+        dst.reserve(lim - first);
+        end.reserve(lim - first);
+        for (size_t i = first; i < lim; i++) {
+            dst.push_back(ub_updates[i].dst);
+            end.push_back(ub_updates[i].dst + ub_updates[i].size);
+        }
+        if (!ub_gap(dst.data(), end.data(), (int)dst.size(), addr, n, &lo, &hi)) return false;
+    }
     if (ub_list_epoch.load(std::memory_order_relaxed) != epoch) return false;   // (the list changed: do not keep the gap)
     ub_gap_cache = {epoch, lo, hi, first, lim, true};
     return true;
@@ -1529,24 +1708,12 @@ uint64_t ub_overlay(uint64_t addr, uint64_t n, uint8_t* base, const std::functio
     if (ub_copy_hit(addr, n, base, first, lim, &kept)) return kept;
     if (ub_try_gap(first, lim, addr, n)) return UINT64_MAX;
     const uint64_t epoch = ub_list_epoch.load(std::memory_order_relaxed);
-    bool any = false;
-    for (size_t i = first; i < lim; i++) {
-        const UbUpdate& u = ub_updates[i];
-        if (u.dst < addr + n && addr < u.dst + u.bytes.size()) {
-            any = true;
-            break;
-        }
-    }
-    if (!any) return UINT64_MAX;
+    if (!ub_overlaps(first, lim, addr, n)) return UINT64_MAX;
     const uint64_t at = alloc(n);
     if (at == UINT64_MAX) return UINT64_MAX;
     uint8_t* p = base + at;
     if (!memory_read_as_submitted(addr, p, n)) std::memset(p, 0, n);
-    for (size_t i = first; i < lim; i++) {
-        const UbUpdate& u = ub_updates[i];
-        const uint64_t lo = std::max(addr, u.dst), hi = std::min(addr + n, u.dst + u.bytes.size());
-        if (lo < hi) std::memcpy(p + (lo - addr), u.bytes.data() + (lo - u.dst), hi - lo);
-    }
+    ub_apply(first, lim, addr, n, p);
     st_ub_overlays++;
     pf_learn(addr, n);   // (longshot, the step 3's P2b) the ask the helper publishes to match: the same bound asks again next frame
     ub_copy_keep(addr, n, base, first, lim, at, view, epoch);
@@ -1570,8 +1737,8 @@ bool ub_read(uint64_t addr, void* dst, uint64_t n) {
     // (longshot, P2b) the helper's negative: no update of this place covers the range — the scans below would walk
     // the list to find the same nothing
     const bool pf_neg = n <= kPfMaxBytes && pf_neg_lookup(addr, n, lim);
-    // (most words are not inside an inline update: the scan that finds that is kept for the gap, and the next words
-    // in the gap do not walk the list. A word kept from that gap is the capture's own bytes)
+    // (most words are not inside an inline update: the lookup that finds that is kept for the gap, and the next words
+    // in the gap do not look again. A word kept from that gap is the capture's own bytes)
     if (pf_neg || ub_gap_holds(addr, n, 0, lim) || ub_try_gap(0, lim, addr, n)) {
         if (n == 4 && page == memory_page_stamp(addr)) {
             UbWord& w = ub_words[ub_word_index(addr)];
@@ -1582,11 +1749,7 @@ bool ub_read(uint64_t addr, void* dst, uint64_t n) {
         }
         return true;
     }
-    for (size_t i = 0; i < lim; i++) {
-        const UbUpdate& u = ub_updates[i];
-        const uint64_t lo = std::max(addr, u.dst), hi = std::min(addr + n, u.dst + u.bytes.size());
-        if (lo < hi) std::memcpy((uint8_t*)dst + (lo - addr), u.bytes.data() + (lo - u.dst), hi - lo);
-    }
+    ub_apply(0, lim, addr, n, (uint8_t*)dst);
     return true;
 }
 
@@ -1600,7 +1763,7 @@ void flush_ub_updates(VkCommandBuffer cmd) {
     gp.items = (int)(ub_updates.size() - ub_first_of_recording);
     full_barrier(cmd);
     for (size_t i = ub_first_of_recording; i < ub_updates.size(); i++)
-        gpu_write(cmd, ub_updates[i].dst, ub_updates[i].bytes.data(), ub_updates[i].bytes.size()), gp.bytes += ub_updates[i].bytes.size();
+        gpu_write(cmd, ub_updates[i].dst, ub_updates[i].bytes, ub_updates[i].size), gp.bytes += ub_updates[i].size;
     full_barrier(cmd);
 }
 
@@ -1847,9 +2010,7 @@ void replay(VkCommandBuffer& cmd, NvnState& s, const uint8_t* p, const uint8_t* 
                      (unsigned long long)u.dst, (unsigned)u.size, f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[10], f[11]);
             }
             if (u.size && u.size <= avail - sizeof u) {
-                UbUpdate up{rec_value_now, u.dst, std::vector<uint8_t>(a + sizeof u, a + sizeof u + u.size)};
-                ub_updates.push_back(std::move(up));
-                ub_list_epoch.fetch_add(1, std::memory_order_relaxed);
+                ub_push(rec_value_now, u.dst, a + sizeof u, u.size);
                 ub_gen++;
                 st_ub_updates++;
             }
@@ -2699,7 +2860,7 @@ void bench_frame(int64_t presents) {
     queue_flush();
     for (int i = 0; i < times; i++) {
         vkDeviceWaitIdle(dev.device);
-        ub_updates.resize(ub_before);   // (the last time's uniform updates are written: as if pruned)
+        ub_truncate(ub_before);   // (the last time's uniform updates are written: as if pruned)
         const auto t0 = std::chrono::steady_clock::now();
         for (const auto& h : frame_submits) bench_replay(h);
         ms.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());

@@ -29,14 +29,23 @@ def main():
     fn = block(source, "bool ub_gap(")
     read = block(source, "bool ub_read(")
     holds = read.index("ub_gap_holds(")
-    scan = read.index("for (size_t i = 0; i < lim; i++)")
+    scan = read.index("ub_apply(0, lim,")
     if holds > scan:
         raise SystemExit("ub_read walks the updates before checking the gap")
     if "ub_list_epoch.fetch_add" not in block(source, "void ub_prune("):
         raise SystemExit("dropping an update leaves the gap in place")
-    push = source[source.index("ub_updates.push_back(std::move(up));"):source.index("ub_updates.push_back(std::move(up));") + 180]
-    if "ub_list_epoch.fetch_add" not in push:
+    push = block(source, "void ub_push(")
+    if "ub_updates.push_back(" not in push or "ub_list_epoch.fetch_add" not in push:
         raise SystemExit("adding an update leaves the gap in place")
+    if "ub_list_epoch.fetch_add" not in block(source, "void ub_truncate("):
+        raise SystemExit("cutting the list back leaves the gap in place")
+    changes = sum(source.count("ub_updates." + m) for m in ("push_back(", "resize(", "pop_front(", "pop_back(", "clear("))
+    if changes != 3:
+        raise SystemExit("the update list changes outside ub_push, ub_truncate and ub_prune: the gap and ub_buckets miss it")
+    # (ub_gap is the walk of the whole list now, where ub_buckets cannot say: tests/test_ub_index.py checks the lookup)
+    tried = block(source, "bool ub_try_gap(")
+    if "ub_find(" not in tried or "ub_gap(" not in tried:
+        raise SystemExit("ub_try_gap no longer looks the range up, or no longer walks the list where the buckets cannot say")
     fixture = f'''#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
