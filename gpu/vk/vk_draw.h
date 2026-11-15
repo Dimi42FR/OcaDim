@@ -93,6 +93,9 @@ void draw_records_log(uint64_t frame_lo, uint64_t frame_hi);
 void pass_traces_log(uint64_t frame_lo, uint64_t frame_hi);   // (RX_VK_PASS_TRACE=1)
 /// Changes with every uniform update the stream makes (vk_replay.cpp): descriptors bound before may be stale
 uint64_t ub_generation();
+/// (longshot) Changes when the list of uniform updates gains or loses one (vk_replay.cpp ub_list_epoch: a completed submission's
+/// are pruned, which ub_generation does not count)
+uint64_t ub_list_generation();
 /// A background thread (shader translation, pipeline builds) reads guest memory from the captures only, never the stream's
 /// uniform updates: that list is the replay's, which grows and is pruned while such a thread runs
 void ub_thread_off();

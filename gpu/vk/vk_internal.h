@@ -206,6 +206,8 @@ struct UniformUpload {
 UniformUpload uniform_upload(uint64_t size);   // empty: no recording or no room; no history consumed
 /// Changes when a read binding remembered earlier must be looked up again (a pool left, a mirror was made, a new submission)
 uint64_t gpu_bind_stamp();
+/// (longshot) Changes when the game's pool table is replaced: where gpu_pool_end and gpu_pool_start put a pool's ends may move
+uint64_t guest_pools_stamp();
 /// Around each submission's recording: mirrors wanted since the last one are made (begin), what the GPU wrote into
 /// mirrors goes back to guest memory (end, outside any pass, before the closing barrier)
 void memory_begin_submission();

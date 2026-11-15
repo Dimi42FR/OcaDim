@@ -75,6 +75,7 @@ struct ViewFast { unsigned long long key = ~0ull; };   // (the texture views' fr
 std::array<ViewFast, 4>& view_fast() { static std::array<ViewFast, 4> v; return v; }
 struct BankCache { uint64_t at=0; };
 std::array<std::array<BankCache,2>,2>& bank_cache() { static std::array<std::array<BankCache,2>,2> b;return b; }
+uint64_t desc_kept_part=0;   // (vk_draw.cpp: build_descriptors' kept stages last one part)
 void make_dummies() {}
 /* FLUSH */
 /* BEGIN */

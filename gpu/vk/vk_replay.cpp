@@ -1506,6 +1506,9 @@ void ub_prune(uint64_t done) {
 uint64_t ub_generation() {
     return ub_gen;
 }
+uint64_t ub_list_generation() {
+    return ub_list_epoch.load(std::memory_order_relaxed);
+}
 void ub_thread_off() {
     ub_limit = 0;
 }

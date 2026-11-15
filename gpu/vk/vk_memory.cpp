@@ -4168,6 +4168,10 @@ uint64_t gpu_pool_start(uint64_t gpu) {   // (EvilOOT) where it begins
 uint64_t gpu_bind_stamp() {
     return pools_gen.load(std::memory_order_relaxed) ^ (mirror_epoch * 0x9E3779B97F4A7C15ull);
 }
+// (longshot) the game's pool table, as gpu_pool_end and gpu_pool_start read it: what they gave stands while this does
+uint64_t guest_pools_stamp() {
+    return guest_pools_gen.load(std::memory_order_relaxed);
+}
 
 uint32_t bind_slot(uint64_t guest, uint64_t size) {
     // (a page-aligned range's low bits are zero: fold the rest in, or every one of them lands in one slot)
