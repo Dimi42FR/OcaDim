@@ -52,6 +52,12 @@ TEMPLATE = Path(__file__).resolve().parents[1] / ".forgejo" / "pull_request_temp
 WIP_PREFIXES = ("WIP:", "[WIP]")
 NEEDS_MEASUREMENTS = "needs measurements"   # (the label of a PR sent back to WIP for its measurements)
 TYPES = ("feat", "fix", "perf", "refactor", "docs", "test", "ci", "build", "chore", "revert")   # (forge.py's TITLE_TYPES)
+# A pull request is squash-merged, so its title is the commit on main: a Conventional Commit (the CI workflow's title
+# job and MagicBeanDev/Tooling's forge.py pr create check it)
+TITLE = re.compile(r"^(%s)(\([\w./-]+\))?!?: \S" % "|".join(TYPES))
+# The files the game runs, by path prefix: forge.py (MagicBeanDev/Tooling, which loads this file as Longshot's rules)
+# opens a pull request that changes one only once it has run in the game (pr create --tested-in-game), unless --force
+GAME_PATHS = ("gpu/", "host/", "nx2/", "assets/", "third_party/")
 RISKS = ("low", "medium", "high")
 STATUS = ("Type", "Risk", "Tested on", "Needs")
 # The sections a description fills in; Issues may be left out, How to reproduce is for a fix

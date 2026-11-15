@@ -72,6 +72,7 @@ std::map<uint64_t, std::pair<uint64_t, uint64_t>> gpu_wrote;
 CountingMutex gpu_wrote_mu;
 uint64_t rec_value = 1, frame_no = 0, tl_watch_prog = 0;
 void logf(const char*, ...) {}
+namespace wrote_regions { void mark(uint64_t, uint64_t) {} }   // (its own behaviour is another test's: here the mark only has to exist)
 #include "gpu_wrote_seen.inc"
 #include "texture_gpu_wrote.inc"
 

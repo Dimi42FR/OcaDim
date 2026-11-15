@@ -7,9 +7,11 @@ description: Ask the team to test a Longshot pull request on hardware you don't 
 
 Requests go to the Matrix room `#test-requests:magicbean.dev`, which is copied to Discord: each request is one message
 there that shows 🟢 open, 👀 who is testing it and until when, and ✅ the result with a link to the tester's comment on
-the PR. Testers pick requests up with `/testing`. Everything goes through `scripts/test_requests.py` (standard library,
+the PR. Testers pick requests up with `/testing`. Everything goes through `scripts/test_requests.py` (it uses the sign-in and team chat of
+[MagicBeanDev/Tooling](https://git.magicbean.dev/MagicBeanDev/Tooling), cloned beside this checkout as `../Tooling` and
+pulled once a session: `git -C ../Tooling pull --ff-only`; standard library,
 Windows and Linux; run it with `python -I` from the repository root). It uses the team chat sign-in: if
-`python -I scripts/team_chat.py whoami` prints no user, sign in first as in `/team-updates`, section 1.
+`python -I ../Tooling/scripts/team_chat.py whoami` prints no user, sign in first as in `/magicbean:team-updates` (Tooling's skill), section 1.
 
 ## 1. Ask
 
@@ -54,7 +56,7 @@ python -I scripts/test_requests.py show T-XXXX --json
 - Several people can test one request. `claims` lists who is testing it now (a claim clears by itself when its
   tester stops renewing it); `results` has each tester's result (pass, fail or mixed) and `comment`, the link to their
   comment on the PR. Read it:
-  `python -I scripts/forge.py pr view <pr> --comments`.
+  `python -I ../Tooling/scripts/forge.py pr view <pr> --comments`.
 - Report it to the user in a few lines: who tested, on what, the result, the numbers or the failure. If it failed,
   continue with the failure on the PR (reproduce, fix, push), then close the request and ask again with a new one.
 

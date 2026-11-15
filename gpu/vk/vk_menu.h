@@ -30,6 +30,13 @@ struct Options {
     int above60_fixes = 1;    // (longshot) Above-60 fixes: 1 the floors' carry cut and the height-field surfaces' fixed steps as
                           // the fixes for frame rates above 60 do them (host/oot_high_fps.c), 0 the game's own 100.0 cut and its
                           // own step count, as before them. Read once, at the start (menu_above60_fixes, HOS_OPT_ABOVE60_FIXES)
+    int ccx_split = 0;    // (OcaDim) CPU affinity (CCX): 0 Auto (on from 12 logical processors), 1 On (the replay's workers on the
+                          // upper half of the processor's logical CPUs), 2 Off. Read once, at the start (menu_ccx_split);
+                          // RX_VK_CCX_SPLIT over it
+    int draw_order = 0;   // (OcaDim) Draw order barriers: 0 Auto (NVIDIA only, as upstream measured), 1 On, 2 Off. Read once, at the
+                          // start (menu_draw_order); RX_VK_GAME_ORDER over it
+    int batch_submits = 0;   // (OcaDim) Batched submits: 0 Auto (Mesa's RADV only, where it was measured 33-41 -> 46-61 fps in Kokiri
+                          // Forest), 1 On, 2 Off. Read once (menu_batch_submits); RX_VK_BATCH over it (vk_replay.cpp batch_on)
     int hdr = 0;          // (longshot) HDR10 out (vk_framegen.cpp framegen_hdr): 0 off, 1 the SDR picture expanded, 2 the game's own (native) HDR; when the display has it (the swapchain made again at once)
     int hdr_white = 200;  // HDR paper white, nits (the picture's white)
     int hdr_peak = 1000;  // HDR peak brightness, nits (its brightest highlights)
@@ -43,6 +50,8 @@ struct Options {
                           // display_modes.h), then the player's own (custom_output); saved as the size (output_res=3840x2160) and read
                           // once, at the start (host/nn_applet.c)
     int upscale = 0;      // to the window (Window scaling filter, saved as upscaling): 0 off (the plain copy), 1 Catmull-Rom, 2 Lanczos
+    int crt_filter = 0;   // finished SDR picture: 0 Off, 1 Lottes aperture grille, 2 Lottes consumer TV, 3 Hyllian Fast, 4 zfast CRT
+    int crt_lines = 0;    // virtual raster: 0 240, 1 480, 2 720 lines; at most half the destination height, at least one line
     int reflex = 0;       // NVIDIA Reflex: 0 off, 1 on, 2 on + boost (vk_reflex.cpp; NVIDIA GPUs with VK_NV_low_latency2)
     int antilag = 0;      // AMD Anti-Lag 2: 0 off, 1 on (vk_antilag.cpp; AMD GPUs with VK_AMD_anti_lag)
     int dlss = 0;         // the Upscaler (its name from before FSR: options files and the tests' stand-ins keep it): 0 the game's
@@ -106,8 +115,9 @@ struct Options {
     int sampler_cache = 0;     // sampler ids answer their parameters without the registrations' lock (gpu/vk/vk_draw.cpp; RX_VK_SAMPLER_CACHE)
     int astc_rgba8 = 0;   // (longshot) big ASTC textures kept as decoded RGBA8, not re-encoded to BC3 (gpu/vk/vk_texture.cpp bc_ready;
                           // RX_VK_ASTC_RGBA8 over it): the AMD texture workaround. Read once, at the start
-    int intel_compiles = 0;   // (longshot) Intel's shader compiler on Windows: 0 one thread at a time, 1 side by side (vk_internal.h
-                              // IntelDriverGate; RX_VK_NO_INTEL_SERIAL=1 over it). Read once, at the start
+    int intel_compiles = 0;   // (longshot) Intel's shader compiler on Windows: 0 Auto (side by side where it was measured,
+                              // intel_compiles.h, else one thread at a time), 1 side by side, 2 one at a time (vk_internal.h
+                              // IntelDriverGate; RX_VK_NO_INTEL_SERIAL over it). Read once, at the start
     int intel_quick = 1;   // (longshot) Intel's one-at-a-time compute builds: a dispatch's pipeline first without the optimizer,
                            // the optimized one bound once made (vk_draw.cpp compute_optimize; RX_VK_COMPUTE_QUICK_FIRST over it)
     int preset = 0;       // quality preset: 0 Custom, 1 Minimum (4GB), 2 Low (6GB), 3 Balanced (8GB), 4 High (12GB), 5 Ultra (16GB+),
@@ -157,8 +167,18 @@ int menu_replay_seg();
 /// (longshot) The Above-60 fixes row as this run resolved it, once, at the start: false restores the game's own behaviour
 /// before the fixes for frame rates above 60 (host/oot_high_fps.c, answered through HOS_OPT_ABOVE60_FIXES)
 bool menu_above60_fixes();
+/// (OcaDim) CPU affinity (CCX): the replay's workers pinned to the upper half of the processor's logical CPUs (the second CCD
+/// on a Ryzen 5000), so the guest thread's cache is not evicted by them. Auto: from 12 logical processors. Read once, at the start
+bool menu_ccx_split();
+/// (OcaDim) Draw order barriers: a draw pass right after another waits in its fragment stages only, and a compute dispatch right
+/// after another gets no barrier, as the game's own barriers order them. Auto: NVIDIA only (measured there). Read once, at the start
+bool menu_draw_order();
+/// (OcaDim) Batched submits: a frame's command submissions held and sent as one vkQueueSubmit2 at the next wait, readback or
+/// present. 0 Auto (Mesa's RADV only, where it was measured), 1 On, 2 Off. Read once, at the start (vk_replay.cpp batch_on)
+int menu_batch_submits();
 void menu_set_gpu_count(int count);
 std::string driver_text();   // (vk_main.cpp: the driver as it names itself, for the log and Save my pipeline list)
+std::string device_name_text();   // (vk_main.cpp: the GPU the game runs on, as its driver names it)
 void menu_tick();             // (each frame shown: the keys, while the game's window has the focus)
 bool menu_is_open();
 /// (longshot) The game's scene tone mapped by PsychoV35: HDR set to Native on an HDR display, and the Tone mapper row so

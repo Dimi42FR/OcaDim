@@ -11,6 +11,7 @@
 
 #define HOS_APP_ID "authored.app"
 #define HOS_GAME_TITLE "authored window"
+static const char* hos_game_title(const char* fallback) { return fallback; } // (host/hos_paths.h: no game folder here)
 using HANDLE = void*;
 constexpr int TRUE = 1, FALSE = 0;
 constexpr unsigned INFINITE = ~0u;

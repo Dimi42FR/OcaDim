@@ -19,6 +19,12 @@ from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
+import tooling  # noqa: E402
+
+if not tooling.folder():   # (test_requests.py builds on Tooling's team_chat.py and sign-in)
+    print("skipped: MagicBeanDev/Tooling is not beside this checkout (git clone %s ../Tooling, or MAGICBEAN_TOOLING)"
+          % tooling.URL)
+    sys.exit(0)
 spec = importlib.util.spec_from_file_location("test_requests", os.path.join(ROOT, "scripts", "test_requests.py"))
 tr = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(tr)

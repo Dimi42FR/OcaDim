@@ -7,10 +7,12 @@ description: Test Longshot pull requests for the team on this PC's hardware - fi
 
 Other contributors ask for their PRs to be tested on hardware they don't have (`/request-testing`). The requests live
 in the Matrix room `#test-requests:magicbean.dev`, copied to Discord where each shows who is testing it (👀) and each
-tester's result (✅). Several people can test the same request. Everything goes through `scripts/test_requests.py`
+tester's result (✅). Several people can test the same request. Everything goes through `scripts/test_requests.py` (it uses the sign-in and team chat of
+[MagicBeanDev/Tooling](https://git.magicbean.dev/MagicBeanDev/Tooling), cloned beside this checkout as `../Tooling` and
+pulled once a session: `git -C ../Tooling pull --ff-only`)
 (run with `python -I` from the repository root); the guide for people is
 [docs/test-requests.md](../../../docs/test-requests.md). It uses the team chat sign-in: if
-`python -I scripts/team_chat.py whoami` prints no user, sign in first as in `/team-updates`, section 1.
+`python -I ../Tooling/scripts/team_chat.py whoami` prints no user, sign in first as in `/magicbean:team-updates` (Tooling's skill), section 1.
 
 ## 1. What this PC is
 
@@ -58,21 +60,21 @@ build, look at what the PR changes that runs on this PC (build and Python script
 downloads, deletes or reaches outside the repository); if something does what the PR doesn't explain, stop, release
 the claim and tell the user.
 
-1. Get the PR's head in its own folder, not on top of the user's work: `python -I scripts/forge.py pr checkout <pr>`
+1. Get the PR's head in its own folder, not on top of the user's work: `python -I ../Tooling/scripts/forge.py pr checkout <pr>`
    (it fetches the head as the branch, or jj bookmark, `pr/<pr>`), then `git worktree add --detach
    ../Longshot-test-<pr> pr/<pr>`. Note the commit you built.
 2. Build and run as in [docs/development.md](../../../docs/development.md) (*Use*, *Building*, *Running a test*). If
    the notes compare against main, build main the same way and run both under the same conditions, swapping the
    order once.
 3. Do what the notes ask; when they are unclear, test what the PR's description says it changes, and ask the
-   requester in the room with `python -I scripts/team_chat.py post --room "#test-requests:magicbean.dev" "..."` (no
+   requester in the room with `python -I ../Tooling/scripts/team_chat.py post --room "#test-requests:magicbean.dev" "..."` (no
    🧪 line) if you need them.
 4. Anything that needs the user (playing a section, looking at the screen, judging flicker): ask them, with exact
    steps, and record what they report.
 
 ## 5. Report on the PR, then mark it done
 
-Write the results as a comment on the PR, as the user (`python -I scripts/forge.py pr comment <pr> --body-file <file>`),
+Write the results as a comment on the PR, as the user (`python -I ../Tooling/scripts/forge.py pr comment <pr> --body-file <file>`),
 starting with the
 request's ID:
 
@@ -88,7 +90,7 @@ Result: ... (numbers in a small table when comparing; the log lines that matter;
 - [CONTRIBUTING.md](../../../CONTRIBUTING.md) applies: **no game files or anything made from them** attached or
   pasted (screenshots and lines of `longshot_log.txt` are fine), no local paths, user names or anything personal.
 - Screenshots go up with the comment: `--attach <file> ...`, shown where the text has
-  `![main @ <commit>](attach:<file>)` or at the end ([docs/forge.md](../../../docs/forge.md#pictures-in-a-comment)).
+  `![main @ <commit>](attach:<file>)` or at the end ([docs/forge.md](https://git.magicbean.dev/MagicBeanDev/Tooling/src/branch/main/docs/forge.md#pictures-in-a-comment)).
 
 Then mark it done with that comment's link (the URL `forge.py pr comment` prints):
 

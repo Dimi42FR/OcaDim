@@ -47,16 +47,28 @@ Five minutes, then a first build.
    `git blame` past your clone, a version name from the tags (a shallow build calls itself by its commit, `2331f46`),
    and cutting a release (`scripts/release.py`). For those, `git fetch --unshallow --tags` once.
 
-2. **Sign in:**
+2. **Get the team's tooling and sign in.** The sign-in, `forge.py` (forks, pull requests, issues), the team chat and
+   test requests live in [MagicBeanDev/Tooling](https://git.magicbean.dev/MagicBeanDev/Tooling), shared by every
+   MagicBeanDev repository. Clone it beside this checkout, keep it current (`git -C ../Tooling pull --ff-only`), and
+   run its scripts from here:
 
    ```
-   python -I scripts/forge.py login
+   git clone https://git.magicbean.dev/MagicBeanDev/Tooling.git ../Tooling
+   python -I ../Tooling/scripts/forge.py login
    ```
 
    Click **Sign in with Discord** (or sign in with the email account you made on git.magicbean.dev) and approve. That
    one sign-in covers git.magicbean.dev (git signs in by itself from then on, and the remote `forge` points at
    Longshot), the team chat and [test requests](docs/test-requests.md). The first time creates your account.
-   [docs/forge.md](docs/forge.md) has the details and the other commands.
+   [Tooling's docs/forge.md](https://git.magicbean.dev/MagicBeanDev/Tooling/src/branch/main/docs/forge.md) has the details and the other commands.
+
+   **Using Claude Code?** Install the team's plugin once per PC, for the skills (`/magicbean:team-updates`,
+   `/magicbean:release`, `/magicbean:batch-review`) in every MagicBeanDev repository:
+
+   ```
+   /plugin marketplace add https://git.magicbean.dev/MagicBeanDev/Tooling.git
+   /plugin install magicbean@magicbean
+   ```
 
 3. **Check the game-free tests run** (no game needed):
 
@@ -94,6 +106,8 @@ break.
 
 ## Development setup
 
+After you clone the repository, run **`mise run setup`** once to install the pre-commit and commit-msg hooks.
+
 You need your own supported dump: program `0400486024DEC000`, update v131072, build `e0f3ccfa`. Other versions don't
 work, and the build reads the dump where it lies without changing it. A build needs about 60 GB free. For runtime
 memory, see the README's [requirements](README.md#what-you-need): the game alone can exceed 16 GiB, depending on the
@@ -101,6 +115,15 @@ build, driver and scene. Build on an SSD if you can: a hard drive works but take
 
 Where a step below needs files from the Builder, use the Windows builder of the newest
 [Longshot release](https://git.magicbean.dev/MagicBeanDev/Longshot/releases).
+
+### Tools: mise, CircleCI and AI agents
+
+- **mise** pins every tool this repo uses. Install it ([mise docs](https://mise.jdx.dev/getting-started.html)), then in the repo run `mise install` and, once per clone, `mise run setup` (it installs the pre-commit and commit-msg hooks). `mise run lint` and `mise run test` run the same checks CI does.
+- **CircleCI** runs CI for this repo; [docs/ci.md](docs/ci.md) has the flow and what runs when. Sign up at https://circleci.com/signup and ask in Discord to be added to the MagicBeanDev org, so you can see runs, read logs and rerun jobs.
+- **CircleCI CLI:** `mise install` installs the pinned version, or see the [official install docs](https://circleci.com/docs/guides/toolkit/circleci-cli/). Run `circleci auth login` once.
+- **CircleCI MCP server**, so an AI agent can read failures and logs and rerun jobs. Claude Code: `claude mcp add --transport http circleci-mcp-server https://mcp.circleci.com/v1/mcp`, then `/mcp` and Authenticate. Cursor: search "circleci" in the MCP marketplace.
+- **CircleCI docs MCP**, so an agent can look things up in CircleCI's docs (no account needed): `claude mcp add --transport http circleci-docs https://circleci.mcp.kapa.ai`.
+- **Chunk CLI** (optional) runs this repo's checks on a remote CircleCI sidecar, handy for an agent or a machine without the toolchain. Install with `brew install CircleCI-Public/circleci/chunk` (Windows: see its [README](https://github.com/CircleCI-Public/chunk-cli)), run `chunk auth login`, then `chunk sidecar create`, `chunk sidecar sync` and `chunk validate`. The commands it runs are in `.chunk/config.json`.
 
 ### Windows
 
@@ -121,7 +144,6 @@ Where a step below needs files from the Builder, use the Windows builder of the 
    | From `tools` | To | Variable |
    |---|---|---|
    | `cpm` | anywhere | `RX_CPM` points at it (Vulkan headers and FFmpeg; without it the standalone build stops, unless system headers or `LONGSHOT_*_HEADERS` are set) |
-   | `wgpu-native` | anywhere | `WGPU_NATIVE` points at it (the WebGPU fallback renderer; without it the game has none) |
    | `third_party` | `third_party\` | its `.dll`, `.exe`, `.lib` and `.sha1` files, to the same places: `a64emit`, `lld-link`, `zbic` and SDL2 |
    | `work` | `work\` | hot-function list, link order, profile and icon (without them the game builds but runs slower) |
 
@@ -213,9 +235,10 @@ output. Name part of a path to run only matching checks (`tests/run_all.py ub_`)
 compiler, `spirv-val`, the SPIR-V or Vulkan headers, `zstandard`) is skipped and says so; `--strict` fails it instead.
 Checks that can't run everywhere say so in their own file (`RUN_ALL_SKIP`); `--no-skip` runs them anyway.
 
-Forgejo doesn't run these on pull requests or on `main` for now: CI runs only the light checks (the title, the
-description, workflow lint, the third-party notes), and a maintainer can start the full checks by hand (*Actions* >
-*CI* > *Run workflow*). So run them before you open a pull request and put their results in it.
+CircleCI on Forgejo (see [docs/ci.md](docs/ci.md)) runs path-filtered game-free checks on same-repo pull requests and
+`main`. Run `mise run ci:smoke` and `mise run test` locally before you push, and put results in
+the pull request. Forgejo Actions workflows under `.forgejo/workflows/` remain until cutover; they still match what
+CI reproduces.
 
 ### Checks that need your dump or a run
 
@@ -255,6 +278,9 @@ for scripted input, screenshots, frame dumps and profiles are in the development
 
 - Match the file you're editing: there is no formatter, so follow the indentation, comments and naming around you. Don't
   reformat unrelated code in the same change.
+- A function that keeps a rule written in the docs says where, in a comment just above it: `// doc: docs/<file>.md#<heading
+  anchor>` (`# doc:` in Python), with the rule's number or a few words after it. `tests/test_doc_anchors.py` fails on an
+  anchor whose file or heading is gone, so a renamed heading is fixed in the same change.
 - Keep game-specific code in new files where possible. `nx2/`, `host/` and `gpu/` stay close to mkw-recomp so upstream
   fixes apply as a patch; each sync names its mkw-recomp base commit in the commit message.
 - Don't modify `third_party/`: its parts are upstream copies with their notices in `PROVENANCE.md` (a64-kit's note lists
@@ -290,7 +316,7 @@ Every pull request uses the [pull request template](.forgejo/pull_request_templa
 description, its checklist stays whole, and `forge.py pr ready` checks it before review.
 
 Longshot's `main` takes reviewed pull requests only. You work on a branch, push it to your fork and open the pull
-request from there. Set up pushing once: `python -I scripts/forge.py fork` makes your fork and the remote
+request from there. Set up pushing once: `python -I ../Tooling/scripts/forge.py fork` makes your fork and the remote
 `forge-fork` (`pr create` does it too if you haven't).
 
 ```
@@ -298,7 +324,7 @@ git fetch forge && git switch -c fix/arc-walls forge/main        jj: jj git fetc
 ... change, build, test, commit ...
 git push forge-fork fix/arc-walls                                 jj: jj bookmark create fix/arc-walls -r @;
                                                                       jj git push --remote forge-fork -b fix/arc-walls
-python -I scripts/forge.py pr create fix/arc-walls --title "fix(vk): walls missing on Intel Arc" --body-file pr.md
+python -I ../Tooling/scripts/forge.py pr create fix/arc-walls --title "fix(vk): walls missing on Intel Arc" --body-file pr.md
 ```
 
 1. Name the branch for the change: `fix/...`, `linux/...`, `builder/...`, `docs/...`. One topic per pull request: a fix
@@ -331,7 +357,10 @@ python -I scripts/forge.py pr create fix/arc-walls --title "fix(vk): walls missi
      stays unticked with the reason beside it, and the PR stays WIP.
      Every box is the author's to settle: work it out from the diff, the tests and the runs, and ask the person you
      work for only about what you can't settle yourself.
-4. **A pull request is work in progress until it is measured and ready for review.** On Forgejo that is a title
+4. **A change the game runs opens as a pull request only once it has run in the game**, at least once where it
+   matters: `forge.py pr create --tested-in-game "where it ran and what you saw"` (the PR's first comment). It refuses
+   a branch that touches `gpu/`, `host/`, `nx2/`, `assets/` or `third_party/` without it; `--force` opens it anyway.
+   **A pull request is work in progress until it is measured and ready for review.** On Forgejo that is a title
    starting with `WIP:` (or `[WIP]`). `pr create` opens it so (`--ready` when the description is complete already);
    `pr ready <n>` marks it ready once the Measurements have real numbers and every *Everyone* box is ticked, and
    refuses until then (the same check runs on every pull request: `scripts/check_pr_description.py`). Reviewers
@@ -346,7 +375,7 @@ python -I scripts/forge.py pr create fix/arc-walls --title "fix(vk): walls missi
    your branch; measure again, or say in the comment why the numbers still hold.
 
 A maintainer reviews and squash-merges it. `forge.py pr status <n>`, `pr list --mine` and `pr view <n> --comments`
-follow up from the command line ([docs/forge.md](docs/forge.md)).
+follow up from the command line ([Tooling's docs/forge.md](https://git.magicbean.dev/MagicBeanDev/Tooling/src/branch/main/docs/forge.md)).
 
 ### Measurements
 
@@ -456,14 +485,16 @@ public source when there is one.
 
 The third-party parts (Eden, suyu, Sirit, the Vulkan Memory Allocator, SDL, Opus, Dear ImGui, zstd, the Libertinus
 fonts, zbic and the a64-kit tools) keep their own notices: preserve them, and don't relicense their code. NVIDIA's DLSS
-SDK is not one of them: it is never in the repository ([NVIDIA DLSS](#nvidia-dlss-optional)).
+SDK is not one of them: it is never in the repository ([NVIDIA DLSS](#nvidia-dlss-optional)). Nor is Intel's
+`libxess.dll` (Intel's license): only XeSS's MIT API headers are (`third_party/xess`), and the player puts the DLL beside
+the game (the README's Intel XeSS section).
 
 ## Where to talk
 
 - **Discord:** https://discord.gg/magicbean. Claim work and discuss pull requests in `#dev-work`; `#prs` shows every
   open pull request, kept up to date.
 - **Issues:** [the forms on git.magicbean.dev](https://git.magicbean.dev/MagicBeanDev/Longshot/issues/new/choose).
-- **Agents:** [AGENTS.md](AGENTS.md); they post progress to the team chat (`scripts/team_chat.py`).
+- **Agents:** [AGENTS.md](AGENTS.md); they post progress to the team chat (Tooling's `team_chat.py`).
 
 Thanks for testing, reporting and sending fixes. Every report from a different GPU and every area played further than
 before moves the port forward.

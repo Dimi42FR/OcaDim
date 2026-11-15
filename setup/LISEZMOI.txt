@@ -1,0 +1,13 @@
+OCADIM 0.0.1 — LE SETUP
+=======================
+
+Il vous faut VOTRE copie du jeu (le fichier .nup ; programme 0400486024DEC000, build e0f3ccfa),
+environ 60 Go libres, et Windows 10/11 en 64 bits. Le jeu n'est pas dans ce dossier : il est
+compilé sur votre machine, et les outils de compilation (~250 Mo) sont téléchargés au premier
+lancement. Comptez environ 40 minutes la première fois.
+
+Lancez OcaDimSetup.exe, choisissez votre .nup, attendez la fin, jouez. Vos réglages et vos
+sauvegardes vivent dans %LOCALAPPDATA%\OcaDim. Pour mettre à jour ou désinstaller, relancez le
+même OcaDimSetup.exe : il propose Jouer / Mettre à jour / Désinstaller.
+
+Rien de ce que vous jouez ne sort de votre machine.
