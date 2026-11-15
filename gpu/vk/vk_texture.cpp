@@ -2632,13 +2632,7 @@ int64_t pass_barriers_relaxed() { return st_pass_relaxed.load(std::memory_order_
 // elsewhere, measured. On NVIDIA by default (the game's barriers were placed for an NVIDIA GPU), off on others, where it has
 // not run: RX_VK_GAME_ORDER=1 there to try it, 0 off everywhere. RX_VK_PASS_BARRIER=game / full still set the pass part.
 bool game_order() {
-    static const bool on = [] {
-        const char* e = getenv("RX_VK_GAME_ORDER");
-        const bool v = e ? !env_value_off(e) : dev.props.vendorID == 0x10de;
-        logf("vk: passes and dispatches right after others ordered by the game's barriers: %s (RX_VK_GAME_ORDER%s)",
-             v ? "on" : "off", e ? " set" : v ? "=0: off" : "=1: on");
-        return v;
-    }();
+    static const bool on = menu_draw_order();   // (OcaDim) the Insert menu's row, RX_VK_GAME_ORDER over it; logged there
     return on;
 }
 void pass_start_barrier(VkCommandBuffer cmd) {

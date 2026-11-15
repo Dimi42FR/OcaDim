@@ -30,6 +30,11 @@ struct Options {
     int above60_fixes = 1;    // (longshot) Above-60 fixes: 1 the floors' carry cut and the height-field surfaces' fixed steps as
                           // the fixes for frame rates above 60 do them (host/oot_high_fps.c), 0 the game's own 100.0 cut and its
                           // own step count, as before them. Read once, at the start (menu_above60_fixes, HOS_OPT_ABOVE60_FIXES)
+    int ccx_split = 0;    // (OcaDim) CPU affinity (CCX): 0 Auto (on from 12 logical processors), 1 On (the replay's workers on the
+                          // upper half of the processor's logical CPUs), 2 Off. Read once, at the start (menu_ccx_split);
+                          // RX_VK_CCX_SPLIT over it
+    int draw_order = 0;   // (OcaDim) Draw order barriers: 0 Auto (NVIDIA only, as upstream measured), 1 On, 2 Off. Read once, at the
+                          // start (menu_draw_order); RX_VK_GAME_ORDER over it
     int hdr = 0;          // (longshot) HDR10 out (vk_framegen.cpp framegen_hdr): 0 off, 1 the SDR picture expanded, 2 the game's own (native) HDR; when the display has it (the swapchain made again at once)
     int hdr_white = 200;  // HDR paper white, nits (the picture's white)
     int hdr_peak = 1000;  // HDR peak brightness, nits (its brightest highlights)
@@ -160,6 +165,12 @@ int menu_replay_seg();
 /// (longshot) The Above-60 fixes row as this run resolved it, once, at the start: false restores the game's own behaviour
 /// before the fixes for frame rates above 60 (host/oot_high_fps.c, answered through HOS_OPT_ABOVE60_FIXES)
 bool menu_above60_fixes();
+/// (OcaDim) CPU affinity (CCX): the replay's workers pinned to the upper half of the processor's logical CPUs (the second CCD
+/// on a Ryzen 5000), so the guest thread's cache is not evicted by them. Auto: from 12 logical processors. Read once, at the start
+bool menu_ccx_split();
+/// (OcaDim) Draw order barriers: a draw pass right after another waits in its fragment stages only, and a compute dispatch right
+/// after another gets no barrier, as the game's own barriers order them. Auto: NVIDIA only (measured there). Read once, at the start
+bool menu_draw_order();
 void menu_set_gpu_count(int count);
 std::string driver_text();   // (vk_main.cpp: the driver as it names itself, for the log and Save my pipeline list)
 std::string device_name_text();   // (vk_main.cpp: the GPU the game runs on, as its driver names it)

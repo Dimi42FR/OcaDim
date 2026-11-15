@@ -2611,8 +2611,28 @@ struct ParPool {
     bool started = false;
 };
 ParPool par_pool;
+// (OcaDim) CPU affinity (CCX), menu_ccx_split: the replay's workers on the upper half of the process's logical CPUs (the second
+// CCD on a Ryzen 5000), so the guest thread and its cache keep the lower half. Windows: an explicit mask; elsewhere the scheduler's.
+static void par_pin_upper_half() {
+#ifdef _WIN32
+    DWORD_PTR proc = 0, sys = 0;
+    if (!GetProcessAffinityMask(GetCurrentProcess(), &proc, &sys)) return;
+    int n = 0;
+    for (DWORD_PTR m = proc; m; m &= m - 1) n++;
+    if (n < 2) return;
+    DWORD_PTR upper = 0;
+    int seen = 0;
+    for (int i = 0; i < (int)(sizeof(DWORD_PTR) * 8); i++)
+        if (proc & ((DWORD_PTR)1 << i)) {
+            if (seen >= n / 2) upper |= (DWORD_PTR)1 << i;
+            seen++;
+        }
+    if (upper) SetThreadAffinityMask(GetCurrentThread(), upper);
+#endif
+}
 void par_worker_main() {
     SetThreadDescription(GetCurrentThread(), L"mkw_vk replay worker");
+    if (menu_ccx_split()) par_pin_upper_half();
     // (longshot) BELOW_NORMAL, not the replay thread's ABOVE_NORMAL: the workers record segments the game
     // is not waiting on yet (each submits in order as they finish), and at ABOVE_NORMAL they starved the
     // game's own threads for cores: the chain analysis measured 6.9 ms a frame of the game's threads

@@ -1523,6 +1523,14 @@ Row rows[] = {
      "The two places in the game that need whole 60 fps frames, mended above 60: the floors that carry a character, and the "
      "height-field surfaces' fixed steps. Off: the game's own 100.0 cut and its own step count, the behaviour before the "
      "fixes. Applies after a restart. Added by Dimi42FR.", hn_above60_fixes, true, true},
+    {TAB_GRAPHICS, "CPU affinity (CCX)", &opts.ccx_split, 0, 2, 1, tx_vsync,
+     "Keeps the replay's workers on the upper half of the processor's logical CPUs (the second CCD on a Ryzen 5000), so the "
+     "game's own thread keeps its cache. Auto: on from 12 logical processors. Applies after a restart. Added by Dimi42FR.",
+     nullptr, true, true},
+    {TAB_GRAPHICS, "Draw order barriers", &opts.draw_order, 0, 2, 1, tx_vsync,
+     "A draw pass right after another waits in its fragment stages only, and a compute dispatch right after another gets no "
+     "barrier, as the game's own barriers order them. Auto: NVIDIA only, where it was measured; On tries it on this card. "
+     "Applies after a restart. Added by Dimi42FR.", nullptr, true, true},
     // (no Mesh shaders row: changing it translated every shader again at the next start, for nothing a player gains. A launch
     // switch now, RX_VK_MESH_SHADERS: gpu/vk/mesh_mode.h)
 
@@ -5141,6 +5149,45 @@ bool menu_above60_fixes() {
         menu_init();
         logf("vk: Above-60 fixes: %s", opts.above60_fixes ? "on" : "off (the game's own, as before the fixes)");
         return opts.above60_fixes != 0;
+    }();
+    return on;
+}
+bool menu_draw_order() {
+    static const bool on = [] {
+        menu_init();
+        if (const char* e = getenv("RX_VK_GAME_ORDER")) {
+            const bool v = !env_value_off(e);
+            logf("vk: draw order barriers: %s (RX_VK_GAME_ORDER set)", v ? "on" : "off");
+            return v;
+        }
+        const int row = std::clamp(opts.draw_order, 0, 2);
+        if (row) {
+            logf("vk: draw order barriers: %s (the Insert menu's row)", row == 1 ? "on" : "off");
+            return row == 1;
+        }
+        const bool v = dev.props.vendorID == 0x10de;   // (NVIDIA, where upstream measured it)
+        logf("vk: draw order barriers: Auto: %s (NVIDIA only, as measured)", v ? "on" : "off");
+        return v;
+    }();
+    return on;
+}
+bool menu_ccx_split() {
+    static const bool on = [] {
+        menu_init();
+        const unsigned cpus = usable_cpus();
+        if (const char* e = getenv("RX_VK_CCX_SPLIT")) {
+            const bool v = atoi(e) != 0;
+            logf("vk: CPU affinity (CCX): %s (RX_VK_CCX_SPLIT set)", v ? "on" : "off");
+            return v;
+        }
+        const int row = std::clamp(opts.ccx_split, 0, 2);
+        if (row) {
+            logf("vk: CPU affinity (CCX): %s (the Insert menu's row)", row == 1 ? "on" : "off");
+            return row == 1;
+        }
+        const bool v = cpus >= 12;   // (two CCDs' worth: the replay's workers and the guest thread apart)
+        logf("vk: CPU affinity (CCX): Auto: %s (%u logical processors)", v ? "on" : "off", cpus);
+        return v;
     }();
     return on;
 }
