@@ -44,6 +44,8 @@
 #include "api/include/ffx_api.h"
 #include "api/include/ffx_api_types.h"
 #include "api/include/vk/ffx_api_vk.h"
+#include "framegeneration/include/ffx_framegeneration.h"          // (longshot, FSR4-FG-AMD.md's P0: the provider's versions)
+#include "framegeneration/include/vk/ffx_api_framegeneration_vk.h"
 #include "upscalers/include/ffx_upscale.h"
 #endif
 #include "vk_work.h"   // (after the others: the barriers here count as work for full_barrier)
@@ -987,6 +989,35 @@ bool load() {
         return no(FSR_NO_MODEL);
     }
     logf("vk: AMD FSR 4: upscalers %s; using %u.%u.%u", listed.c_str(), best[0], best[1], best[2]);
+    // (longshot, FSR4-FG-AMD.md's P0) Is AMD's frame generation there for this device? The loader finds
+    // amd_fidelityfx_framegeneration_vk.dll beside itself and lists the versions it carries for a Vulkan swapchain. No
+    // context and no swapchain is made here, so none of the present path is touched: this only says whether P1 has anything
+    // to build on, and its answer goes to the log.
+    {
+        ffxQueryDescGetVersions fg{};
+        fg.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
+        fg.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_FGSWAPCHAIN_VK;
+        fg.device = &l.device_context;
+        uint64_t fg_n = 0;
+        fg.outputCount = &fg_n;
+        const ffxReturnCode_t rc = l.query(nullptr, &fg.header);
+        if (rc != FFX_API_RETURN_OK || !fg_n) {
+            logf("vk: FSR FG (P0): AMD's frame generation is not there for this device (return %d, %llu versions): the DLL beside "
+                 "the game, or this driver, has none (docs/FSR4-FG-AMD.md)", (int)rc, (unsigned long long)fg_n);
+        } else {
+            std::vector<uint64_t> fg_ids(fg_n);
+            std::vector<const char*> fg_names(fg_n);
+            fg.versionIds = fg_ids.data();
+            fg.versionNames = fg_names.data();
+            if (l.query(nullptr, &fg.header) == FFX_API_RETURN_OK) {
+                std::string fl;
+                for (uint64_t i = 0; i < fg_n; i++) fl += (fl.empty() ? "" : ", ") + std::string(fg_names[i] ? fg_names[i] : "?");
+                logf("vk: FSR FG (P0): AMD's frame generation for this device: %s (%llu)", fl.c_str(), (unsigned long long)fg_n);
+            } else {
+                logf("vk: FSR FG (P0): AMD's frame generation lists %llu versions, their names unread", (unsigned long long)fg_n);
+            }
+        }
+    }
     l.ok = true;
     g_why = FSR_OK;
     return true;
