@@ -2853,8 +2853,15 @@ namespace {
 /// budget (40: only an area load's burst; at 8 the ground's streamed textures waited a frame in ordinary play and the ground
 /// flickered, Discord 2026-11-09), 0: no deferral, as before
 bool upload_defer(const Texture& tex) {
-    static const int64_t budget_ns = (int64_t)(getenv("RX_VK_UPLOAD_BUDGET_MS") ? atof(getenv("RX_VK_UPLOAD_BUDGET_MS")) : 40.0) * 1000000;
-    if (!budget_ns || !upload_defer_ok || tex.uploaded || !tex.astc || tex.gpu_written) return false;
+    static const int64_t base_ns = (int64_t)(getenv("RX_VK_UPLOAD_BUDGET_MS") ? atof(getenv("RX_VK_UPLOAD_BUDGET_MS")) : 40.0) * 1000000;
+    if (!base_ns || !upload_defer_ok || tex.uploaded || !tex.astc || tex.gpu_written) return false;
+    // (OcaDim) an area's load: no present for 100 ms (programs_in_load's rule; a loading screen keeps presenting, so the
+    // signal is the long frames it makes, not a still screen). What is deferred now is drawn as the placeholder (white) in
+    // the first play frames, at a distance where many textures share few pixels. Four times the budget there moves that
+    // work into the frame that can take it; play frames keep the base. Deferral moves the same work later either way, so
+    // nothing is lost, only placed. Measured: 1 303 ASTC textures deferred in a session down to 571, the worst upload
+    // frame 115 ms up to 256, the play frames' fps unchanged (61-62)
+    const int64_t budget_ns = programs_in_load(nullptr) ? base_ns * 4 : base_ns;
     if (frame_upload_ns.load(std::memory_order_relaxed) < budget_ns) return false;
     st_deferred.fetch_add(1, std::memory_order_relaxed), st_deferred_frame.fetch_add(1, std::memory_order_relaxed);
     return true;
