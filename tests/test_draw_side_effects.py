@@ -72,6 +72,10 @@ struct ParLock {};
 struct DrawArgs { bool indirect = true; int groups[3]{1, 1, 1}; int first_task = 0; void* occ_pool = nullptr; };
 #define VK_NULL_HANDLE nullptr
 enum OccNotBegun { kOccTaskBatches };   // (vk_draw.cpp's occlusion query guard: the task batches leave it unbegun)
+// (OcaDim: the fine profiler's scopes the cut block now contains, RX_VK_PROF_FINE; off in this fixture)
+enum { FT_PIPE };
+#define FINE_SCOPE(ph) do {} while (0)
+#define FINE_N(c, n) do {} while (0)
 struct OccGuard { OccGuard(int, const DrawArgs&) {} void drop(OccNotBegun) {} };
 int fallback_task_groups(const Program&) { std::abort(); }
 void draw(int, NvnState&, const DrawArgs&) { std::abort(); }

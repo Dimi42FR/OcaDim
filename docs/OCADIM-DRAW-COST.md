@@ -65,8 +65,25 @@ jeu ; c'est une piste fermée, pas une piste ouverte.
 ## Le gain pris : les notes DLSS/FSR par draw
 
 `temporal_note_scene_draw` et `fsr3_inputs::note_scene_draw` sont appelées pour **chaque** draw qui a une couleur et une
-profondeur (0,92 ms par frame, deux verrous par draw), et leur deuxième chose est de constater que la frame a déjà noté
-sa plus grande cible et de sortir. Deux draws consécutifs visent presque toujours les mêmes cibles : l'appel est un
-no-op, et on le saute maintenant avant le verrou, en gardant la dernière (couleur, profondeur, largeur, hauteur) du
-thread. Une cible plus grande change les dimensions, donc la règle « la plus grande gagne » est préservée.
+profondeur, et leur deuxième chose est de constater que la frame a déjà noté sa plus grande cible et de sortir — après
+un verrou chacune. Deux draws consécutifs visent presque toujours les mêmes cibles : l'appel est un no-op, et on le
+saute maintenant avant le verrou, en gardant la dernière (couleur, profondeur, largeur, hauteur, frame) du thread. Une
+cible plus grande change les dimensions, donc la règle « la plus grande gagne » est préservée ; la frame entre dans la
+comparaison, donc la caméra est bien re-notée au premier draw de chaque frame.
+
+Mesuré au profil fin, même scène, même build à une ligne près :
+
+| | avant | après |
+|---|---|---|
+| `of it: dlss/skin notes` | 0,92 ms/frame | **0,12-0,17 ms** |
+
+Soit ~0,75 ms repris, 4 % d'une frame de 18,1 ms. Vérifié que l'upscaler suit : `AMD FSR 4: 600 frames drawn` et un
+jitter non nul dans le status, comme avant.
+
+## Ce que les fps ne disent pas
+
+Les comparaisons de fps entre deux runs ne valent rien ici : la sauvegarde et la zone ont changé plusieurs fois pendant
+la session, et la même scène donne 53 à 56 fps d'un run à l'autre (les runs `mem-census*`, `draw-cost*`, `notes-skip2`
+le montrent). Les chiffres qui tiennent sont ceux du profil (ms par frame), pas les moyennes de fps.
+
 
