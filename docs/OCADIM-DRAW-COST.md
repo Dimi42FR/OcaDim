@@ -119,6 +119,40 @@ Sur l'installation réelle, **les textures sont le double** de l'arbre de dev et
 par les étages à table de handles (section précédente).
 
 
+## Le kept étendu aux tables de handles : net zéro (16/11, session 2)
+
+`desc_keep_textures` refusait tout étage dont un descripteur vient d'un **programme de handles**. L'ouvrir demande de
+relire la table à chaque réutilisation (son contenu peut changer sans que rien ne le signale) et de comparer aux handles
+gardés. Fait, plus le contrôle par texture (au lieu de la génération de destruction globale) pour ne pas jeter
+l'ensemble quand une cible transitoire disparaît.
+
+Résultat mesuré, même scène, profil fin :
+
+| | avant | après |
+|---|---|---|
+| `stages' textures kept` par draw | 0,16 | **0,25** (62 % des étages) |
+| `textures` | 2,43-2,53 ms | **2,43-2,52 ms** |
+| `of tex: view` | 0,83 | 0,74-0,83 |
+
+Les compteurs ajoutés nomment les refus restants : « its key moved » 0,13, « never whole » 0,02-0,05, « a slot moved » 0,
+« a view moved » 0. Autrement dit : **le kept coûte à peu près ce qu'il économise**, parce que le coût n'est pas la
+résolution de vue mais la copie des `VkDescriptorImageInfo` et des writes, qu'il faut de toute façon refaire à chaque
+build. Changé puis **reverti** : pas de gain, donc pas de risque à prendre sur des vues gardées entre frames (terrain de
+l'issue 1126).
+
+## `create` au lieu de `start` : la mémoire ne se gagne pas là (16/11, session 2)
+
+L'installation force `start` (marqueur `longshot_load_start.txt`) : tous les programmes avant le titre, 4-5 Go de RAM et
+~5 min de préparation. Mesure d'une session en `create` sur `F:\test` :
+
+- pic de working set **6 290 Mo** (contre ~7,6-8,4 Go avec `start`) — le gain de RAM est réel ;
+- mais **crash** : `0xc0000005 (read 0xffffffffffffffff)` dans `amdvlk64.dll` après une traduction de 3,5 s
+  (`slow submit 894 ms, programs 3518.7`), à ~23 000 présents, sur l'écran-titre.
+
+Le marqueur est donc justifié sur ce PC, et `start` reste. Une session en `create` n'a pas sa place ici sans régler
+d'abord le plantage du driver sur les grosses traductions.
+
+
 ## Ce que les fps ne disent pas
 
 Les comparaisons de fps entre deux runs ne valent rien ici : la sauvegarde et la zone ont changé plusieurs fois pendant

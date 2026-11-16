@@ -25,7 +25,13 @@ enum { AUTO = 0, ON = 1, OFF = 2 };   // (the row's values, in V-Sync's order: A
 /// logical processors for the game runs the render thread and the recorder thread by default. False: Auto is Off
 /// everywhere and the row changes nobody's default; nothing else needs to change to turn Auto off again. Still open with
 /// it on: the game's large GPU-written tables (Hyrule Field's culling tables) can be read a frame old behind the game.
-constexpr bool kAutoEnabled = true;
+///
+/// Off since 16/11 (OcaDim): a tester's report (build e4a54375, RX 6900 XT, driver 26.10.2 "AMD proprietary shader
+/// compiler") crashed in a vkCmd* run by the recorder thread at every start, five in a row, before the title, and the
+/// report says the player never chose it — Auto had turned it on by its 16 logical processors. Our two machines (RX 9070
+/// XT, "LLPC") run the same rule without a fault, so the recorder's object lifetimes are not proven on that card. Back on
+/// once they are (the row's On still gives both threads, for whoever asks).
+constexpr bool kAutoEnabled = false;
 /// Auto's threshold: the logical processors the process may run on, from which it picks the render thread and the recorder
 /// thread (the game's own threads, the replay, the recorder and the parallel replay's workers beside one another)
 constexpr unsigned kAutoCpus = 12;
