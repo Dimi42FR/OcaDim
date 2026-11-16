@@ -171,11 +171,6 @@ int main(int argc, char **argv) {
         !strcmp(scenario, "downmix") || !strcmp(scenario, "retry"))
         speakers = 6;
     fail_open6 = !strcmp(scenario, "fallback") || !strcmp(scenario, "upmix");
-    opens_fail = !strcmp(scenario, "retry");
-    if (!strcmp(scenario, "surround") || !strcmp(scenario, "fallback") || !strcmp(scenario, "upmix") ||
-        !strcmp(scenario, "downmix") || !strcmp(scenario, "retry"))
-        speakers = 6;
-    fail_open6 = !strcmp(scenario, "fallback") || !strcmp(scenario, "upmix");
     opens_fail = !strcmp(scenario, "retry") || !strcmp(scenario, "same-layout-retry");
     output_open();
     if (!strcmp(scenario, "named-stall-budget") || !strcmp(scenario, "named-backoff")) {
@@ -337,33 +332,6 @@ int main(int argc, char **argv) {
         CHECK(out_channels == 2 && hdr[0].dwBufferLength == FRAME * 2 * 2 * 2);
         CHECK(strstr(last_log, "default device") && strstr(last_log, "stereo"));
         logs = 0;
-        if (!strcmp(scenario, "upmix")) {
-            frames(10, 1);
-            fail_open6 = 0;              /* the new default takes 5.1 */
-            default_key = 12;
-            now_ms += 1000;
-            const int before = accepted;
-            mixed_frame(2);              /* mixed in stereo before the move */
-            CHECK(close_calls == 1 && open_calls == 5 && out_channels == 6);
-            CHECK(fill_block == 0 && fill_frames == 0 && !blocks_hold(7777));   /* nothing of it queued */
-            frames(2, 1);
-            CHECK(accepted == before + 1 && blocks[0][FRAME * 6 - 1] == (int16_t)(FRAME * 6 - 1));
-            CHECK(blocks[0][FRAME * 6] == 31);
-        } else {
-            frames(40, 1);
-            CHECK(accepted == 20 && !logs);
-        }
-    } else if (opens_fail) {
-        CHECK(open_calls == 6 && !wout && out_channels == 2);   /* (5.1 on all three, then stereo on all three) */
-        mixed_frame(2);
-        CHECK(open_calls == 6);          /* not again within the second */
-        opens_fail = 0;                  /* a device plugged in, and it takes 5.1 */
-        now_ms += 1000;
-        mixed_frame(2);
-        CHECK(wout && open_calls == 7 && out_channels == 6);
-        CHECK(fill_frames == 0 && !write_calls && !blocks_hold(7777));
-        frames(2, 1);
-        CHECK(accepted == 1 && blocks[0][FRAME * 6] == 31);
         if (!strcmp(scenario, "upmix")) {
             frames(10, 1);
             fail_open6 = 0;              /* the new default takes 5.1 */

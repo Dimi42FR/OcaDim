@@ -1341,11 +1341,6 @@ MENU_HINTS(hn_fps, 0, nullptr, "The frame rate. With frame generation on, the ga
            "And where each frame's time goes, as colours in the graph: the game, the renderer, its waits on the render thread "
            "and the GPU, pacing (frame rate cap, vsync); with threaded rendering, a lane for the render thread's time; the "
            "GPU's own time; red marks where shaders were built or draws left out.",
-           "And, for debugging, the CPU, GPU and driver, and the renderer's own numbers: video memory, textures, draws, "
-           "dispatches and render passes a frame, draws skipped, texture uploads and pipelines built.")
-           "And where each frame's time goes, as colours in the graph: the game, the renderer, its waits on the render thread "
-           "and the GPU, pacing (frame rate cap, vsync); with threaded rendering, a lane for the render thread's time; the "
-           "GPU's own time; red marks where shaders were built or draws left out.",
            "And, for debugging, the version, the CPU, GPU and driver, and the renderer's own numbers: video memory, textures, draws, "
            "dispatches and render passes a frame, draws skipped, texture uploads and pipelines built.")
 MENU_HINTS(hn_menu_size, 1, "Smaller, for a desk.", "The usual size.", "Larger, for a TV across the room.")
@@ -1446,6 +1441,7 @@ void text_set(TextField& f, const char* t) {
     f.len = f.caret = (int)strlen(f.text);
 }
 
+const char* const kFpsDevLineHelp = "Whether the FPS counter's Dev level shows this line.";   // (the details page's rows)
 // (longshot) The Performance tab: this PC's numbers as they are now, read-only. Each row formats its line when it is drawn, from
 // the accounts the FPS counter's Dev level reads (the frame's parts, the textures, the driver's memory). Nothing here sets
 // anything: perf_value stands for every row's value, and stops_at_ends keeps the arrows off it.
@@ -1492,7 +1488,6 @@ const char* perf_pipelines(int) {
     snprintf(b, sizeof b, "%d made, %d left out", s.pipelines, s.left_out);
     return b;
 }
-const char* const kFpsDevLineHelp = "Whether the FPS counter's Dev level shows this line.";   // (the details page's rows)
 Row rows[] = {
     // Graphics, in sections: a heading row is a section's title (draw_options draws it, the selection steps over it). The
     // Quality preset first, as it sets rows in every section. (Reflex, Anti-Lag 2, the Upscaler and the DLSS model only where
@@ -2249,11 +2244,6 @@ const char* ini_key(const Row& r) {
     if (r.value == &opts.dlss) return "dlss";   // (as opts.dlss and RX_VK_DLSS)
     if (r.value == &opts.handheld) return "handheld_profile";   // (the Profile row; host/nn_applet.c reads it at the start)
     if (r.value == &opts.ultrawide) return "ultrawide";   // (the Aspect ratio row; host/hos_main.c reads it at the start)
-    // (longshot) the three whose keys are shorter than their names: the ones the players' files have
-    if (r.value == &opts.desc_prefetch) return "desc_prefetch";
-    if (r.value == &opts.replay_seg) return "replay_seg";
-    if (r.value == &opts.above60_fixes) return "above60_fixes";
-    static char k[32];
     static char k[48];
     size_t n = 0;
     for (const char* p = r.name; *p && n + 1 < sizeof k; p++) k[n++] = *p == ' ' ? '_' : (char)tolower(*p);
@@ -4660,37 +4650,6 @@ static std::string hardware_gpu_name(std::string t) {
     return t;
 }
 
-/// The processor's name without its marks, clock and core count: "Intel(R) Core(TM) i7-8700K CPU @ 3.70GHz" is "Intel Core
-/// i7-8700K", "AMD Ryzen 5 5600X 6-Core Processor" is "AMD Ryzen 5 5600X"
-static std::string hardware_cpu_name(std::string t) {
-    for (const char* mark : {"(R)", "(TM)", "(tm)"})
-        for (size_t at; (at = t.find(mark)) != std::string::npos;) t.erase(at, strlen(mark));
-    if (const size_t at = t.find(" @ "); at != std::string::npos) t.erase(at);
-    while (!t.empty() && t.back() == ' ') t.pop_back();
-    const auto drop_end = [&](const char* w) {
-        const size_t n = strlen(w);
-        if (t.size() > n && t.compare(t.size() - n, n, w) == 0) t.erase(t.size() - n);
-    };
-    drop_end(" Processor");
-    drop_end(" CPU");
-    if (const size_t sp = t.rfind(' '); sp != std::string::npos && t.size() > 5 && t.compare(t.size() - 5, 5, "-Core") == 0) t.erase(sp);
-    std::string out;
-    for (char ch : t)
-        if (ch != ' ' || (!out.empty() && out.back() != ' ')) out += ch;
-    while (!out.empty() && out.back() == ' ') out.pop_back();
-    return out;
-}
-
-/// The GPU's name without its marks and the driver's note in brackets at its end, which the driver line says:
-/// "AMD Radeon RX 6750 XT (RADV NAVI22)" is "AMD Radeon RX 6750 XT", "Intel(R) Arc(tm) A770 Graphics (DG2)" "Intel Arc A770 Graphics"
-static std::string hardware_gpu_name(std::string t) {
-    for (const char* mark : {"(R)", "(TM)", "(tm)"})
-        for (size_t at; (at = t.find(mark)) != std::string::npos;) t.erase(at, strlen(mark));
-    while (!t.empty() && t.back() == ' ') t.pop_back();
-    if (const size_t open = t.rfind(" ("); open != std::string::npos && open > 0 && !t.empty() && t.back() == ')') t.erase(open);
-    return t;
-}
-
 static_assert(sizeof opts.fps_dev_show / sizeof *opts.fps_dev_show == fps_stats::kDevLines + 1,
               "a details page toggle for each Dev line and the CPU and GPU lines");
 
@@ -4708,9 +4667,6 @@ float fps_scale(const ui::Ctx& c) {
 /// Past FPS (the row's levels, fps_stats.h), a tidy column under it, aligned to the same edge, with the same soft-shadowed
 /// text and no plate either: the frame time (green, amber or red against the cap's) and the 1% low; the graph of the last
 /// 4 s, a thin line over a soft fill, one column a frame span with its slowest frame (a stutter never falls between two), a
-/// faint dashed line at the cap's frame time, red ticks over frames past twice it; the Breakdown, where the time goes
-/// stacked in the graph's columns, its legend with the values, the GPU's time and the stutters' causes (their columns get a
-/// red tick too). Dev adds the CPU, GPU and driver under the frame time, and the renderer's own numbers.
 /// faint dashed line at the cap's frame time, red ticks over frames past twice it; the Breakdown, where the time goes
 /// stacked in the graph's columns, its legend with the values, the GPU's time and the stutters' causes (their columns get a
 /// red tick too). Dev adds the renderer's own numbers, and at the foot the version, the CPU, GPU and driver.
@@ -4735,9 +4691,6 @@ void draw_fps(ui::Ctx& c, bool under_banner) {
     if (level >= fs::kFrameTime && fps_ms_text[0]) h += row;
     if (level >= fs::kDev) h += 3 * lh;
     if (level >= fs::kGraph) h += 8 * s + gh + 4 * s;
-    const bool rt_lane = fps_render_thread_on();   // (no render thread, threaded rendering off: no lane, no legend section)
-    if (level >= fs::kBreakdown) h += (rt_lane ? 36 * s + 6 * lh : 0) + 10 * s + 10 * lh + 12 * s;   // (the render lane, the legend's rows)
-    if (level >= fs::kDev) h += 6 * s + fs::kDevLines * lh;
     const bool rt_lane = fps_render_thread_on();   // (no render thread, threaded rendering off: no lane, no legend section)
     if (level >= fs::kBreakdown) h += (rt_lane ? 36 * s + 6 * lh : 0) + 10 * s + 11 * lh + 12 * s;   // (the render lane, the legend's rows)
     // (the Dev lines the details page leaves on, laid out by their width: VRAM on a row of its own, the rest two to a row while the
@@ -4813,27 +4766,6 @@ void draw_fps(ui::Ctx& c, bool under_banner) {
         tab.draw(c.d, x + mw + gap, y, soft, fps_low_text, s);
         y += row;
     }
-    if (level >= fs::kDev) {   // (Dev: the CPU, the GPU, its driver. A line too long for the column's width loses its end)
-        static std::string cpu, gpu, drv, fit[3];
-        static float fit_w = 0;
-        if (gpu.empty()) cpu = hardware_cpu_name(bug_report::cpu_name()), gpu = hardware_gpu_name(device_name_text()), drv = driver_text(), fit_w = 0;
-        if (fit_w != gw) {
-            fit_w = gw;
-            const auto shorten = [&](std::string t, float room) {
-                if (lab.width(t.c_str()) <= room) return t;
-                while (!t.empty() && lab.width((t + "...").c_str()) > room) {
-                    t.pop_back();
-                    while (!t.empty() && ((unsigned char)t.back() & 0xC0) == 0x80) t.pop_back();
-                }
-                while (!t.empty() && t.back() == ' ') t.pop_back();
-                return t + "...";
-            };
-            fit[0] = shorten(cpu.empty() ? "-" : cpu, gw);
-            fit[1] = shorten(gpu.empty() ? "-" : gpu, gw);
-            fit[2] = shorten(drv.empty() ? "-" : drv, gw);
-        }
-        for (const std::string& t : fit) lab.draw(c.d, at(lab.width(t.c_str())), y + 1 * s, soft, t.c_str(), s), y += lh;
-    }
     if (foot) {   // (the footer, at the column's foot: the version, as the banner says it; at Dev the CPU, the GPU, its driver. A line
         // too long for the column's width loses its end)
         static std::string cpu, gpu, drv, fit[4];
@@ -4875,7 +4807,6 @@ void draw_fps(ui::Ctx& c, bool under_banner) {
         int k = 0;
         for (int i = 0; i < kCols; i++)
             if (col[i].ms > 0) ms[k++] = col[i].ms;
-        // (up at once, down slowly, so the whole graph does not rescale with each frame that scrolls out)
         // (up at once, down slowly, so the whole graph does not rescale with each frame that scrolls out: 0.5% a 60th of a second,
         // whatever the frame rate the counter is drawn at)
         const double want = fs::graph_top(target, fs::typical_ms(ms, k));
@@ -4980,9 +4911,6 @@ void draw_fps(ui::Ctx& c, bool under_banner) {
             if (col[i].ms > 0) usual += col[i].ms, k++;
         usual = k ? usual / k : 0;
     }
-    for (int i = 0; i < kCols; i++)
-        if ((col[i].ms > 2 * target && col[i].ms > 1.5f * usual) || col[i].ms > topms || (parts && mark[i])) {   // (no target: past half again the usual)
-            const float cx = cx_of(i);
     static std::unordered_map<int64_t, bool> spike_of;   // (a frame's at_ns: its tick)
     if (spike_of.size() > 4 * kCols) {   // (the frames past the window's left end)
         int64_t oldest = INT64_MAX;
@@ -5000,31 +4928,9 @@ void draw_fps(ui::Ctx& c, bool under_banner) {
             c.d->AddCircleFilled(ImVec2(cx, gy0 - 3 * s), 2.2f * s, ui::rgba(0, 0, 0, 120));
             c.d->AddCircleFilled(ImVec2(cx, gy0 - 3 * s), 1.6f * s, ui::rgba(240, 100, 85));
         }
-    c.d->PopClipRect();
     }
     c.d->PopClipRect();
     if (!parts) return;
-    // (longshot) the render thread's lane: its frame in ms on the frame graph's scale (its own height), the work and the waits
-    // stacked and idle left empty, so a column's height is what the render thread spent of the frame; the cap's line and the
-    // top's value beside it, as the frame graph's
-    const float lane_gap = 6 * s, rh = rt_lane ? 30 * s : 0;
-    const float ry0 = gy1 + (rt_lane ? lane_gap : 0), ry1 = ry0 + rh, rpy = (float)(rh / topms);
-    if (rt_lane) {
-        const auto scale_label = [&](const char* t, float ty, ImU32 col_) {
-            lab.draw(c.d, left ? x1 + 5 * s : x0 - 5 * s - lab.width(t), ty - label * 0.55f, col_, t, s);
-        };
-        c.d->AddLine(ImVec2(x0, std::floor(ry1) + 0.5f), ImVec2(x1, std::floor(ry1) + 0.5f), ui::rgba(255, 255, 255, 60), std::max(1.0f, s));
-        {
-            char t[16];
-            if (target > 0) {
-                const float ty = std::floor(ry1 - (float)target * rpy) + 0.5f, dash = 4 * s, gap = 3 * s;
-                for (float x = x0; x < x1; x += dash + gap)
-                    c.d->AddLine(ImVec2(x, ty), ImVec2(std::min(x + dash, x1), ty), ui::rgba(255, 255, 255, 110), std::max(1.0f, s));
-                snprintf(t, sizeof t, "%.1f", target);
-                scale_label(t, ty, ui::rgba(235, 235, 235));
-            }
-            snprintf(t, sizeof t, topms < 10 ? "%.1f" : "%.0f", topms);
-            scale_label(t, ry0, ui::rgba(200, 200, 200));
     // (longshot) the render thread's lane: its frame in ms on the frame graph's scale (its own height), the work and the waits
     // stacked and idle left empty, so a column's height is what the render thread spent of the frame; the cap's line and the
     // top's value beside it, as the frame graph's
@@ -5059,19 +4965,6 @@ void draw_fps(ui::Ctx& c, bool under_banner) {
                 yb = yt;
             }
         }
-        c.d->PushClipRect(ImVec2(x0, ry0), ImVec2(x1, ry1 + 1), true);
-        for (int i = 0; i < kCols && fps_rt_on; i++) {
-            if (col[i].ms <= 0) continue;
-            const float l = cx_of(i) - cw * 0.5f + 0.5f, r = l + cw - 0.5f;
-            float yb = ry1;
-            for (int k = 0; k < fs::kRtParts && yb > ry0; k++) {
-                if (k == fs::kRtIdle) continue;   // (idle: the space above)
-                const float hgt = col[i].rt[k] * rpy;
-                if (hgt <= 0) continue;
-                const float yt = std::max(ry0, yb - hgt);
-                c.d->AddRectFilled(ImVec2(l, yt), ImVec2(r, yb), alpha(rt_col[k], 190));
-                yb = yt;
-            }
         if (target > 0) {   // (over the lane's columns, as the frame graph's)
             const float ty = std::floor(ry1 - (float)target * rpy) + 0.5f;
             if (ty > ry0) cap_line(ty);
@@ -5130,19 +5023,12 @@ void draw_fps(ui::Ctx& c, bool under_banner) {
     cell(0, 0, false, "Shaders built (4 s)", fps_built_text, strcmp(fps_built_text, "0") ? red : dim);
     cell(1, 0, false, "Draws left out (4 s)", fps_left_text, strcmp(fps_left_text, "0") ? red : dim);
     by += lh;
-    if (level < fs::kDev) return;
-    // (Dev: the renderer's own numbers, for debugging)
-    cell(0, 0, false, "Shaders built (4 s)", fps_built_text, strcmp(fps_built_text, "0") ? red : dim);
-    cell(1, 0, false, "Draws left out (4 s)", fps_left_text, strcmp(fps_left_text, "0") ? red : dim);
-    by += lh;
     if (level < fs::kDev || !dev_shown) return;
     // (Dev: the renderer's own numbers, for debugging; those the details page leaves on)
     c.d->AddLine(ImVec2(x0, std::floor(by + 3 * s) + 0.5f), ImVec2(x1, std::floor(by + 3 * s) + 0.5f), ui::rgba(255, 255, 255, 40), std::max(1.0f, s));
     by += 6 * s;
     const auto dev_cell = [&](int column, int i) {
         const bool alarm = (i == fs::kVram && fps_vram_over) || (i == fs::kSkipped && strcmp(fps_dev_text[i], "0") && strcmp(fps_dev_text[i], "-"));
-        cell(-1, 0, false, fs::dev_name(i), fps_dev_text[i], alarm ? red : ink);
-        by += lh;
         cell(column, 0, false, fs::dev_short(i), fps_dev_text[i], alarm ? red : ink);
     };
     for (int r = 0; r < dev_rows; r++) {   // (as laid out with the column's height, above)
@@ -5820,8 +5706,7 @@ void menu_option_set(int id, int value) {
 // its own thread: menu_mu keeps them apart from menu_tick (the present's thread) and from menu_option_set (the game's)
 bool bridge_row(int i) { return rows[i].value && !rows[i].heading && rows[i].cheat < 0 && row_shown(i); }
 void bridge_fill(int i, MkwVkSetting* out) {
-    static const char* const tabs[] = {"graphics", "audio", "gameplay", "controls", "debug", "performance", "motion", "controls"};
-    static const char* const tabs[] = {"graphics", "audio", "gameplay", "controls", "debug", "motion", "gameplay", "controls"};
+    static const char* const tabs[] = {"graphics", "audio", "gameplay", "controls", "debug", "perf", "motion", "gameplay", "controls"};
     static_assert(sizeof tabs / sizeof tabs[0] == TAB_PAGE + 1, "a name for each MenuTab");
     const Row& r = rows[i];
     *out = MkwVkSetting{};

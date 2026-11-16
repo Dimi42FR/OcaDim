@@ -20,14 +20,6 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "nx2/make_game.py"
 
 
-class _NoLiftStore:
-    """(the namespace's _lift_store with LONGSHOT_LIFT_STORE unset: the branch's share path stays out)"""
-
-    @staticmethod
-    def root():
-        return None
-
-
 def production():
     tree = ast.parse(SOURCE.read_text(encoding="utf-8"), filename=str(SOURCE))
     helpers = {"say", "fail", "gen_print", "write_lift_key", "lifted_before", "kept_before", "kept_list_fits"}
@@ -59,8 +51,6 @@ class LiftCleanupErrorTests(unittest.TestCase):
         self.namespace, self.branch = production()
         self.namespace.update(work=str(self.work), exefs=str(self.root / "exefs"), env={}, key="b" * 40, PY=["authored-python"],
                               gen_dir=str(self.gen), KEPT_LIST="lifted_objects.txt", KEPT_SCHEME=1,
-                              kept_lift=[], contextlib=contextlib,
-                              _lift_store=_NoLiftStore())   # (LONGSHOT_LIFT_STORE unset: no lift to copy, the branch lifts as before)
                               kept_lift=[], contextlib=contextlib,
                               # (LONGSHOT_LIFT_STORE unset: no lift shared with another work folder, nx2/lift_store.py)
                               _lift_store=types.SimpleNamespace(root=lambda: None))

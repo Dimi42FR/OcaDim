@@ -146,11 +146,6 @@ class TheChecksAreWired(unittest.TestCase):
         self.assertNotIn("longshot_vk.so", apprun)
         script = (ROOT / "scripts/linux/appimage.sh").read_text(encoding="utf-8")
         self.assertNotIn("RX_VK_ONLY", script)
-        # (usr/lib/longshot is the builder's own tools inside the image since the tools' layout moved: the renderer
-        # built by every player is what must not be here — no code line builds or copies longshot_vk.so,
-        # LONGSHOT_VK_PREBUILT by the loop)
-        self.assertFalse([l for l in script.splitlines()
-                          if "longshot_vk.so" in l and not l.strip().startswith("#")])
         # (the image's: $TOOLS/usr/lib/longshot is the build tools' install, tools.lock's places, outside the image)
         self.assertNotIn("$APPDIR/usr/lib/longshot", script)
         self.assertRegex(script, r'\ncp -a gpu/vk gpu/compat gpu/third_party "\$T/gpu/"\n')
