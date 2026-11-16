@@ -54,7 +54,8 @@ accord, le log dit **pourquoi** et le chemin simple reste.
 
 | Ce qui a été mesuré | Résultat |
 |---|---|
-| FSR 4 en 2134x1200 → 2560x1440, 2765 draws | **44,1 fps réels**, 36 000 présents, **42 130 affichées**, **6 148 générées**, aucun *device lost* |
+| **Une zone chargée** (la Place du Château, 2765 draws), FSR 4 en 2134x1200 → 2560x1440 | **44,1 fps réels** — c'est le cas difficile — 36 000 présents, **42 130 affichées**, **6 148 générées**, aucun *device lost* |
+| **Les zones normales**, hors des plus chargées | **69-76 fps réels** |
 | Activé **par le menu seul** (aucune variable) | contexte 4.0.2 en **118 ms**, 10 800 présents, 15 729 affichées, **4 931 générées**, swapchain refaite en place à 2560x1373 et contexte refait en **86 ms**, aucun refus, aucun écran noir |
 
 **Limite connue** : le HUD et les éléments 2D bougent avec les frames générées — c'est la limite de la FG sur un HUD
@@ -62,12 +63,22 @@ dessiné en 2D. Une capture « sans HUD » a été tentée (copie compute, parce
 `vkCmdBlitImage` de cette cible) : elle tournait sans planter et le SDK générait bien, mais le rendu composé n'a pas été
 jugé bon et a été retiré. Le code n'est pas dans ce dépôt ; la voie reste ouverte.
 
-### 2. Jouer au-delà de 60 fps : on répare le jeu, pas seulement le renderer
+### 2. Deux réparations du jeu au-dessus de 60 fps, que l'amont n'a pas
 
-Le jeu d'origine suppose 60 fps à plusieurs endroits. L'amont le documente et laisse le joueur à 60 s'il veut être
-tranquille. OcaDim ajoute une ligne **Above-60 fixes** qui répare deux de ces endroits : **les sols qui portent un
-personnage** (le seuil des 100,0 du jeu) et **les pas fixes des height-fields**. Les deux ensembles de correctifs sont
-désactivables pour retrouver exactement le comportement d'avant.
+Le jeu suppose 60 fps. L'amont en répare déjà deux endroits — le gestionnaire de son ramené à 60 Hz, et le nombre de
+pas du solveur physique — et prévient que le reste peut dérailler (« certaines cinématiques et certains boss comptent les
+frames »). OcaDim ajoute **deux mécanismes de plus** :
+
+| Ce qui cassait | Ce qu'on voyait | Ce qu'on fait |
+|---|---|---|
+| **Les sols qui portent un personnage** : les trois mises à jour de suivi de surface du contrôleur (`f_8015d490`, `f_80159dc0`, `f_838baa40`) | au-dessus de 100 fps, le dixième de la vitesse du sol conservé s'applique à **chaque** frame : **Link glisse de la plateforme qui le porte** | le seuil de comparaison `100.0` devient `100 / (la frame en frames de 60 fps)` : la coupure retombe exactement là où elle était à 60 |
+| **Les surfaces d'eau à pas fixe** : les deux gestionnaires (`f_83895f20`, `f_838a2660`) | chaque update plus courte que 1/60 s exécutait **zéro pas** : au-dessus de 60 fps, **ces surfaces ne bougeaient plus** | le quotient garde sa fraction par objet : 60 pas par seconde, quel que soit le débit |
+
+**Ces deux correctifs ne sont pas de nous** : ce sont ceux de **NX2navi** (`recomp/patches-v111.txt`, les jeux `ofollow`
+et `owater` : domaine public / MIT, repris dans Triforce). Nous les avons **portés ici**, comme hooks dans le C lifté
+(`nx2/oot_patches.py`, `host/oot_high_fps.*`), et exposés par la ligne **Above-60 fixes** du menu, qui les coupe pour
+retrouver exactement le comportement d'avant. Le troisième de leurs correctifs (`orecord`, l'horloge de l'ocarina) est
+déjà couvert dans cet arbre par `patch_whole_frames`.
 
 ### 3. Les leviers CPU, mesurés
 
@@ -128,12 +139,16 @@ le preset, l'upscaler et les résolutions) et le dossier `bug-reports`. C'est to
    mouvement, le jitter et la caméra réels du jeu, pilotée par la swapchain du SDK puis choisissable en jeu, n'y est pas.
    La difficulté n'est pas d'appeler le SDK : c'est de lui donner des entrées justes et de garder un présent intact quand
    il refuse.
-2. **Des correctifs de logique de jeu au-dessus de 60 fps.** L'amont prévient que certaines cinématiques et certains
-   boss comptent les frames ; OcaDim répare deux de ces mécanismes au lieu de contourner le problème.
-3. **Un Setup qui vérifie l'identité du `.nup` avant tout, ne contient aucune donnée de jeu, et reprend après un
-   abandon.**
-4. **Un prefetch de descripteurs mesuré et documenté** (design *seqlock* + cache négatif), livré avec ses chiffres et son
+2. **Deux correctifs de logique de jeu au-dessus de 60 fps que l'amont n'a pas.** Les sols qui portent un personnage et
+   les surfaces d'eau à pas fixe. Ils ne sont pas de nous : **NX2navi** les a trouvés et corrigés pour son build
+   (domaine public / MIT) ; nous les avons portés dans ce renderer et exposés par une ligne du menu. L'amont, lui, répare
+   deux autres endroits (le son et le solveur physique) et prévient que le reste peut dérailler.
+3. **Un prefetch de descripteurs mesuré et documenté** (design *seqlock* + cache négatif), livré avec ses chiffres et son
    interrupteur.
+
+**Ce qui n'est pas dans cette liste : le Setup.** L'amont distribue déjà un builder qui compile chez le joueur depuis ses
+propres fichiers, avec ses outils vérifiés ; le nôtre est une interface et un parcel de plus, pas une nouveauté. Il est
+décrit au §4 pour ce qu'il fait, pas comme une première.
 
 Si l'un de ces points existe déjà ailleurs, dis-le : on corrigera la formulation et on créditera.
 
@@ -842,9 +857,11 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
   Batched submits took Kokiri Forest from 33-41 to 46-61 fps on RADV, and Descriptor prefetch served 357-682 overlays per
   window with about 215,000 list scans skipped, with no artifact. `RX_VK_PARALLEL`, `RX_VK_PARALLEL_SEG` and
   `RX_VK_DESC_PREFETCH` choose for one run.
-- **Above-60 fixes** (OcaDim) mends the two places in the game that assume whole 60 fps frames: the floors that carry a
-  character (the game's own 100.0 cut) and the height-field surfaces' fixed steps. Off keeps the game's behaviour, as it
-  was before the fixes. It applies after a restart.
+- **Above-60 fixes** (OcaDim) mends two more of the game's 60 fps assumptions: the floors that carry a character (the
+  game's own 100.0 cut, which made Link slide off a moving platform above 100 fps) and the height-field surfaces' fixed
+  steps (the water managers, which stood still above 60 fps). Those two are **NX2navi's** patches (public domain / MIT,
+  its patches-v111's `ofollow` and `owater`), ported here. Off keeps the game's behaviour, as it was before them. It
+  applies after a restart.
 - **Robust buffers** (Debug tab, Developer): a read past a buffer's end is dropped instead of stopping the GPU. Auto is
   on, on every card; Off can be faster on some NVIDIA cards.
 - **ASTC as RGBA8** (Debug tab, Developer): the AMD texture workaround below.

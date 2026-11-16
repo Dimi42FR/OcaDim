@@ -23,7 +23,7 @@ L'historique du dépôt garde la trace de cette fusion.
 | Ce que c'est | Où | Origine |
 |---|---|---|
 | La **frame generation du SDK AMD** : swapchain du SDK, préparation par frame, ligne de menu, suivi de la résolution | `gpu/vk/vk_fg_amd.cpp`, `vk_fg_amd.h`, et les points d'accroche dans `vk_main.cpp`, `vk_replay.cpp`, `vk_framegen.cpp`, `vk_temporal.cpp`, `vk_internal.h`, `vk_menu.cpp` | **nôtre**, écrit au-dessus des en-têtes MIT d'AMD (`third_party/fidelityfx`) |
-| Les réglages **au-delà de 60 fps** : les sols qui portent un personnage, les pas fixes des height-fields | `gpu/vk/…` (ligne *Above-60 fixes*) | **nôtre** |
+| Le **portage** de deux correctifs de logique de jeu au-dessus de 60 fps (les sols qui portent un personnage, les surfaces d'eau à pas fixe) et la ligne de menu qui les coupe | `nx2/oot_patches.py` (`patch_floor_carry`, `patch_sim_steps`), `host/oot_high_fps.*`, `gpu/vk/vk_menu.cpp`, `vk_api.h` | les correctifs sont de **NX2navi** (domaine public / MIT) ; le portage en hooks, l'interrupteur et le reste du fichier sont **nôtres** pour ces deux-là, le reste du fichier étant de l'amont |
 | Les **leviers CPU** du menu : Replay workers, Replay segments, Descriptor prefetch, CPU affinity (CCX), Draw order barriers, Batched submits | `gpu/vk/vk_menu.cpp` et le replay | **nôtre** ; le design et les mesures sont dans [`docs/OCADIM.md`](docs/OCADIM.md) |
 | Le **Setup** qui compile chez le joueur | `setup/OcaDimSetup/`, `setup/build-setup.ps1`, `setup/OcaDim.iss`, `setup/OcaDim-Setup.ps1` | **nôtre**, en s'appuyant sur le CLI de l'amont (`nx2/make_game.py`) |
 | Le **statut Discord « OcaDim »**, le nom et la version du produit, le dossier de sauvegarde | `host/discord_rpc.c`, `host/hos.h` | **nôtre** |
@@ -48,7 +48,9 @@ Tout le reste — et c'est l'immense majorité du code — est de l'amont. Voir 
 | **suyu** | suyu | voir son dépôt | les décodeurs graphiques et le traducteur AArch64 |
 | **nxnative** | seedds | voir son dépôt | référence sur les *task* et *mesh shaders* |
 | **EvilOOT** | EvilBoyce / evilmfkr | GPL-3.0 | le culling GPU qui rend le feuillage (arbres, fougères, herbe, feuilles, lucioles), les sondes de lumière ambiante, l'eau de l'étang, le brouillard du jeu, le gel après *Load* et le correctif du scintillement d'exposition |
-| **Lichii** | zortos293 | voir son dépôt | référence pour l'abaissement des shaders Ampere, et son correctif de *compare-exchange* |
+| **Lichii** | zortos293 | voir son dépôt | référence pour l'abaissement des shaders Ampere, et son correctif de *compare-exchange* ; sa PR #1289 (auz466) a donné la porte à 60 Hz du gestionnaire de son, qui est dans l'amont |
+| **NX2navi** | tangerineturtle1 | domaine public / MIT (son `recomp/patches-v111.txt`) | les correctifs au-dessus de 60 fps que l'amont n'a pas — `ofollow` (les sols qui portent un personnage), `owater` (les surfaces d'eau à pas fixe), `orecord` (l'horloge de l'ocarina) — portés ici par nous : `nx2/oot_patches.py`, `host/oot_high_fps.*` |
+| **Triforce** | voir son dépôt | voir son dépôt | la fusion des patches ci-dessus, qui a servi de référence |
 | **llvm-mingw** | mstorsjo | Apache-2.0 avec les exceptions LLVM | le compilateur Windows embarqué (pas besoin de Visual Studio) |
 | **FidelityFX SDK v2.4.0** (en-têtes) | AMD | MIT | l'upscaler FSR 4 via la FSR API, et **la frame generation qu'OcaDim utilise** |
 | **FSR 3.1** | AMD | MIT (shaders du SDK) | l'upscaler présent dans tous les builds |
@@ -66,6 +68,10 @@ Tout le reste — et c'est l'immense majorité du code — est de l'amont. Voir 
 | **Orchid** | MythosOfs | voir son dépôt | le contournement brouillard / exposition |
 | **Mesa (NAK)** | Mesa | MIT | référence pour l'encodage des instructions Ampere |
 | **Les paquets d'outils** | MagicBeanDev (CDN) | — | `tools.lock`, chaque fichier vérifié par son SHA-256 |
+
+Un mot pour ne pas confondre, sur les correctifs au-dessus de 60 fps : ceux qui sont **dans l'amont** (le gestionnaire
+de son ramené à 60 Hz, le nombre de pas du solveur physique, `patch_whole_frames`) sont de **Longshot**. Les deux que
+**nous** ajoutons (`ofollow`, `owater`) viennent de **NX2navi**, et le portage est à nous.
 
 Chaque dossier de `third_party/` porte son `PROVENANCE.md` et/ou sa licence ; ce sont eux qui font foi.
 
