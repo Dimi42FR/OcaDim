@@ -465,13 +465,13 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | Shadow resolution | Auto (for the card's memory), Game's (1600), High (2200), Highest (3072): the sun's shadow maps, applies at once | Auto |
 | | GPU device | Auto, or each graphics card by name (after a restart) | Auto |
 | | Threaded rendering | Auto, On, Off (after a restart). Auto is On with 12 or more processor threads for the game | Auto |
-| | Batched submits | Auto, On, Off (a frame's submissions sent as one; Auto on Mesa's RADV) | Auto |
-| | Draw order barriers | Auto, On, Off (a draw pass after another waits in its fragment stages only; Auto on NVIDIA) | Auto |
-| | CPU affinity (CCX) | Auto, On, Off (the replay's workers on the upper half of the logical CPUs; Auto from 12) | Auto |
-| | Above-60 fixes | Off, On (the floors that carry a character and the height-field surfaces' fixed steps, mended above 60 fps) | On |
-| | Replay segments | 32, 64, 160 (the draws and dispatches a replay worker takes at a time) | 32 |
-| | Descriptor prefetch | Auto, On, Off (descriptors read ahead on a helper thread; Auto is on where the processor has threads to spare) | Auto |
 | | Replay workers | Auto, 1, 2, 3, 4 (the replay's threads; Auto is one for every four the game may use, at most four, none under six) | Auto |
+| | Descriptor prefetch | Auto, On, Off (descriptors read ahead on a helper thread; Auto is on where the processor has threads to spare) | Auto |
+| | Replay segments | 32, 64, 160 (the draws and dispatches a replay worker takes at a time) | 32 |
+| | Above-60 fixes | Off, On (the floors that carry a character and the height-field surfaces' fixed steps, mended above 60 fps) | On |
+| | CPU affinity (CCX) | Auto, On, Off (the replay's workers on the upper half of the logical CPUs; Auto from 12) | Auto |
+| | Draw order barriers | Auto, On, Off (a draw pass after another waits in its fragment stages only; Auto on NVIDIA) | Auto |
+| | Batched submits | Auto, On, Off (a frame's submissions sent as one; Auto on Mesa's RADV) | Auto |
 | Audio | Volume | 0 to 100%, in steps of 5 | 100% |
 | | Mute in background | Off, On | Off |
 | | Output device | Default or a named Windows playback device; applies live | Default |
