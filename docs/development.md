@@ -713,6 +713,15 @@ The objects are cached by their flags, so `-O1` and `-O2` objects can sit side b
 anything built before. In any other `--work` folder, `make_game.py`'s clean-up keeps only the last build's objects and a
 translation that fits them, so each switch translates the game again and recompiles the hot pieces.
 
+**What translates the game again.** The lift key (`make_game.py` `lift_key`) covers the game's code, the translator's
+sources, the HLE functions, the hot list, the chunk boundaries and hot pieces, the Python, and of the environment only
+the variables whose values change the translated C: `A64_*`, the emitter's `SUYU_RECOMP_*` and `RX_TARGET`. The folders'
+paths (`OOT_WORK`, `OOT_EXEFS`, `OOT_ROMFS`, `OOT_DUMP`, `A64_HOT_FUNCS`) are not in it, since what the lift reads
+through them is hashed by its contents. So an `RX_VK_*` switch or `RX_RELEASE` left set in the shell keeps the
+translation, and the key is the same in another work folder (where `LONGSHOT_LIFT_STORE` can copy a translation over). A
+variable the lift's sources read must be in the key or in `LIFT_ENV_NOT_OUTPUT` with the reason it changes nothing
+written; `tests/test_lift_cache.py` fails otherwise.
+
 What it saves, from the per-file compile times (`build_times.json`) of six earlier full builds on one 24-thread
 desktop, with other work running (not a measured `-O1` build):
 
@@ -867,8 +876,8 @@ python -I scripts/dev_packs.py rt   ../base-main ../rt-my-fix my-fix
     A base prepares once its outputs are recorded, as `make_game.py` does: `LONGSHOT_NO_PREPARE` (set and not `0`)
     skips it, and a preparation that fails (no usable Vulkan, a driver that stopped responding) keeps the base, with
     the reason in `base.json`'s `not_prepared`, and leaves the work to its first start.
-  - **Where:** game packs share one work folder per base (`<base>/game-work`). The lift key holds that folder's
-    path, so the first game pack translates the game once (or copies the base's translation from the lift store,
+  - **Where:** game packs share one work folder per base (`<base>/game-work`). The translation is kept in the
+    work folder it was made in, so the first game pack translates the game once (or copies the base's translation from the lift store,
     below) and the later ones skip the lift while the translator, the HLE functions and the hot list stay the same;
     the base's compiled objects are linked in. Build one pack at a time.
 - **`rt`** makes a game folder to run: the base's, with `romfs` hard-linked (it is never written), the other files

@@ -1800,6 +1800,30 @@ LIFT_KEY = ".lift_key"   # (in <work>/sa/gen: what the lifted C there was made f
 # that nothing else the key covers reads them. The renderer's profile too, after ProjectReLink: a renderer profile made, changed or
 # taken away does not translate the game again)
 COMPILE_ONLY_ENV = ("RX_HOT_OPT", "RX_PGO", "RX_VK_PGO", "RX_VK_PGO_FILE")
+# (the dev-loop proposal's A2) what of the environment the key hashes: the variables whose values change the lifted C. The key
+# took every A64_, OOT_ and RX_ variable, so an RX_VK_ switch left set in the shell, or RX_RELEASE, which the lift does not read,
+# translated the game again, and so did a work folder or a game folder somewhere else: OOT_WORK, OOT_EXEFS, OOT_ROMFS, OOT_DUMP and
+# A64_HOT_FUNCS are paths, and what the lift reads through them (the exefs files, the hot list, the chunks, the hot pieces) is
+# hashed by its contents: the hot list A64_HOT_FUNCS names too when it is not <work>/hot_funcs.txt (a developer's own, set in the
+# shell), or its path when there is no such file (HumanBean on #22). SUYU_RECOMP_ is the emitter's own (third_party/a64-kit/lift/suyu/arm64_to_c.h), and was not in the key.
+# tests/test_lift_cache.py checks that every variable the lift's sources read is one of these, a path, or in LIFT_ENV_NOT_OUTPUT
+LIFT_ENV_PREFIXES = ("A64_", "SUYU_RECOMP_")
+LIFT_ENV_NAMES = ("RX_TARGET",)   # (toolchain.py: the target the emitter and its tables are made for)
+LIFT_PATH_ENV = ("OOT_WORK", "OOT_EXEFS", "OOT_ROMFS", "OOT_DUMP", "A64_HOT_FUNCS")
+LIFT_ENV_NOT_OUTPUT = {   # (read by the lift's sources, and no change to what it writes)
+    "LONGSHOT_LIFT_JOBS": "how many processes", "LONGSHOT_LIFT_NO_FORK": "how they are started", "RX_JOBS": "how many processes",
+    "EMSDK": "where the compiler is", "LONGSHOT_MINGW": "where the compiler is",
+    "A64_SITE_PROFILE": "the game's runtime (a64_rt.c), at play", "RX_VK_NAN_GUARD": "nx2/bake_ds's own run",
+    "RX_VK_NO_DRAW_PARAMS": "nx2/bake_ds's own run", "RX_VK_NO_F16": "nx2/bake_ds's own run",
+    "RX_VK_SHARED_48K": "nx2/bake_ds's own run",
+    "HOS_NO_FASTFP": "the game's runtime (FASTFP_HEADER in nx2/fastfp.py, read by the lifted C at play)",
+}
+
+
+def lift_reads_env(name):
+    """A variable whose value is part of the lift key (LIFT_ENV_PREFIXES, LIFT_ENV_NAMES; not a path, not the compile's)"""
+    return ((name.startswith(LIFT_ENV_PREFIXES) or name in LIFT_ENV_NAMES) and name not in LIFT_PATH_ENV
+            and name not in COMPILE_ONLY_ENV)
 
 
 LIFT_SCRIPTS = ("lift.py", "split_hot.py")   # (in nx2/: the two steps of the lift)
@@ -1869,8 +1893,19 @@ def lift_key(exefs, work, env, planning=True, paths=None):
             h.update(os.path.relpath(f, base).replace(os.sep, "/").encode() + bytes(1))
             with open(f, "rb") as src:
                 h.update(hashlib.sha1(src.read(), usedforsecurity=False).digest())
-    lift_env = dict(env, **{k: v for k, v in os.environ.items() if k.startswith(("A64_", "OOT_", "RX_"))})
-    lift_env = {k: v for k, v in lift_env.items() if k not in COMPILE_ONLY_ENV}
+    # (the hot list the lift reads: the build's, <work>/hot_funcs.txt, hashed above, else one A64_HOT_FUNCS names in the shell;
+    # run() gives the lift the build's env over the shell's. Its path is not in the key (LIFT_PATH_ENV), so that list's contents
+    # are, or its path when it is not there)
+    hot = env.get("A64_HOT_FUNCS") or os.environ.get("A64_HOT_FUNCS")
+    if hot and os.path.abspath(hot) != os.path.abspath(os.path.join(work, "hot_funcs.txt")):
+        if os.path.isfile(hot):
+            with open(hot, "rb") as src:
+                h.update(b"A64_HOT_FUNCS" + bytes(1) + hashlib.sha1(src.read(), usedforsecurity=False).digest())
+        else:
+            h.update(b"A64_HOT_FUNCS path" + bytes(1) + (paths(hot) if paths else hot).encode())
+    # (the build's env over the shell's, as run() gives them to the lift: A64_HOT_CHUNK left in the shell is not what the lift reads)
+    lift_env = dict(os.environ, **env)
+    lift_env = {k: v for k, v in lift_env.items() if lift_reads_env(k)}
     if paths:
         lift_env = {k: paths(v) for k, v in lift_env.items()}
     h.update(repr(sorted(lift_env.items())).encode())
@@ -1878,9 +1913,10 @@ def lift_key(exefs, work, env, planning=True, paths=None):
 
 
 def lift_share_key(exefs, work, out, env):
-    """(LONGSHOT_LIFT_STORE, nx2/lift_store.py) lift_key with the work and game folders' paths taken out of the lift's environment
-    (OOT_WORK, OOT_EXEFS, OOT_ROMFS, OOT_DUMP, A64_HOT_FUNCS): the files are hashed by their names in those folders already, and
-    the lifted C holds no folder path, so two work folders with the same share key lift the same C"""
+    """(LONGSHOT_LIFT_STORE, nx2/lift_store.py) lift_key with the work and game folders' paths taken out of the lift's environment:
+    the path variables (LIFT_PATH_ENV) are not in lift_key's at all, and this takes those folders out of any other value that
+    names them. The files are hashed by their names in those folders already, and the lifted C holds no folder path, so two work
+    folders with the same share key lift the same C"""
     w, o = os.path.abspath(work), os.path.abspath(out)
     return lift_key(exefs, work, env, paths=lambda v: v.replace(w, "<work>").replace(o, "<out>"))
 
