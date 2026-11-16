@@ -57,6 +57,9 @@ uint64_t acquire_timeout=UINT64_MAX;
 int result=VK_SUCCESS, calls=0, reports=0, continued=0;
 struct Lost {};
 [[noreturn]] void device_lost() { ++reports; throw Lost{}; }
+// (the FFX swapchain's branch at the same sites: off here, so the site under test is the native one)
+#define fg_amd_active() false
+template<class... A> VkResult fg_amd_acquire(A...) { return result; }
 '''
     for call in CALLS:
         fixture += "template<class... A> VkResult " + call + "(A...) { ++calls; return result; }\n"

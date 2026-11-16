@@ -34,6 +34,7 @@
 #include "status_line.h"
 #include "vk_reflex.h"
 #include "vk_antilag.h"
+#include "vk_fg_amd.h"
 #include "vk_draw.h"
 #include "par_scale.h"   // (longshot: the workers and the prefetch sized from the cores, when the switches say nothing)
 #include "vk_dump.h"
@@ -5676,7 +5677,8 @@ void present_image(VkImage src, uint32_t sw, uint32_t sh, const int crop[4], VkI
     static bool unseen = false;
     const uint64_t acquire_timeout = unseen ? 0 : 100000000ull;
 #endif
-    VkResult res = vkAcquireNextImageKHR(dev.device, dev.swapchain, acquire_timeout, f.acquired, VK_NULL_HANDLE, &index);
+    // (longshot, RX_VK_FG_AMD=1) AMD's frame generation swapchain acquires through its own function: the handle is its object
+    VkResult res = fg_amd_active() ? fg_amd_acquire(dev.swapchain, acquire_timeout, f.acquired, &index) : vkAcquireNextImageKHR(dev.device, dev.swapchain, acquire_timeout, f.acquired, VK_NULL_HANDLE, &index);
     if (res == VK_ERROR_DEVICE_LOST) device_lost();
     if (acquire_t0) fps_wait(fps_stats::kPace, fps_clock() - acquire_t0);
     if (res == VK_ERROR_SURFACE_LOST_KHR) {
@@ -5869,7 +5871,7 @@ static bool present_out(uint32_t index, std::unique_lock<std::mutex>& qk) {
     VkResult res;
     VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
     pi.pNext = reflex_present_id(nullptr);   // (NVIDIA Reflex: the frame's present id, and its present's markers)
-    if (present_copy_done && !pi.pNext && present_thread_on()) {   // (RX_VK_PRESENT_THREAD: below)
+    if (present_copy_done && !pi.pNext && present_thread_on() && !fg_amd_active()) {   // (RX_VK_PRESENT_THREAD: below)
         antilag_present();   // (AMD Anti-Lag 2: the frame's present stage)
         qk.unlock();
         present_hand_off(index, present_copy_done);
@@ -5899,7 +5901,12 @@ static bool present_out(uint32_t index, std::unique_lock<std::mutex>& qk) {
     const auto copy_done = [&] { return (::vkx::vkWaitForFences)(dev.device, 1, &copy, VK_TRUE, 0) == VK_SUCCESS; };
     const bool copy_was_done = copy && copy_done();
     const int64_t present_t0 = fps_breakdown_on() ? fps_clock() : 0;
-    if (dev.present_queue_supported) {
+    if (fg_amd_active()) {
+        // (longshot, RX_VK_FG_AMD=1) AMD's swapchain presents through its own function, on the queue no other thread
+        // submits to: the replay's lock is let go, as for the presents' own queue below
+        qk.unlock();
+        res = fg_amd_present(&pi);
+    } else if (dev.present_queue_supported) {
         qk.unlock();
         std::lock_guard pq(dev.present_queue_mu);
         res = vkQueuePresentKHR(dev.present_queue, &pi);
@@ -6058,8 +6065,9 @@ bool present_thread_on() {
         const char* e = getenv("RX_VK_PRESENT_THREAD");
         return e && atoi(e) != 0;
     }();
-    // (a queue of its own that presents to this surface: vk_main.cpp; a new surface checks again)
-    const bool on = wanted && dev.presenter_queue && dev.presenter_supported;
+    // (a queue of its own that presents to this surface: vk_main.cpp; a new surface checks again. AMD's frame generation
+    // swapchain presents on its own queue already: its own present path never hands one to this thread)
+    const bool on = wanted && dev.presenter_queue && dev.presenter_supported && !fg_amd_active();
     static int told = -1;
     if (told != (int)on) {
         told = on;

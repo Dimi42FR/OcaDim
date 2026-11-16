@@ -118,6 +118,14 @@ struct Device {
     std::mutex presenter_queue_mu;
     bool present_wait = false;   // (VK_KHR_present_id + VK_KHR_present_wait enabled: the presenter waits for each present to be shown)
     VkPresentModeKHR swap_mode = VK_PRESENT_MODE_FIFO_KHR;   // (the swapchain's present mode, as made)
+    // (longshot) AMD's frame generation swapchain's own queues (RX_VK_FG_AMD=1, vk_fg_amd.cpp): the SDK requires its
+    // game, present and image-acquire queues to be three different queues, and nothing else may submit to them. Three
+    // more queues of the graphics family (the replay keeps queue 0). VK_NULL_HANDLE: on the plain path, or the driver
+    // has not enough queues and frame generation stays off
+    VkQueue fg_game_queue = VK_NULL_HANDLE;
+    VkQueue fg_present_queue = VK_NULL_HANDLE;
+    VkQueue fg_acquire_queue = VK_NULL_HANDLE;
+    uint32_t fg_family = 0;
 };
 extern Device dev;
 
@@ -431,7 +439,7 @@ bool create_swapchain(uint32_t width, uint32_t height);
 void present_thread_drain();   // (vk_replay.cpp: the presenter thread's present made, RX_VK_PRESENT_THREAD)
 int swapchain_framegen();   // (vk_main.cpp: frame generation's fixed multiplier as the swapchain is made for it, 0 none)
 bool swapchain_dlssg();     // (vk_main.cpp: and DLSS-G makes its sets: V-Sync Auto's FIFO)
-void retire_swapchain();   // (dev.present_mu held)
+void retire_swapchain(bool destroy_handle = true);   // (dev.present_mu held; false: AMD's frame generation swapchain, which its context owns)
 bool invalidate_lost_surface(VkResult result);   // (dev.present_mu held)
 bool replay_start();                          // vk_replay.cpp
 bool precompile_wanted();                     // vk_draw.cpp
