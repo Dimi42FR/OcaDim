@@ -114,3 +114,19 @@ Les pires frames des journaux de Dimi (RX_VK_SLOW_LOG=30, ville et chargements) 
 **La memoire ne coute rien** (memory sync ~1 ms) : anticiper les textures ne reglerait pas ces hoquets. Ils sont faits du **cout par draw de l enregistrement** (draw + descripteurs + submit + commands) quand 3 300 a 5 300 draws arrivent dans une frame, plus, pour les 6,5 s, ~4 s hors des postes mesures (le chargement du jeu).
 
 Conclusion : le lookahead de ressources est ecarte. La cible est le **cout par draw de la preparation d etat** (idee 4) : memes chemins en frame normale (2,5 ms de binds) et en chargement.
+
+## Les cles d etat, mesure : memoisation ecartee
+
+RX_VK_STATE_KEYS=1 (avec RX_VK_DRAW_RUNS=1, qui calcule les hachages) compte les cles distinctes (programme + push + descripteurs) par fenetre de 2 000 draws :
+
+`
+2000 draws, 138 cles (14,49)   <- ecran repetitif, 236 fps
+2000 draws, 1152 cles (1,74)
+2000 draws, 1589 cles (1,26)
+2000 draws, 1835 cles (1,09)
+2000 draws, 1856 cles (1,08)
+`
+
+**1,08 draw par cle en scene reelle** : chaque draw a son propre etat. Memoiser la preparation ne reutiliserait rien.
+
+Conclusion : ce stream est **unique par draw**, ce qui explique que batching, fusion de runs et cache d etat echouent tous. Le seul levier restant qui attaque la frame normale ET le chargement est **l enregistrement parallele / async** (le projet a le rendu threade ; voir docs/MINAGE-NX2NAVI.txt, PR #543 et son gate d ordre des evenements).

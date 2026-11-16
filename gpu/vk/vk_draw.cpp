@@ -774,6 +774,22 @@ void draw_runs_note(const void* prog) {
     const bool same = prog == last;
     const bool strict = same && last_push_hash == last_h && last_desc_hash == last_d;
     last = prog, last_h = last_push_hash, last_d = last_desc_hash;
+    // (OcaDim, RX_VK_STATE_KEYS=1) How many distinct state keys (program + push + descriptors) a window of draws holds: the
+    // bound on what memoising a draw's state preparation could save. Few keys for many draws: worth it.
+    static const bool keys_on = env_on("RX_VK_STATE_KEYS");
+    if (keys_on) {
+        static std::unordered_set<uint64_t> seen;
+        static uint64_t n = 0;
+        const uint64_t k = (uint64_t)(uintptr_t)prog ^ (last_push_hash * 0x9E3779B97F4A7C15ull) ^
+                           (last_desc_hash * 0xC2B2AE3D27D4EB4Full);
+        seen.insert(k);
+        if (++n == 2000) {
+            logf("vk: state keys (RX_VK_STATE_KEYS=1): %llu draws, %llu distinct keys, %.2f draws a key",
+                 (unsigned long long)n, (unsigned long long)seen.size(), n / (double)std::max<size_t>(seen.size(), 1));
+            seen.clear();
+            n = 0;
+        }
+    }
     draws++, w_draws++;
     if (same) {
         cur++, w_cur++;
