@@ -64,7 +64,48 @@ Le menu a sa propre identité (bleu nuit et or), il ne reprend plus la mise en p
 - **Notes DLSS/FSR** plus recalculées à chaque draw : **0,92 → 0,13 ms**.
 - **Replay adaptatif** : 6 segments par command buffer au plancher, fps inchangés là où il s'engageait déjà.
 
-## Vérifications
+## Signature OcaDim
+
+Ce qui suit vient de **nous**, pas d'une PR amont :
+
+- Le **menu F1** (identité bleu nuit/or, Display en premier, NVIDIA conditionnel, Debug allégé).
+- La **touche Run** (miroir de Walk, Hold/Toggle).
+- Les **ombres verrouillées au 1600** du jeu.
+- Les **identifiants d'options dédoublonnés** (56/59).
+- Les **submits plus copiés** à chaque frame pour `RX_VK_BENCH` quand il n'est pas demandé.
+- Le **budget d'uploads ×4 pendant les chargements** : le mécanisme `RX_VK_UPLOAD_BUDGET_MS` est de l'amont,
+  mais le ×4 en chargement est de nous (mesuré : 1 303 → 571 textures repoussées). Le plafond d'uploads en
+  gameplay (prochain lot OcaDim) s'appuiera sur ce même mécanisme.
+- Le **relevé des pipelines compilés en jeu** (prochain lot OcaDim) : la compilation hors thread existe déjà en
+  amont ; ce que nous ajoutons, c'est le **relevé** des pipelines vus en partie (14 dans ton log) pour compléter
+  la liste livrée. Ce n'est pas un nouveau mécanisme, et on ne le présente pas comme tel.
+
+## Prochain lot (OcaDim, en cours)
+
+- **`HOS_VCORE_FIRST` (#249, porté et adapté par OcaDim)** : les threads nommés (replay, recorder, audio)
+  prennent un cœur virtuel avant les autres. Ton log montre un thread qui attend **2 secondes** un cœur : c'est
+  le pire cas pour les 1 % lows. Switch réversible, off par défaut.
+- **Readback « early » (1b2e7555, porté et adapté par OcaDim)** : un readback attend la **partie** qui a écrit le
+  résultat, pas toute la soumission. Débloqué par #1083 (le `collect_mu`), intégré juste avant. Vise les
+  **3,31 ms** d'attente vus dans ton log.
+- **Plafond d'uploads en gameplay** (idée OcaDim) : lisser les 4,6 Mo/frame qui produisent les pics, en
+  s'appuyant sur `RX_VK_UPLOAD_BUDGET_MS` (amont) comme le ×4 l'a fait.
+- **Pipelines en jeu** (opération OcaDim, pas un mécanisme) : relever les pipelines compilés en partie et les
+  ajouter à la liste livrée ; la compilation hors thread, elle, est déjà dans l'amont.
+
+### Vérifié avant de revendiquer
+
+- `HOS_VCORE_FIRST` **n'existe pas** dans notre arbre (0 occurrence) : c'est bien un apport amont, que nous
+  portons et adaptons.
+- Le readback early est un commit amont (`1b2e7555`), bloqué jusqu'ici par #1083 : même statut.
+- Le **budget d'uploads** existe en amont (`RX_VK_UPLOAD_BUDGET_MS`) ; seul le **×4 en chargement** est de nous.
+- Les **submits non copiés** pour `RX_VK_BENCH` : l'amont copie **chaque submit, chaque frame** ; ce correctif
+  est de nous (vérifié dans `origin/main`).
+- Recherche faite sur les **286 PR ouvertes** de Longshot, sur `origin/main` et sur le miroir **Hookshot**
+  (archivé) : aucune PR ni commit ne fait déjà le correctif des submits. Navi et Triforce ne sont pas des dépôts
+  publics de cette forge — rien à recouper de ce côté.
+
+
 
 - **16/16** tests du menu (sections, README, i18n, raccourcis, redimensionnement, hit-test, champs de texte).
 - Tests mémoire/textures : `target_image_pool`, `target_pool_cap`, `rt_pool_minimum`, `vram_pressure`,
