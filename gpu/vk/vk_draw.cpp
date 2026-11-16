@@ -131,10 +131,13 @@ T& tls_make(T*& slot) {
 // frame, the counts a draw. FT_*: the sections of the descriptor build (banks, c1, user uniform buffers, storage buffers, textures) and
 // of the commands (hazards and the pass, pipeline bind, descriptor push, push constants, dynamic state, vertex and index binds, the draw)
 enum FineT { FT_BANK, FT_C1, FT_UBO, FT_STORAGE, FT_TEX, FT_HAZARD, FT_BINDPL, FT_BINDDESC, FT_PUSHCALL, FT_PUSHC, FT_DYN, FT_VERTEX,
-             FT_DRAWCALL, FT_TEXSTORE, FT_TEXHANDLE, FT_TEXVIEW, FT_TEXFP, FT_COUNT };
+             FT_DRAWCALL, FT_TEXSTORE, FT_TEXHANDLE, FT_TEXVIEW, FT_TEXFP, FT_DRAWALL, FT_PICK, FT_PIPE, FT_SAMPLED, FT_TARGETS,
+             FT_CHECKS, FT_MID, FT_TAIL, FT_COUNT };
 const char* const kFineT[] = {"banks", "c1", "user uniform buffers", "storage buffers", "textures", "hazards+pass", "bind pipeline",
                                       "bind descriptors", "of it the push call", "push constants", "dynamic state", "vertex+index binds",
-                                      "draw call", "of tex: storage-pointer test", "of tex: handle", "of tex: view", "of tex: fingerprint"};
+                                      "draw call", "of tex: storage-pointer test", "of tex: handle", "of tex: view", "of tex: fingerprint",
+                                      "draw all (exact)", "of it: program pick", "of it: pipeline pick", "of it: sampled targets",
+                                      "of it: targets", "of it: skip checks", "of it: dlss/skin notes", "of it: the rest (tail)"};
 enum FineC { FC_DRAWS, FC_BUILDS, FC_DESCS, FC_WRITES, FC_BANK_CALLS, FC_BANK_GEN, FC_BANK_FILLS, FC_BANK_FILL_BYTES, FC_BANK_SAME,
              FC_BANK_NEW, FC_BANK_NEW_BYTES, FC_C1_CALLS, FC_UBO_CALLS, FC_UBO_OVERLAY, FC_UBO_STREAM, FC_PUSH_FULL, FC_PUSH_DELTA,
              FC_PUSH_NONE, FC_PUSH_WRITES, FC_PUSH_DESCS, FC_BIND_PIPE, FC_DYN_FAST, FC_DYN_FULL, FC_DYN_CALLS, FC_VBIND, FC_IBIND,
@@ -7875,6 +7878,7 @@ static bool fallback_list_held(uint64_t list) {
 
 void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
     Pass& ps = pass();   // (once: the accessor is a call and a thread-local read at each use. The same object for the thread's life: draw_begin_recording resets it in place)
+    FINE_SCOPE(FT_DRAWALL);   // (OcaDim, RX_VK_PROF_FINE: the draw whole and exact, so what the sections do not name is the rest)
     PROF_HOT(PROF_DRAW);
     FINE_N(FC_DRAWS, 1);
     stats_tick();
@@ -7885,24 +7889,43 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
         if (d.prim >= 0 && d.prim < 32 && logged[d.prim]++ < 2) logf("vk: draws of NVN primitive %d are left out", d.prim);
         SKIP_HERE();
     }
-    const Targets at = bare_targets(s, targets(s));
+    const Targets at = [&] {
+        FINE_SCOPE(FT_TARGETS);
+        return bare_targets(s, targets(s));
+    }();
     if (!at.width || !at.height) SKIP_HERE();
     // (longshot) the scene's camera and depth for the temporal upscalers: NVIDIA DLSS and AMD FSR 4 (vk_temporal.cpp) and AMD
     // FSR 3.1 (vk_fsr3_inputs.cpp). The vertex stage's uniform buffer 3 (NVN's binding 0)
-    if (at.n && at.color[0] && at.depth) {
-        temporal_note_scene_draw(at.color[0], at.width, at.height, at.depth, s.ubo[0][0].addr, s.ubo[0][0].size);
-        fsr3_inputs::note_scene_draw(at.color[0], at.width, at.height, at.depth, s.ubo[0][0].addr, s.ubo[0][0].size);
+    {
+        // (OcaDim) the same targets as the draw before: the note is per target and per frame, and the two calls behind
+        // this take a lock each before their own "this frame's largest target is already noted" check. A repeat is a
+        // no-op, so it is skipped here: 2 753 draws took 0.92 ms a frame of locks for nothing (RX_VK_PROF_FINE).
+        static thread_local const Texture* note_color0;
+        static thread_local Texture* note_depth;
+        static thread_local uint32_t note_w, note_h;
+        static thread_local uint64_t note_frame;
+        if (at.n && at.color[0] && at.depth && (note_frame != texture_frame_no() || note_color0 != at.color[0] ||
+                                                 note_depth != at.depth || note_w != at.width || note_h != at.height)) {
+            FINE_SCOPE(FT_MID);
+            temporal_note_scene_draw(at.color[0], at.width, at.height, at.depth, s.ubo[0][0].addr, s.ubo[0][0].size);
+            fsr3_inputs::note_scene_draw(at.color[0], at.width, at.height, at.depth, s.ubo[0][0].addr, s.ubo[0][0].size);
+            note_color0 = at.color[0], note_depth = at.depth, note_w = at.width, note_h = at.height;
+            note_frame = texture_frame_no();
+        }
     }
     uint8_t types[8];
     color_types_of(at, types);
     const Program* cp;
     ProgramUse use(s.prog, s.has_prog, false);   // (the program's first draw, for the census: vk_programs.h)
     {
+        FINE_SCOPE(FT_PICK);
         PROF_HOT(PROF_PROGRAM);
         ParLock lk(d.mesh);   // (graphics programs: each thread's picks, program_pick's own lock)
         cp = program_for(s, d.mesh ? ProgramKind::Mesh : ProgramKind::Graphics, types);
     }
     if (use.on) use.program(cp, cp && cp->ready.load(std::memory_order_acquire));
+    {   // (OcaDim, RX_VK_PROF_FINE) the skip checks a draw goes through before its pipeline
+        FINE_SCOPE(FT_CHECKS);
     {   // (longshot, a test) RX_VK_NO_MESH=1: task / mesh draws left out, to see what they draw; =2: the others left out
         static const int no_mesh = getenv("RX_VK_NO_MESH") ? atoi(getenv("RX_VK_NO_MESH")) : 0;
         if ((no_mesh == 1 && d.mesh) || (no_mesh == 2 && !d.mesh)) return;
@@ -7987,6 +8010,7 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
             if (skip) return;
         }
     }
+    }   // (FT_CHECKS)
     // Wait for translation before reading its stages. A pending pipeline may be left out only when no stage writes
     // global memory or storage buffers/images and its targets hold an earlier frame's picture. RX_VK_PIPE_SKIP=0:
     // pipelines are always waited for too.
@@ -8075,6 +8099,7 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
     topo = pipeline_topology(p, topo);   // (the mesh fallback's: its mesh program's points, lines or triangles)
     PipeEntry* pe;
     {
+        FINE_SCOPE(FT_PIPE);
         PROF_HOT(PROF_PIPE);
         if (!p.layout) {
             PROF_EXACT();
@@ -8307,6 +8332,7 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
     ps.prog = p.key;
     if (!ps.first_prog) ps.first_prog = p.key;
     for (const Texture* t : gfx_sampled()) {
+        FINE_SCOPE(FT_SAMPLED);
         if (std::find(ps.sampled.begin(), ps.sampled.end(), t) != ps.sampled.end()) continue;
         ps.sampled.push_back(t);
         int slot = -1;
@@ -8316,6 +8342,7 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
         if (slot >= 0) ps.sampled_targets |= (uint16_t)(1u << slot);
     }
     ps.written |= writes;
+    FINE_SCOPE(FT_TAIL);   // (OcaDim: everything from here to the end, the sections inside being counted apart)
     if (pl != last_pipeline) {
         FINE_SCOPE(FT_BINDPL);
         FINE_N(FC_BIND_PIPE, 1);

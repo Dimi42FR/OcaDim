@@ -2768,8 +2768,10 @@ const uint8_t* replay_handle(VkCommandBuffer& cmd, const uint8_t* h, bool may_st
     // (segments of ~RX_VK_PARALLEL_SEG draws and dispatches (the Insert menu's Replay segments row, 32 by default: this game's
     // command buffers are short, and 160 never filled them), taken in order by the threads and submitted as each is done with
     // those before it: the GPU starts on the first while the rest are recorded)
-    static const int64_t per = getenv("RX_VK_PARALLEL_SEG") ? std::max(32, atoi(getenv("RX_VK_PARALLEL_SEG")))
+    static const int64_t per = getenv("RX_VK_PARALLEL_SEG") ? std::max(8, atoi(getenv("RX_VK_PARALLEL_SEG")))
                                                            : menu_replay_seg();   // (the row, resolved once at the start)
+    // (OcaDim: the floor was 32, and this game's buffers are short: with 32, 2000 of them in a session were under 2 x 32
+    // draws and recorded serially. 8 lets an A/B ask what a finer split would take; the row's default is unchanged)
     // (too little work for two segments: recorded here, as with parallel replay off. The dry pass would apply the stream's
     // state for nothing, and its one segment would walk the stream again here on this thread. RX_VK_NO_DRY_SHORT=1: as
     // before, the dry pass and the segment)
