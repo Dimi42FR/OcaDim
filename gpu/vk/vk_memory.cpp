@@ -9,6 +9,7 @@
 #include <cstring>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <map>
 #include <set>
@@ -3783,6 +3784,29 @@ void append_capture_copy(std::vector<VkBufferCopy>& runs, const VkBufferCopy& ne
     runs.push_back(next);
 }
 
+// (OcaDim, RX_VK_DIRTY_CENSUS=1) What a mirror sync's scan costs: the pages it looked at, how many were dirty, and the time,
+// summed over 512 syncs and logged once. It answers, with our own number, whether this scan is the 7-15 ms a frame another
+// recompilation reported on integrated graphics (NX2navi's dirty census), before anything is optimised for it. Off: one bool
+// test per sync, nothing else.
+bool dirty_census_on() {
+    static const bool on = env_on("RX_VK_DIRTY_CENSUS");
+    return on;
+}
+void dirty_census_add(uint64_t pages, uint64_t dirty, std::chrono::steady_clock::time_point t0) {
+    static std::atomic<uint64_t> syncs{0}, sum_pages{0}, sum_dirty{0}, sum_ns{0};
+    const uint64_t ns = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::steady_clock::now() - t0).count();
+    sum_pages.fetch_add(pages, std::memory_order_relaxed);
+    sum_dirty.fetch_add(dirty, std::memory_order_relaxed);
+    sum_ns.fetch_add(ns, std::memory_order_relaxed);
+    if ((syncs.fetch_add(1, std::memory_order_relaxed) + 1) % 512 == 0) {
+        const uint64_t s = sum_ns.exchange(0), pg = sum_pages.exchange(0), d = sum_dirty.exchange(0);
+        logf("vk: dirty census (RX_VK_DIRTY_CENSUS=1): %llu syncs, %llu pages scanned (%llu dirty), %.0f us a sync, %.0f ns a page",
+             (unsigned long long)syncs.load(), (unsigned long long)pg, (unsigned long long)d,
+             (double)s / 512.0 / 1000.0, pg ? (double)s / (double)pg : 0.0);
+    }
+}
+
 /// The pages of the pool the CPU wrote since its mirror's sync, copied in (the upload command buffer)
 void mirror_sync(Pool& p) {
     late_fix_emit();   // (the late pages' fix, before this copies out of a capture's buffer)
@@ -3794,6 +3818,10 @@ void mirror_sync(Pool& p) {
     uint64_t run_lo = 0, run_hi = 0;
     const uint64_t end_page = (p.hi + 4095) >> kPageShift;
     const bool note_writes = memory_wb_followed(p.lo, p.hi);   // (wb_learn.h: once a pool, not a page)
+    // (OcaDim) the census: what this scan costs (RX_VK_DIRTY_CENSUS=1; nothing but two counters when it is off)
+    const bool census = dirty_census_on();
+    const auto census_t0 = census ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    uint64_t c_pages = 0, c_dirty = 0;
     for (uint64_t page = p.lo >> kPageShift; page < end_page;) {
         if (region_gen[page / kRegionPages] <= p.synced_gen) {   // (a clean 2 MB region, or its rest when the pool starts in it)
             page = std::min(end_page, (page / kRegionPages + 1) * kRegionPages);
@@ -3801,6 +3829,7 @@ void mirror_sync(Pool& p) {
         }
         const uint32_t pg = page_gen(page);
         const bool dirty = pg > p.synced_gen;
+        c_pages++, c_dirty += dirty;
         if (dirty && gpu_page(page)) {   // (diagnostic: see memory_stamp_gpu)
             st_sync_gpu_pages++;
             const CapEntry e0 = cap_entry(page);
@@ -3867,7 +3896,10 @@ void mirror_sync(Pool& p) {
         for (const VkBufferCopy& r : rs) st_sync_bytes += (int64_t)r.size, gp.bytes += r.size;
         st_sync_copies += (int64_t)rs.size();
     }
-    if (runs.empty()) return;
+    if (runs.empty()) {
+        if (census) dirty_census_add(c_pages, c_dirty, census_t0);
+        return;
+    }
     checkpoint_mark(upload_command_buffer(), p.lo, 'm');
     GprofSpan gp(upload_command_buffer(), "msync copies (CPU pages live from guest memory -> mirror)");
     gp.items = (int)runs.size();
@@ -3876,6 +3908,7 @@ void mirror_sync(Pool& p) {
     shadow_sync_copy(upload_command_buffer(), p.buffer, p, runs);
     for (const VkBufferCopy& r : runs) st_sync_bytes += (int64_t)r.size, gp.bytes += r.size;
     st_sync_copies += (int64_t)runs.size();
+    if (census) dirty_census_add(c_pages, c_dirty, census_t0);
 }
 
 } // namespace

@@ -46,3 +46,36 @@ Ce que ça apporte, sans que ce soit de nous :
 ## La règle
 
 Un seul build à la fois ; on ne tue jamais la préparation des shaders ; chaque étape se mesure avant d'être gardée.
+
+## Sonde : `RX_VK_DIRTY_CENSUS=1`
+
+Ce que NX2navi appelle son *dirty census* n'existe pas ici sous ce nom : l'équivalent logique est la passe de `mirror_sync()`
+(`gpu/vk/vk_memory.cpp`), qui scanne les pages d'un pool et cherche, pour chaque page sale, son entrée de capture. C'est
+elle qui coûterait 7-15 ms par frame sur un GPU intégré chez eux.
+
+La sonde compte, sur place et sans rien changer au rendu : les pages vues, les pages sales, et le temps, cumulés sur
+512 syncs, puis écrit une ligne :
+
+```
+vk: dirty census (RX_VK_DIRTY_CENSUS=1): 512 syncs, 4100 pages scanned (37 dirty), 41 us a sync, 5 ns a page
+```
+
+Lecture : si `us a sync` reste sous la dizaine, la passe n'est pas le problème et il n'y a rien à optimiser là. Si elle
+monte à plusieurs centaines de µs (ou plus) sur un iGPU, on a notre 7-15 ms — et la suite est de remplacer le scan par une
+liste de pages écrites par pool, au lieu de reparcourir les régions.
+
+Coût quand la sonde est éteinte : un `bool` par sync.
+
+### Mesuré (16/11, RX 9070 XT, scène chargée : 2 820 draws, 49,9 fps)
+
+```
+512 syncs, 350 720 pages scanned (2 718 dirty), 4 us a sync, 5-6 ns a page
+```
+
+**4 µs par sync, ~630 pages par sync.** À 6 submits par frame : **~24 µs par frame en tout**, soit 0,024 ms. Même en
+comptant un iGPU trois fois plus lent sur ce code : ~0,07 ms.
+
+**Donc #965 est sans objet chez nous :** les 7-15 ms que NX2navi mesure viennent de leur propre parcours (leur census
+d'import), pas de cette passe. La sonde reste dans le code (éteinte par défaut) pour re-vérifier après un gros changement
+de mémoire.
+
