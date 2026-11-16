@@ -61,6 +61,7 @@
 #include "driver_faults.h"
 #include "fallback_size_policy.h"
 #include "translate_wait.h"
+#include "precompile_save.h"   // (the pipeline cache written before the title after a long precompile)
 #include "quick_pipe.h"
 
 #include "vk_builtin_spv.h"   // (RX_VK_SHADER_DIR)
@@ -873,6 +874,8 @@ void ensure_layout(Program& p) {
 // ---- the pipeline cache, on disk ----
 VkPipelineCache pcache = VK_NULL_HANDLE;
 std::string pcache_path;
+/// (longshot) What the last save on this thread did: a forced save runs on its caller's thread, which reads it (precompile_save.h)
+thread_local precompile_save::Outcome pcache_save_outcome;
 std::atomic<int64_t> pcache_built_since_save{0};
 // (longshot) The size of the cache's data when it was last read or written. The count above takes in every pipeline made
 // with the cache, the ones it already held too: the precompile's ~13,000 at each start, all found in the cache, made the
@@ -9859,8 +9862,8 @@ void precompile_warm(void (*progress)(size_t done, size_t total)) {
         prepare_saving_now.store(true, std::memory_order_relaxed);
         pipeline_cache_save(true);   // (in the file before the marker says they are there)
         prepare_saving_now.store(false, std::memory_order_relaxed);
-        logf("vk: precompile: the pipeline cache written out in %.1f s",
-             std::chrono::duration<double>(std::chrono::steady_clock::now() - s0).count());
+        logf("vk: precompile: the pipeline cache %s, in %.0f ms", precompile_save::said(pcache_save_outcome).c_str(),
+             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - s0).count());
         // (not by the preparation's own process: warm_bounded.h leaves_marker)
         if (warm_bounded::leaves_marker(prepare_only, all, prepare_stopped())) precompile_built_write(total);
         crash_markers::end(warming);
@@ -10150,6 +10153,19 @@ void precompile_run(void (*progress)(size_t done, size_t total)) {
          cs_cached + cs_compiled, cs_cached, cs_compiled, cs_failed);
     // (every note built, by a run that got to its end: RX_VK_LOAD=create may load them from the caches from the next start on)
     if (!gone_on && !prepare_stopped()) precompile_built_write(graphics_n);
+    // (pipelines that took this long were compiled, not found: written before the title, the start-up screen saying so, as
+    // precompile_warm does under RX_VK_LOAD=create; in play it would wait for 64 MB of growth: precompile_save.h)
+    static const int save_s = precompile_save::after_s(getenv("RX_VK_PRECOMPILE_SAVE_S"));
+    const double build_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - built0).count();
+    if (precompile_save::due(build_s, save_s, gone_on, prepare_stopped(), env_on("LONGSHOT_PREPARE_ONLY"))) {
+        const auto s0 = std::chrono::steady_clock::now();
+        prepare_saving_now.store(true, std::memory_order_relaxed);
+        pipeline_cache_save(true);
+        prepare_saving_now.store(false, std::memory_order_relaxed);
+        logf("vk: precompile: its pipelines took %.0f s (compiled, not found in the caches): the pipeline cache %s, in %.0f ms, "
+             "before the title (RX_VK_PRECOMPILE_SAVE_S=0: not)", build_s, precompile_save::said(pcache_save_outcome).c_str(),
+             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - s0).count());
+    }
     predicted_check();
 }
 
@@ -11334,7 +11350,11 @@ void pipeline_cache_between_builds() {
     pipeline_cache_save(false);
 }
 void pipeline_cache_save(bool force) {
+    using Outcome = precompile_save::Outcome;
+    pcache_save_outcome = {};
     const bool between = pcache_save_between;
+    if (!pcache) pcache_save_outcome.what = Outcome::kNoCache;
+    else if (pcache_no_save) pcache_save_outcome.what = Outcome::kOff;
     if (!pcache || pcache_no_save || (!force && !between && pcache_built_since_save < 32)) return;
     const int64_t built = pcache_built_since_save.exchange(0);
     // (on a thread of its own unless forced, at exit: ~100 MB fetched and written took the replay thread 100+ ms at
@@ -11382,8 +11402,11 @@ void pipeline_cache_save(bool force) {
                 pcache_built_since_save += built;   // (still to save: the next request writes them, not only after 32 more)
                 if (serial_builds_on()) pcache_save_owed = true;
             };
-            bool write = fetch(&n, nullptr) && n && n != pcache_saved_size;
+            const bool sized = fetch(&n, nullptr);
+            bool write = sized && n && n != pcache_saved_size;
             if (!had) return put_off_now();
+            pcache_save_outcome.what = !sized || !n ? Outcome::kFetchFailed : write ? Outcome::kNotRun : Outcome::kSame;
+            pcache_save_outcome.bytes = n;
             if (write && !force && play_grown && play_cache_in_use() && n < pcache_saved_size + play_grown) {
                 write = false;
                 static std::atomic<int> told{0};
@@ -11393,15 +11416,21 @@ void pipeline_cache_save(bool force) {
             }
             if (write) {
                 auto data = PipelineCacheFile::writable(pcache_path, n);
-                if (!data.empty() && fetch(&n, data.data()) && data.publish(n)) {
+                const bool fetched = !data.empty() && fetch(&n, data.data());
+                if (fetched && data.publish(n)) {
                     pcache_saved_size = n;
+                    pcache_save_outcome.what = Outcome::kWritten, pcache_save_outcome.bytes = n;
                     logf("vk: pipeline cache saved (%zu KB)%s", n >> 10, between ? ", between two serial builds" : "");
                 } else if (!had) {
                     return put_off_now();   // (the size had, the data not: put off as well, not lost)
+                } else {
+                    pcache_save_outcome.what = data.empty() || fetched ? Outcome::kWriteFailed : Outcome::kFetchFailed;
+                    pcache_save_outcome.detail = pcache_path;
                 }
             }
             put_off = 0;
         } catch (const std::exception& e) {
+            pcache_save_outcome.what = Outcome::kError, pcache_save_outcome.detail = e.what();
             logf("vk: pipeline cache save failed: %s", e.what());
         }
         try {
