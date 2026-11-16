@@ -773,6 +773,18 @@ def rss_mb(proc):
         return 0
 
 
+def largest_function(text):
+    """The largest function of a lifted file's text, in bytes: each function from the newline before its definition, as mem_need
+    was first measured; a giant's pieces are functions of their own (split_giants.py, the copy compile_one compiles)"""
+    starts = [m.start() - 1 for m in lifted_c.HEAD_BYTES.finditer(text)]
+    i = text.find(b"\nstatic __attribute__((noinline)) uintptr_t s_")
+    while i >= 0:
+        starts.append(i)
+        i = text.find(b"\nstatic __attribute__((noinline)) uintptr_t s_", i + 1)
+    starts = sorted(starts) + [len(text)]
+    return max([b - a for a, b in zip(starts, starts[1:])] or [0])
+
+
 def mem_need(src):
     """What compiling a file takes at its peak, in MB, a little over. Measured on a cold build (clang 23, x86-64): a chunk of lifted
     code 0.4 GB + 50 MB per MB of C + 250 MB per MB of its largest function (1.5 GB for 24 MB of small functions, 2.2 GB for a 6 MB
@@ -784,16 +796,7 @@ def mem_need(src):
     if name.startswith("code_"):
         with open(src, "rb") as f:
             text = f.read()
-        # (each function from the newline before its definition, as this was first measured; a giant's pieces are functions
-        # of their own: split_giants.py, the copy compile_one compiles)
-        starts = [m.start() - 1 for m in lifted_c.HEAD_BYTES.finditer(text)]
-        i = text.find(b"\nstatic __attribute__((noinline)) uintptr_t s_")
-        while i >= 0:
-            starts.append(i)
-            i = text.find(b"\nstatic __attribute__((noinline)) uintptr_t s_", i + 1)
-        starts = sorted(starts) + [len(text)]
-        largest = max([b - a for a, b in zip(starts, starts[1:])] or [0])
-        return int(400 + 50 * len(text) / (1 << 20) + 250 * largest / (1 << 20))
+        return int(400 + 50 * len(text) / (1 << 20) + 250 * largest_function(text) / (1 << 20))
     return 1000 if src.endswith(".cpp") else 400
 
 
@@ -1005,6 +1008,82 @@ def flags(gen, rt64, opt, polls):
         (["-DA64_POLLING"] if polls else []) + WRITE_TRACK
 
 
+# LONGSHOT_LIGHT_PASSES (on by default; 0 turns it off): ordinary lifted chunks compile at -O1 without its module passes (the
+# inliner, ipsccp, globalopt, function-attrs ...: -mllvm -opt-disable; LLVM skips only passes it marks optional, so the code
+# stays correct). Measured on single chunks (bold/clanglab): -21..-34% compile time, +3..5% code, the same peak memory, and
+# -O1's inliner barely inlines lifted code (the same call counts); the few helpers it did inline are always_inline in the
+# lifter's headers (a64_lift.py VFPX_HEADER). A chunk with a function of LONGSHOT_LIGHT_PASSES_KB (1024) KB of C or more keeps
+# every pass: without the module passes a giant function's later passes blow up (3.25-4.7 GB, 8x the time). The size is
+# the lifted function's: a chunk whose functions LONGSHOT_SPLIT_GIANTS cuts (256 KB or more) compiles its pieces light too
+# (measured on the game's 50 such chunks: -22% compile, the same symbols, +3.2% code). The hot pieces (code_hot*) keep
+# theirs (-O2 and the profile). The flags are part of each object's key (object_key), so a light object and a full one are never taken for each other.
+# opt-bisect-verbose=false: without it the option prints a line for every pass on every function
+LIGHT_PASSES = ["ipsccp", "called-value-propagation", "globalopt", "openmp-opt", "deadargelim", "globaldce", "elim-avail-extern",
+                "rpo-function-attrs", "function-attrs", "constmerge", "cg-profile", "rel-lookup-table-converter", "inline",
+                "inliner-ml-advisor-release"]
+LIGHT_FLAGS = ["-mllvm", "-opt-disable=" + ",".join(LIGHT_PASSES), "-mllvm", "-opt-bisect-verbose=false"]
+
+
+def light_passes_kb():
+    """The largest function (KB of C) a lifted chunk may hold and still compile without the module passes; None: off"""
+    if os.environ.get("LONGSHOT_LIGHT_PASSES", "").strip().lower() in ("0", "false", "off", "no"):
+        return None
+    try:
+        kb = max(1, int(os.environ.get("LONGSHOT_LIGHT_PASSES_KB") or 1024))
+    except ValueError:
+        kb = 1024
+    return kb
+
+
+def light_flags_work(cc):
+    """Whether cc takes LIGHT_FLAGS: one tiny compile. -opt-disable is LLVM 22's, and a Linux system's older clang (README: it
+    builds, without the play profile) stops at it, so every light chunk would fail: with such a compiler they keep every pass"""
+    try:
+        r = subprocess.run([cc, "-x", "c", "-O1", "-Wno-everything", "-S", "-o", "-", "-"] + LIGHT_FLAGS,
+                           input="int f(int x) { return x + 1; }\n", capture_output=True, text=True, encoding="utf-8",
+                           errors="replace")
+    except OSError as e:
+        r = subprocess.CompletedProcess([cc], 1, "", str(e))
+    if r.returncode:
+        print("build: this compiler does not take the light passes' flags (%s): every lifted chunk keeps -O1's module passes"
+              % (r.stderr.strip().splitlines() or ["?"])[0], flush=True)
+    return r.returncode == 0
+
+
+def lifted_largest(src):
+    """A lifted file's largest function in bytes (largest_function), from the record (HASHES) while it still describes the file,
+    so a build reads no lifted file it already knows"""
+    entry, st = known(src)
+    if entry is not None and isinstance(entry.get("largest"), int):
+        return entry["largest"]
+    with open(src, "rb") as f:
+        content = f.read()
+    largest = largest_function(content)
+    remember(src, st, content)["largest"] = largest
+    return largest
+
+
+def lifted_flags(src, fl, deps, bar_kb):
+    """A lifted chunk's flags: fl, or fl + LIGHT_FLAGS (light_passes_kb). A kept file that is not on disk gets the flags whose
+    part its list recorded (so the kept objects still fit)"""
+    if bar_kb is None:
+        return fl
+    light = fl + LIGHT_FLAGS
+    if src in KEPT and not os.path.exists(src):
+        return light if KEPT[src][2] == kept_part(light, deps) else fl
+    return light if lifted_largest(src) < bar_kb * 1024 else fl
+
+
+def source_flags(src, gen, fl, split_fl, hot_fl, deps, bar_kb):
+    """A source's flags: the hot pieces' hot_fl; a lifted chunk's split_fl, light or not (lifted_flags); fl for the rest"""
+    name = os.path.basename(src)
+    if name.startswith("code_hot"):
+        return hot_fl
+    if name.startswith("code_") and os.path.dirname(src) == gen:
+        return lifted_flags(src, split_fl, deps, bar_kb)
+    return fl
+
+
 def write_info(out):
     meta = json.load(open(os.path.join(kit.WORK, "image", "image.json")))
     mods = {m["name"]: m for m in meta["modules"]}
@@ -1130,6 +1209,8 @@ def load_hashes(out):
             if (isinstance(entry.get("stat"), list) and len(entry["stat"]) == 3 and isinstance(entry.get("sha1"), str)
                     and isinstance(entry.get("keys"), dict)):
                 HASHES[src] = {"stat": [int(x) for x in entry["stat"]], "sha1": entry["sha1"], "keys": dict(entry["keys"])}
+                if isinstance(entry.get("largest"), int):   # (a lifted file's largest function: lifted_largest)
+                    HASHES[src]["largest"] = entry["largest"]
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         HASHES.clear()
         HASHES_AT[0] = 0
@@ -1492,10 +1573,15 @@ def main():
         with open(PGO, "rb") as f:
             hot_fl = hot_fl + ["-fprofile-instr-use=" + PGO, "-DLONGSHOT_PROFILE_SHA1=" + hashlib.sha1(f.read(), usedforsecurity=False).hexdigest()[:16]]
     split_fl = fl + split_giants_flags()   # (the lifted chunks; not the hot pieces, whose profile was counted on the whole functions)
-    jobs = [(cc, s, os.path.join(obj_dir, os.path.basename(s)[:-2] + ".o"),
-             hot_fl if os.path.basename(s).startswith("code_hot") else
-             split_fl if os.path.basename(s).startswith("code_") and os.path.dirname(s) == gen else fl,
+    bar_kb = light_passes_kb()
+    if bar_kb is not None and not light_flags_work(cc):
+        bar_kb = None
+    jobs =[(cc, s, os.path.join(obj_dir, os.path.basename(s)[:-2] + ".o"), source_flags(s, gen, fl, split_fl, hot_fl, deps, bar_kb),
              shim_deps if os.path.dirname(s) == NX2_RT else deps) for s in srcs]
+    if bar_kb is not None:
+        light = sorted(os.path.basename(j[1]) for j in jobs if j[3][-len(LIGHT_FLAGS):] == LIGHT_FLAGS)
+        print("build: %d lifted chunks without -O1's module passes (LONGSHOT_LIGHT_PASSES, functions under %d KB): %s"
+              % (len(light), bar_kb, " ".join(light)), flush=True)
     if KEPT and OBJ_STORE:   # (a kept object the folder let go that another work folder gave the store)
         object_store.fetch(OBJ_STORE, OBJ_CACHE, [k[0] for k in KEPT.values()])
     if KEPT:   # (the kept translation is used only as it was: the same flags and headers, and every object still cached)
