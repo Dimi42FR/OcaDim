@@ -48,7 +48,8 @@ VkResult fg_amd_present(const VkPresentInfoKHR* present);
 /// (P2) One game frame's frame generation: the frame's command buffer gets AMD's preparation (depth, motion, camera),
 /// and the configuration the swapchain's present uses to generate between this frame and the one before. Called once a
 /// frame right after the picture is recorded, before the submit; true when the frame was configured (generation on or
-/// off, its inputs being there or not). No-op without AMD's swapchain.
-bool fg_amd_frame(VkCommandBuffer cmd, VkSwapchainKHR sc, VkFormat format, VkExtent2D display);
+/// off, its inputs being there or not). No-op without AMD's swapchain. src_w x src_h: the picture's size (the game's
+/// output, which may be larger than the window); the context's largest render size follows it.
+bool fg_amd_frame(VkCommandBuffer cmd, VkSwapchainKHR sc, VkFormat format, VkExtent2D display, uint32_t src_w, uint32_t src_h);
 
 }  // namespace mkwvk

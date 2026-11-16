@@ -1006,6 +1006,10 @@ bool create_swapchain(uint32_t width, uint32_t height) {
         device_wait_idle_locked();
         fg_amd_surface_lost();
         retire_swapchain(false);
+    } else if (!fg_amd_active() && fg_amd_wanted() && dev.swapchain) {
+        // (turned on at once: the plain swapchain goes first. The window has one swapchain at a time, and AMD's context
+        // makes its own for the surface; a second one on the same surface was refused by the driver)
+        retire_swapchain();
     }
     const bool fg_remake = fg_amd_active();
     if (fg_remake) {

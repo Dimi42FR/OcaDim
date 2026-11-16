@@ -383,15 +383,26 @@ void fg_amd_wait_presents() {
     if (st().sc) wait_presents();
 }
 
-bool fg_amd_frame(VkCommandBuffer cmd, VkSwapchainKHR sc, VkFormat format, VkExtent2D display) {
+bool fg_amd_frame(VkCommandBuffer cmd, VkSwapchainKHR sc, VkFormat format, VkExtent2D display, uint32_t src_w, uint32_t src_h) {
     State& s = st();
     if (!s.sc || s.failed || s.gen_failed) return false;
     TemporalFgInputs in{};
     const bool have = temporal_fg_take(&in);
+    // (the context's largest render size: the game's picture (the scene never larger than it) and the window)
+    const uint32_t pic_w = src_w ? src_w : display.width, pic_h = src_h ? src_h : display.height;
+    const uint32_t max_w = pic_w > display.width ? pic_w : display.width;
+    const uint32_t max_h = pic_h > display.height ? pic_h : display.height;
     if (!s.fg) {
         if (!have) return false;   // (no scene this frame: nothing to configure, no context made for nothing)
-        const uint32_t max_w = in.width > display.width ? in.width : display.width;
-        const uint32_t max_h = in.height > display.height ? in.height : display.height;
+        if (!create_fg(display.width, display.height, format, in.depth_reversed, in.far_z, max_w, max_h)) return false;
+    } else if (max_w > s.fg_desc.maxRenderSize.width || max_h > s.fg_desc.maxRenderSize.height) {
+        // (the picture grew: a new Output resolution, or an upscaler share. A context made for the smaller one stops
+        // generating for the larger scenes: it is made again for the largest, after its work is done)
+        logf("vk: AMD FG: the picture is now %ux%u (was up to %ux%u): AMD's frame generation context made again", max_w, max_h,
+             s.fg_desc.maxRenderSize.width, s.fg_desc.maxRenderSize.height);
+        device_wait_idle_locked();
+        fg_amd_wait_presents();
+        release_fg();
         if (!create_fg(display.width, display.height, format, in.depth_reversed, in.far_z, max_w, max_h)) return false;
     }
     if (s.fg_w != display.width || s.fg_h != display.height || s.fg_format != format) {
@@ -522,7 +533,7 @@ void fg_amd_surface_lost() {}
 VkResult fg_amd_get_images(VkSwapchainKHR, uint32_t*, VkImage*) { return VK_ERROR_FEATURE_NOT_PRESENT; }
 VkResult fg_amd_acquire(VkSwapchainKHR, uint64_t, VkSemaphore, uint32_t*) { return VK_ERROR_FEATURE_NOT_PRESENT; }
 VkResult fg_amd_present(const VkPresentInfoKHR*) { return VK_ERROR_FEATURE_NOT_PRESENT; }
-bool fg_amd_frame(VkCommandBuffer, VkSwapchainKHR, VkFormat, VkExtent2D) { return false; }
+bool fg_amd_frame(VkCommandBuffer, VkSwapchainKHR, VkFormat, VkExtent2D, uint32_t, uint32_t) { return false; }
 
 }  // namespace mkwvk
 
