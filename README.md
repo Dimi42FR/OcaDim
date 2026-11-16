@@ -892,7 +892,8 @@ format, or a zstd frame that does not give its size) is used as it is, with the 
 If a mod includes tables for several game versions, the prompts use the table name from the game's own RomFS,
 not the first table found in the mod. Other versions' tables do not change the prompts' font or its size entries.
 
-For authors: the [existing file contract and game-free example](docs/mods.md) cover discovery, conflicting files,
+Players: the [mods guide](docs/using-mods.md) covers installing, turning off and checking mods. For authors: the
+[existing file contract and game-free example](docs/mods.md) cover discovery, conflicting files,
 disabling and what this loader does not provide. The example contains only invented text, not a seed or game data.
 
 ## Build from source
