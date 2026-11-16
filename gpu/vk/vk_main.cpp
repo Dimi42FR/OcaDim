@@ -27,6 +27,7 @@ static_assert(mkwvk::kQueueGraphics == VK_QUEUE_GRAPHICS_BIT && mkwvk::kQueueCom
 #include "vk_menu.h"
 #include "auto_settings.h"
 #include "vk_dlss.h"
+#include "vk_fg_amd.h"
 #include "vk_fsr4.h"
 #include "vk_xess.h"
 #include "vk_reflex.h"
@@ -449,6 +450,19 @@ bool create_device() {
         if (!presenter_queue_pick(qf.data(), n, dev.queue_family, compute_family, presenter_family, presenter_index))
             presenter_family = UINT32_MAX;
     }
+    // (longshot) AMD's frame generation swapchain's own queues (the menu's Frame generation by at AMD FSR FG, or
+    // RX_VK_FG_AMD=1: vk_fg_amd.cpp). AMD's SDK requires its game, present and image-acquire queues to be three different
+    // queues, and its presents must not share a queue with the replay's submits. Three queues of the graphics family
+    // after the replay's (8 on AMD's Windows driver), asked for in every run so the row can turn the feature on at once;
+    // without them the feature stays off and the plain swapchain runs
+    const uint32_t gfx_queues = std::min<uint32_t>(families[dev.queue_family].queueCount, 4u);
+    uint32_t fg_family = gfx_queues >= 4 ? dev.queue_family : UINT32_MAX;
+    if (fg_amd_requested()) {
+        if (fg_family == UINT32_MAX)
+            logf("vk: AMD FG: the graphics family has %u queues, 4 needed (the replay's and the SDK's three): off",
+                 families[dev.queue_family].queueCount);
+        else logf("vk: AMD FG: queues 1 to 3 of the graphics family are AMD's (the replay keeps queue 0)");
+    }
     static const float priorities[2] = {1.0f, 1.0f};
     std::vector<VkDeviceQueueCreateInfo> qs;
     auto queues = [&](uint32_t family, uint32_t count) {
@@ -458,7 +472,7 @@ bool create_device() {
         x.queueFamilyIndex = family, x.queueCount = count, x.pQueuePriorities = priorities;
         qs.push_back(x);
     };
-    queues(dev.queue_family, 1);
+    queues(dev.queue_family, gfx_queues);
     if (compute_family != UINT32_MAX) queues(compute_family, 1);
     if (presenter_family != UINT32_MAX) queues(presenter_family, presenter_index + 1);
     (void)q;
@@ -697,6 +711,15 @@ bool create_device() {
     } else if (presenter_wanted) {
         logf("vk: no second queue for the presenter thread: presents on the game's thread");
     }
+    // (longshot) AMD's frame generation swapchain's queues (fg_amd.cpp): no other thread submits to them or presents on
+    // them. The SDK refuses a context whose game, present and image-acquire queues are not three different queues
+    dev.fg_game_queue = dev.fg_present_queue = dev.fg_acquire_queue = VK_NULL_HANDLE;
+    if (fg_family != UINT32_MAX) {
+        vkGetDeviceQueue(dev.device, fg_family, 1, &dev.fg_game_queue);
+        vkGetDeviceQueue(dev.device, fg_family, 2, &dev.fg_present_queue);
+        vkGetDeviceQueue(dev.device, fg_family, 3, &dev.fg_acquire_queue);
+        dev.fg_family = fg_family;
+    }
     if (dev.buffer_marker) buffer_markers_init();
     coopmat_init();
     reflex_device_created();
@@ -770,13 +793,14 @@ int swapchain_framegen() { return opts.framegen >= 2 ? std::min(opts.framegen, 4
 /// to 8x: swapchain_framegen stops at 4, for the images)
 bool swapchain_dlssg() { return swapchain_framegen() >= 2 && dlss_fg_runs(opts.framegen - 1); }
 
-void retire_swapchain() {
+void retire_swapchain(bool destroy_handle) {
     if (!dev.swapchain) return;
     device_wait_idle_locked();
     reflex_swapchain_destroyed();
     swap_views_drop();
     for (auto semaphore : dev.swap_rendered) vkDestroySemaphore(dev.device, semaphore, nullptr);
-    vkDestroySwapchainKHR(dev.device, dev.swapchain, nullptr);
+    // (an AMD frame generation swapchain is the SDK's object: its context destroys it, after its presents were waited for)
+    if (destroy_handle) vkDestroySwapchainKHR(dev.device, dev.swapchain, nullptr);
     dev.swapchain = VK_NULL_HANDLE;
     ++dev.swapchain_generation;
     dev.swap_rendered.clear();
@@ -786,7 +810,12 @@ void retire_swapchain() {
 
 bool invalidate_lost_surface(VkResult result) {
     if (result != VK_ERROR_SURFACE_LOST_KHR) return false;
-    retire_swapchain();
+    const bool fg = fg_amd_active();
+    if (fg) {
+        device_wait_idle_locked();   // (our writes into its images done before its swapchain goes)
+        fg_amd_surface_lost();       // (its presents waited for, then its context and its swapchain, in the SDK's order)
+    }
+    retire_swapchain(!fg);
     if (dev.surface) vkDestroySurfaceKHR(dev.instance, dev.surface, nullptr);
     dev.surface = VK_NULL_HANDLE;
     dev.present_queue_supported = false;
@@ -947,6 +976,7 @@ bool create_swapchain(uint32_t width, uint32_t height) {
     };
     if (dev.present_queue_supported) share(dev.present_family);
     if (dev.presenter_supported) share(dev.presenter_family);   // (the presenter thread's queue)
+    if (dev.fg_game_queue) share(dev.fg_family);   // (AMD's frame generation presents: not this family when its queues are not)
     if (sharing_n > 1) {   // (presented from another family: no ownership moves)
         ci.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
         ci.queueFamilyIndexCount = sharing_n;
@@ -967,23 +997,60 @@ bool create_swapchain(uint32_t width, uint32_t height) {
         ci.pNext = &format_list;
     }
     reflex_swapchain_info(ci);   // (NVIDIA Reflex: latency mode on)
-    VkSwapchainKHR sc;
-    result = vkCreateSwapchainKHR(dev.device, &ci, nullptr, &sc);
-    // Passing oldSwapchain retires it even when creation fails. Nothing may acquire from it again.
-    retire_swapchain();
+    // (longshot, RX_VK_FG_AMD=1) AMD's frame generation swapchain, when it takes the window's over: the handle it hands
+    // back is the window's from here on, and every swapchain call goes through it (vk_fg_amd.cpp). Its new size is a
+    // remake in place: the old images' views and semaphores are let go first, and its presents waited for (the SDK's
+    // remake would otherwise free images the replay may still write)
+    // (the row or the switch turned AMD's frame generation off: its swapchain goes before the plain one is made below)
+    if (fg_amd_active() && !fg_amd_wanted()) {
+        device_wait_idle_locked();
+        fg_amd_surface_lost();
+        retire_swapchain(false);
+    } else if (!fg_amd_active() && fg_amd_wanted() && dev.swapchain) {
+        // (turned on at once: the plain swapchain goes first. The window has one swapchain at a time, and AMD's context
+        // makes its own for the surface; a second one on the same surface was refused by the driver)
+        retire_swapchain();
+    }
+    const bool fg_remake = fg_amd_active();
+    if (fg_remake) {
+        device_wait_idle_locked();   // (our blits done: they signal the semaphores AMD's presents wait on)
+        fg_amd_wait_presents();      // (then AMD's presents done with them, before retire drops them)
+        retire_swapchain(false);
+    }
+    VkSwapchainKHR sc = VK_NULL_HANDLE;
+    const VkResult fg_result = fg_amd_create_swapchain(ci, &sc);
+    const bool fg_owned = fg_result == VK_SUCCESS;
+    if (fg_owned) {
+        result = VK_SUCCESS;
+    } else if (fg_remake) {   // (AMD's handle is the window's swapchain: the Vulkan calls must never see it)
+        logf("vk: AMD FG: AMD's swapchain could not be remade; the frame generation swapchain stays");
+        return false;
+    } else {
+        result = vkCreateSwapchainKHR(dev.device, &ci, nullptr, &sc);
+    }
+    // Passing oldSwapchain retires it even when creation fails. Nothing may acquire from it again. AMD's is remade in
+    // place (above): its handle stays, and its context destroys it.
+    if (!fg_remake) retire_swapchain(!fg_owned);
     if (invalidate_lost_surface(result)) return false;
     if (result != VK_SUCCESS) {
         logf("vk: vkCreateSwapchainKHR failed (VkResult %d, extent %ux%u, format %d, usage %#x, mode %d, images %u)",
              (int)result, width, height, (int)fmt.format, ci.imageUsage, (int)mode, ci.minImageCount);
         return false;
     }
-    if (vkGetSwapchainImagesKHR(dev.device, sc, &n, nullptr) != VK_SUCCESS || !n) {
-        vkDestroySwapchainKHR(dev.device, sc, nullptr);
+    const auto swapchain_images = [&](uint32_t* count, VkImage* out) {
+        return fg_owned ? fg_amd_get_images(sc, count, out) : vkGetSwapchainImagesKHR(dev.device, sc, count, out);
+    };
+    const auto drop_new = [&] {
+        if (fg_owned) fg_amd_surface_lost();   // (its context, and the swapchain it made)
+        else vkDestroySwapchainKHR(dev.device, sc, nullptr);
+    };
+    if (swapchain_images(&n, nullptr) != VK_SUCCESS || !n) {
+        drop_new();
         return false;
     }
     std::vector<VkImage> images(n);
-    if (vkGetSwapchainImagesKHR(dev.device, sc, &n, images.data()) != VK_SUCCESS || !n) {
-        vkDestroySwapchainKHR(dev.device, sc, nullptr);
+    if (swapchain_images(&n, images.data()) != VK_SUCCESS || !n) {
+        drop_new();
         return false;
     }
     images.resize(n);
@@ -993,7 +1060,7 @@ bool create_swapchain(uint32_t width, uint32_t height) {
         if (vkCreateSemaphore(dev.device, &si, nullptr, &semaphore) != VK_SUCCESS) {
             for (auto made : rendered)
                 if (made) vkDestroySemaphore(dev.device, made, nullptr);
-            vkDestroySwapchainKHR(dev.device, sc, nullptr);
+            drop_new();
             return false;
         }
     }
@@ -1003,9 +1070,9 @@ bool create_swapchain(uint32_t width, uint32_t height) {
     dev.swap_extent = {width, height};
     dev.swap_images = std::move(images);
     dev.swap_spare = n > caps.minImageCount ? n - caps.minImageCount : 0;
-    logf("vk: swapchain %ux%u, %u images, %s (V-Sync %s)", width, height, n,
+    logf("vk: swapchain %ux%u, %u images, %s (V-Sync %s)%s", width, height, n,
          mode == VK_PRESENT_MODE_MAILBOX_KHR ? "mailbox" : mode == VK_PRESENT_MODE_IMMEDIATE_KHR ? "immediate" : "fifo",
-         vsync == 1 ? "On" : vsync == 2 ? "Off" : "Auto");
+         vsync == 1 ? "On" : vsync == 2 ? "Off" : "Auto", fg_owned ? ", AMD's frame generation swapchain" : "");
     swap_views_make(ci.imageUsage, mutable_view ? view_formats[1] : fmt.format);
     reflex_swapchain_created(sc);   // (NVIDIA Reflex: its sleep mode on the new swapchain)
     return true;

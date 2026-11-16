@@ -42,6 +42,7 @@
 #include "vk_menu_keys.h"   // (which gamepad buttons confirm and go back: those A and B are bound to)         // (how it looks: Dear ImGui, vk_imgui.h)
 #include "vk_dlss.h"
 #include "vk_framegen.h"   // (Frame generation by: who makes the frames now, framegen_maker)
+#include "vk_fg_amd.h"     // (Frame generation by: AMD's SDK's frames, and the FPS counter's name for them)
 #include "vk_bug_report.h"   // (the Gameplay tab's Bug report: what it writes, and how)
 #include "../../host/hos_wide_size.h"   // (the widescreen picture's size, as host/hos_main.c works it out)
 #include "vk_fsr3.h"      // (the Upscaler row: whether AMD FSR 3.1 runs on this GPU)
@@ -1001,6 +1002,7 @@ MENU_HINTS(hn_pace, 0, "As soon as it is ready.", "At an even interval: less stu
 /// One name each, "<engine> FG", on the Frame generation by row and the FPS counter alike
 const char* framegen_maker_name() {
     if (opts.framegen < 1) return nullptr;
+    if (fg_amd_generating()) return "AMD FSR FG";   // (the SDK's own frames between the game's: vk_fg_amd.cpp)
     switch (framegen_maker()) {
     case FgMaker::Dlss: return "DLSS FG";
     case FgMaker::Fsr3: return "FSR 3.1 FG";
@@ -1010,6 +1012,7 @@ const char* framegen_maker_name() {
 }
 /// Frame generation by: at Auto, who makes the frames now, so a player sees whether DLSS Frame Generation runs
 const char* tx_framegen_by(int v) {
+    if (v == 2) return "AMD FSR FG";
     const char* who = v ? nullptr : framegen_maker_name();
     if (!who) return v ? "Built-in FG" : "Auto";
     static char b[40];
@@ -1043,6 +1046,12 @@ const char* framegen_skip_text(int why, unsigned most) {
 /// Its line: at Auto with another than DLSS-G making the frames, why ("Not DLSS FG now: " and framegen_skip_text). Variants
 /// (every one): Auto's, Built-in's, then "Not DLSS FG now: " with each reason
 const char* hn_framegen_by(int v, int variant) {
+    if (v == 2)
+        return variant <= 0
+                   ? "AMD's FidelityFX frame generation: one frame between each two of the game's, from the scene's depth and "
+                     "motion. 4.x on RDNA 4 and 3.1.x on the other AMD GPUs, Windows only, with AMD's runtime beside the game. "
+                     "Needs a temporal Upscaler (DLSS, DLAA or FSR). Changes at once. Added by Dimi42FR."
+                   : nullptr;
     static const char* const t[] = {
         "NVIDIA DLSS Frame Generation where it runs (RTX 40 and newer, with the Upscaler's depth and motion), else the "
         "built-in one.",
@@ -1439,7 +1448,7 @@ Row rows[] = {
     {TAB_GRAPHICS, "Frame generation", &opts.framegen, 0, 8, 1, tx_framegen,
      "Makes frames between the game's own, for smoother motion, at a little input delay. Fast motion or camera cuts can "
      "show artifacts.", hn_framegen, false, true},
-    {TAB_GRAPHICS, "Frame generation by", &opts.framegen_by, 0, 1, 1, tx_framegen_by,
+    {TAB_GRAPHICS, "Frame generation by", &opts.framegen_by, 0, 2, 1, tx_framegen_by,
      "Who makes the frames at 2x and up. NVIDIA DLSS Frame Generation needs a temporal Upscaler (DLSS, DLAA or FSR) for "
      "the scene's depth and motion. Changes at once.", hn_framegen_by, false, true},
     {TAB_GRAPHICS, "Frame pacing", &opts.pace, 0, 1, 1, tx_onoff, "When each frame is shown.", hn_pace},

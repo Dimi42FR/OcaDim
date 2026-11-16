@@ -23,6 +23,8 @@ using VmaAllocation = void*;
 constexpr int kMaxMult = 8;
 struct Device { VkDevice device{}; bool push_descriptor = true, offscreen = false; std::mutex present_mu; } dev;
 struct Options { int framegen = 2; } opts;
+// (RX_VK_FG_AMD=1 in production: off here, so the site under test is the renderer's own)
+inline bool fg_amd_active() { return false; }
 auto vkCmdPushDescriptorSetKHR = reinterpret_cast<PFN_vkCmdPushDescriptorSetKHR>(uintptr_t(1));
 constexpr uint32_t FG_COPY_COMP_SPV[] = {0}, FG_LUMA_COMP_SPV[] = {0}, FG_FLOW_COMP_SPV[] = {0},
                    FG_MEDIAN_COMP_SPV[] = {0}, FG_SYNTH_COMP_SPV[] = {0}, FG_SCALE_COMP_SPV[] = {0};
