@@ -4,6 +4,8 @@
     python -I nx2/make_game.py --romfs <dir> --exefs <dir> --out <folder> [--work <folder>] [--jobs <n>]
     python -I nx2/make_game.py --check --nup <file.nup>       (or --exefs <dir>: is this the right game and version?)
     python -I nx2/make_game.py --update <folder>             (a folder built before, again with these tools: the game files it keeps)
+    python -I nx2/make_game.py --nup <file.nup> --out <folder> --romfs-from <folder>
+                                  (another game folder unpacked from this .nup: its game files hard-linked, not read again)
     python -I nx2/make_game.py --game <.nup or folder> --prepare   (RecompLauncher: --out defaults to ~/Games/Longshot; no window,
                                                                     "progress <0..1> <text>" lines and an "error <text>" line on stdout,
                                                                     exit 0 when the game is built; with --check, its "check ok|bad" line)
@@ -552,6 +554,134 @@ def keep_heads(out, game, stamp):
 
 
 DAMAGED_NOTE = "longshot_damaged_files.txt"   # (in the game folder: the damaged game files the last unpack replaced)
+
+
+ROMFS_MARKS = (".longshot_romfs_checked", HEADS, DAMAGED_NOTE)   # (what stand_in_damaged_files left in a folder, about its romfs)
+
+
+def exefs_problem(exefs):
+    """Why a kept exefs can't be built from, or None: no main, a module the tools can't read, another build of the game.
+    check_modules' and check_supported_build's questions, answered without stopping the build"""
+    try:
+        names = os.listdir(exefs)
+        if "main" not in names:
+            return "no main"
+        for name in names:
+            if name == "main.npdm" or name.endswith(".part"):
+                continue
+            with open(os.path.join(exefs, name), "rb") as f:
+                head = f.read(0x60)
+            if head[:4] != b"NSO0":
+                return "%s is not a game module" % name
+            if name == "main" and not head[0x40:0x60].hex().startswith(BUILD_ID):
+                return "another build of the game"
+    except OSError as e:
+        return "it could not be read: %s" % (e.strerror or e)
+    return None
+
+
+def replace_file(src, target):
+    """src's bytes at target, by a staged file and a rename: an existing target is replaced, never written through, so a hard
+    link there can't carry the write to a file outside the build folder"""
+    fd, staged = tempfile.mkstemp(prefix=".longshot-", dir=os.path.dirname(target))
+    try:
+        with os.fdopen(fd, "wb") as f, open(src, "rb") as s:
+            shutil.copyfileobj(s, f)
+        os.replace(staged, target)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(staged)
+        raise
+
+
+def romfs_from_build(other, out, stamp, romfs, kept, exefs):
+    """--romfs-from: the game files of another game folder this builder unpacked from the same .nup (its .longshot_romfs stamp
+    is this one's), hard-linked into this one where the disk allows (link_or_copy), its kept exefs copied, and what its
+    damaged-texture check found carried over with them: the .nup's ~25 GB is not read and written again for each version
+    (about 3 minutes, and the disk space, on a PC's own drive). False, and nothing changed, when it is not such a folder, when
+    its files can't be hard-linked into this one (link_problem), or when linking them stops part-way: the .nup is read as
+    usual. The files are shared with that folder: neither the build nor the game writes into its romfs"""
+    if not other or not os.path.isdir(other):
+        return False
+    if os.path.normcase(os.path.realpath(other)) == os.path.normcase(os.path.realpath(out)):
+        return False
+    src_romfs, src_kept, src_stamp = (os.path.join(other, n) for n in ("romfs", ".longshot_exefs", ".longshot_romfs"))
+    if not (os.path.isdir(src_romfs) and os.path.isdir(src_kept) and os.path.isfile(src_stamp)):
+        return False
+    if read_stamp(src_stamp).strip() != stamp:
+        print("the game folder %s was unpacked from another .nup: this one is read" % other, flush=True)
+        return False
+    # (a folder unpacked by a builder before check_unpacked_romfs may lack what the game's start needs: read the .nup instead,
+    # whose unpack is checked, rather than link in game files a game could not start from)
+    missing = romfs_missing(src_romfs)
+    if missing:
+        print("the game folder %s has no %s: this .nup is read" % (other, missing), flush=True)
+        return False
+    problem = exefs_problem(src_kept)
+    if problem:
+        print("the game folder %s's copy of the game's code can't be built from (%s): this .nup is read" % (other, problem), flush=True)
+        return False
+    refuse_dump_links(src_romfs)
+    probe = os.path.join(out, ".longshot-link-probe")
+    check_cache_paths(out, [probe])
+    why = link_problem(src_romfs, probe)
+    if why:
+        print("the game files in %s can't be hard-linked into %s (%s: another drive, or a disk without hard links): this .nup "
+              "is read" % (other, out, why), flush=True)
+        return False
+    # (made beside this folder's copy first, then put in its place: a link or copy that stops part-way, a full disk, leaves the last
+    # usable copy as it was. The marks' paths are checked too: a link there would carry their write out of the build folder)
+    staged_romfs, staged_kept = romfs + ".from.part", kept + ".from.part"
+    marks = [os.path.join(out, name) for name in ROMFS_MARKS]
+    check_cache_paths(out, [staged_romfs, staged_kept, os.path.join(out, ".longshot_romfs")] + marks)
+    for staged in (staged_romfs, staged_kept):
+        if os.path.lexists(staged):
+            shutil.rmtree(staged)
+    print("the game files come from %s, unpacked from this .nup before: linked, not read again" % other, flush=True)
+    try:
+        link_or_copy(src_romfs, staged_romfs)
+        shutil.copytree(src_kept, staged_kept)
+    except BaseException as e:
+        for staged in (staged_romfs, staged_kept):
+            shutil.rmtree(staged, ignore_errors=True)
+        if not isinstance(e, OSError):
+            raise
+        # (the other folder moved or went unreadable part-way, a file held, a full disk: this folder's copy is as it was, and
+        # the .nup can still be read, which says for itself when it can't)
+        print("linking the game files from %s stopped (%s): this .nup is read" % (other, e.strerror or e), flush=True)
+        return False
+    with contextlib.suppress(FileNotFoundError):   # (a new romfs: what was said about the old one goes with it)
+        os.remove(os.path.join(out, ".longshot_romfs"))
+    for staged, final in ((staged_romfs, romfs), (staged_kept, kept)):
+        if os.path.exists(final):
+            shutil.rmtree(final)
+        os.replace(staged, final)
+    shutil.copytree(kept, exefs)
+    for name, target in zip(ROMFS_MARKS, marks):
+        if os.path.isfile(os.path.join(other, name)):
+            replace_file(os.path.join(other, name), target)
+        else:
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(target)
+    write_stamp(os.path.join(out, ".longshot_romfs"), stamp + chr(10))
+    return True
+
+
+def link_problem(src_romfs, probe):
+    """Why src_romfs's files can't be hard-linked at probe (a path in the build folder), or None: tried once, with one of its
+    files. On another drive, or on a disk without hard links (FAT32, exFAT), every link would be a copy: the 26 GB written
+    again, which saves neither the disk space nor, much, the time of reading the .nup"""
+    sample = next((os.path.join(d, fs[0]) for d, _, fs in os.walk(long_path(src_romfs)) if fs), None)
+    if sample is None:
+        return "no files in it"
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(probe)
+    try:
+        os.link(sample, probe)
+    except OSError as e:
+        return e.strerror or str(e)
+    os.remove(probe)
+    return None
 
 
 def stand_in_damaged_files(out, romfs):
@@ -1688,15 +1818,25 @@ def check_unpacked_romfs(romfs, source):
 
 def refuse_dump_links(folder):
     """An extracted dump holds only files and folders: a link in it was followed, and hard-linked or copied the file it
-    names (anywhere on this PC) into the game folder. The folder itself may be one. (Walked as a long path: #1468)"""
-    for d, dirs, files in os.walk(long_path(folder)):
-        for name in dirs + files:
-            path = os.path.join(d, name)
-            attrs = os.lstat(path)
-            if stat.S_ISLNK(attrs.st_mode) or getattr(attrs, "st_file_attributes", 0) & getattr(
-                    stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400):
-                fail("The game files at %s contain a link (%s): copy them without links and choose that folder."
-                     % (folder, path))
+    names (anywhere on this PC) into the game folder. The folder itself may be one. (Walked as a long path: #1468. Read from
+    the folders' listings: on Windows a listing carries each entry's attributes, where an lstat of each of a romfs's
+    ~186,000 files took 22 s)"""
+    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    folders = [long_path(folder)]
+    while folders:
+        d = folders.pop()
+        try:
+            listing = os.scandir(d)
+        except OSError as e:   # (os.walk, before, passed over a folder it could not list, and its files went missing)
+            fail("Could not read the game files at %s (%s): %s" % (folder, d, e.strerror or e))
+        with listing:
+            for entry in listing:
+                attrs = entry.stat(follow_symlinks=False)
+                if entry.is_symlink() or getattr(attrs, "st_file_attributes", 0) & reparse:
+                    fail("The game files at %s contain a link (%s): copy them without links and choose that folder."
+                         % (folder, entry.path))
+                if entry.is_dir(follow_symlinks=False):
+                    folders.append(entry.path)
 
 
 def long_path(p):
@@ -1711,16 +1851,30 @@ def long_path(p):
 
 
 def link_or_copy(src, dst):
-    """the romfs by hard links where the disk allows: 26 GB not written twice"""
+    """the romfs by hard links where the disk allows: 26 GB not written twice. Each folder is made once, and a file a try before
+    this one left (a retry) is passed over by the link's own FileExistsError, not looked up first: for a romfs's ~186,000
+    files each lookup and folder check cost about what the link does"""
     src, dst = long_path(src), long_path(dst)
-    files = [os.path.join(d, f) for d, _, fs in os.walk(src) for f in fs]
-    for i, s in enumerate(files):
-        t = os.path.join(dst, os.path.relpath(s, src))
-        os.makedirs(os.path.dirname(t), exist_ok=True)
-        if not os.path.exists(t):
+    walked = [(d, fs) for d, _, fs in os.walk(src)]
+    total = max(1, sum(len(fs) for _, fs in walked))
+    i = 0
+    for d, fs in walked:
+        rel = os.path.relpath(d, src)   # (the top's own files: dst itself, not dst\. which a \\?\ long path does not tidy away)
+        folder = dst if rel == os.curdir else os.path.join(dst, rel)
+        os.makedirs(folder, exist_ok=True)
+        for name in fs:
+            s, t = os.path.join(d, name), os.path.join(folder, name)
+            if i % 500 == 0:
+                say("progress", "%.3f" % (i / total))
+            i += 1
             try:
                 os.link(s, t)
+                continue
+            except FileExistsError:
+                continue
             except OSError:
+                if os.path.exists(t):
+                    continue
                 # A retry skips existing targets, so publish the copy only after it is complete.
                 fd, staged = tempfile.mkstemp(prefix=".romfs-", dir=os.path.dirname(t))
                 try:
@@ -1734,8 +1888,6 @@ def link_or_copy(src, dst):
                             os.chmod(staged, stat.S_IWRITE)
                         os.unlink(staged)
                     raise
-        if i % 500 == 0:
-            say("progress", "%.3f" % (i / max(1, len(files))))
 
 
 def shader_census_cmd(romfs, out):
@@ -2306,6 +2458,9 @@ def parse_args():
     p.add_argument("--game", help="your copy: a .nup file, or a folder with romfs and exefs in it (the same as --nup, or --romfs and --exefs)")
     p.add_argument("--prepare", action="store_true", help="for RecompLauncher: no window, progress lines, --out ~/Games/Longshot unless given")
     p.add_argument("--update", help="a game folder built before: built again from the game files it keeps (the game's update offer)")
+    p.add_argument("--romfs-from", default=os.environ.get("LONGSHOT_ROMFS_FROM") or None, metavar="FOLDER",
+                   help="with --nup: another game folder unpacked from the same .nup, whose game files this build hard-links instead of "
+                        "reading the .nup again (LONGSHOT_ROMFS_FROM: a launcher sets it; a builder that does not know it unpacks)")
     p.add_argument("--no-prepare-shaders", action="store_true",
                    help="leave the shaders' preparation to the game's first start (the builder's \"Prepare shaders now\" unticked)")
     p.add_argument("--compile-shaders", choices=tuple(COMPILE_LEVELS),
@@ -2592,6 +2747,8 @@ def main(a=None):
             print("the game was read from this .nup before: reading it again is skipped", flush=True)
             check_unpacked_romfs(romfs, "Your .nup file %s" % a.nup)   # (unpacked by a builder before this check)
             shutil.copytree(kept, exefs)
+        elif romfs_from_build(a.romfs_from, out, stamp, romfs, kept, exefs):
+            shutil.rmtree(game, ignore_errors=True)
         else:
             shutil.rmtree(game, ignore_errors=True)
             with contextlib.suppress(FileNotFoundError):   # (a new unpack is checked again)
