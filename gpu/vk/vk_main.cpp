@@ -450,15 +450,18 @@ bool create_device() {
         if (!presenter_queue_pick(qf.data(), n, dev.queue_family, compute_family, presenter_family, presenter_index))
             presenter_family = UINT32_MAX;
     }
-    // (longshot) AMD's frame generation swapchain's own queues (RX_VK_FG_AMD=1, vk_fg_amd.cpp): AMD's SDK requires its
-    // game, present and image-acquire queues to be three different queues, and its presents must not share a queue with
-    // the replay's submits. Three queues of the graphics family after the replay's (8 on AMD's Windows driver); without
-    // them the feature stays off and the plain swapchain runs
-    uint32_t fg_family = UINT32_MAX;
+    // (longshot) AMD's frame generation swapchain's own queues (the menu's Frame generation by at AMD FSR FG, or
+    // RX_VK_FG_AMD=1: vk_fg_amd.cpp). AMD's SDK requires its game, present and image-acquire queues to be three different
+    // queues, and its presents must not share a queue with the replay's submits. Three queues of the graphics family
+    // after the replay's (8 on AMD's Windows driver), asked for in every run so the row can turn the feature on at once;
+    // without them the feature stays off and the plain swapchain runs
+    const uint32_t gfx_queues = std::min<uint32_t>(families[dev.queue_family].queueCount, 4u);
+    uint32_t fg_family = gfx_queues >= 4 ? dev.queue_family : UINT32_MAX;
     if (fg_amd_requested()) {
-        if (families[dev.queue_family].queueCount >= 4) fg_family = dev.queue_family;
-        else logf("vk: AMD FG: the graphics family has %u queues, 4 needed (the replay's and the SDK's three): off",
-                  families[dev.queue_family].queueCount);
+        if (fg_family == UINT32_MAX)
+            logf("vk: AMD FG: the graphics family has %u queues, 4 needed (the replay's and the SDK's three): off",
+                 families[dev.queue_family].queueCount);
+        else logf("vk: AMD FG: queues 1 to 3 of the graphics family are AMD's (the replay keeps queue 0)");
     }
     static const float priorities[2] = {1.0f, 1.0f};
     std::vector<VkDeviceQueueCreateInfo> qs;
@@ -469,7 +472,7 @@ bool create_device() {
         x.queueFamilyIndex = family, x.queueCount = count, x.pQueuePriorities = priorities;
         qs.push_back(x);
     };
-    queues(dev.queue_family, fg_family == dev.queue_family ? 4u : 1u);
+    queues(dev.queue_family, gfx_queues);
     if (compute_family != UINT32_MAX) queues(compute_family, 1);
     if (presenter_family != UINT32_MAX) queues(presenter_family, presenter_index + 1);
     (void)q;
@@ -716,8 +719,6 @@ bool create_device() {
         vkGetDeviceQueue(dev.device, fg_family, 2, &dev.fg_present_queue);
         vkGetDeviceQueue(dev.device, fg_family, 3, &dev.fg_acquire_queue);
         dev.fg_family = fg_family;
-        logf("vk: AMD FG: AMD's game, present and image-acquire queues are queues 1, 2 and 3 of the graphics family %u "
-             "(RX_VK_FG_AMD=1)", fg_family);
     }
     if (dev.buffer_marker) buffer_markers_init();
     coopmat_init();
@@ -1000,6 +1001,12 @@ bool create_swapchain(uint32_t width, uint32_t height) {
     // back is the window's from here on, and every swapchain call goes through it (vk_fg_amd.cpp). Its new size is a
     // remake in place: the old images' views and semaphores are let go first, and its presents waited for (the SDK's
     // remake would otherwise free images the replay may still write)
+    // (the row or the switch turned AMD's frame generation off: its swapchain goes before the plain one is made below)
+    if (fg_amd_active() && !fg_amd_wanted()) {
+        device_wait_idle_locked();
+        fg_amd_surface_lost();
+        retire_swapchain(false);
+    }
     const bool fg_remake = fg_amd_active();
     if (fg_remake) {
         device_wait_idle_locked();   // (our blits done: they signal the semaphores AMD's presents wait on)

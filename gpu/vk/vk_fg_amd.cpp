@@ -82,12 +82,12 @@ State& st() {
     return s;
 }
 
-bool env_on() {
-    static const bool on = [] {
-        const char* e = getenv("RX_VK_FG_AMD");
-        return e && *e && atoi(e) != 0;
-    }();
-    return on;
+/// RX_VK_FG_AMD when set for this run (0 or 1), over the menu's row. False: the row decides
+bool env_on(bool* value) {
+    const char* e = getenv("RX_VK_FG_AMD");
+    if (!e || !*e) return false;
+    *value = atoi(e) != 0;
+    return true;
 }
 
 void* symbol(const char* name) { return (void*)GetProcAddress(st().lib, name); }
@@ -283,13 +283,27 @@ bool create_fg(uint32_t w, uint32_t h, VkFormat fmt, bool depth_reversed, float 
 
 }  // namespace
 
-bool fg_amd_requested() { return env_on(); }
+bool fg_amd_requested() {
+    bool v = false;
+    if (env_on(&v)) return v;   // (the switch over the menu, for a run)
+    // (the "by" row alone: AMD's makes one frame between each two of the game's, whatever Frame generation's multiplier
+    // says (2x to 8x is the renderer's own and DLSS's). Reading the multiplier here too tore its swapchain down when a
+    // quality preset changed that row mid-run, and the next context was refused)
+    return opts.framegen_by == 2;
+}
+
+bool fg_amd_wanted() {
+    // (AMD's FidelityFX frame generation is AMD's: the SDK's providers run on AMD's Vulkan driver. Its library is Windows's)
+    return fg_amd_requested() && dev.props.vendorID == 0x1002;
+}
 
 bool fg_amd_active() { return st().sc != nullptr; }
 
+bool fg_amd_generating() { return st().fg != nullptr && !st().gen_failed; }
+
 VkResult fg_amd_create_swapchain(const VkSwapchainCreateInfoKHR& ci, VkSwapchainKHR* out) {
     State& s = st();
-    if (!env_on() || s.failed) return VK_ERROR_FEATURE_NOT_PRESENT;
+    if (!fg_amd_wanted() || s.failed) return VK_ERROR_FEATURE_NOT_PRESENT;
     if (!dev.fg_game_queue || !dev.fg_present_queue || !dev.fg_acquire_queue) {
         static bool told;
         if (!told) told = true, logf("vk: AMD FG: the device has no three queues for AMD's presents: the plain swapchain stays");
@@ -499,7 +513,9 @@ VkResult fg_amd_present(const VkPresentInfoKHR* present) {
 namespace mkwvk {
 
 bool fg_amd_requested() { return false; }
+bool fg_amd_wanted() { return false; }
 bool fg_amd_active() { return false; }
+bool fg_amd_generating() { return false; }
 VkResult fg_amd_create_swapchain(const VkSwapchainCreateInfoKHR&, VkSwapchainKHR*) { return VK_ERROR_FEATURE_NOT_PRESENT; }
 void fg_amd_wait_presents() {}
 void fg_amd_surface_lost() {}

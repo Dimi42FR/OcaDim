@@ -5623,7 +5623,8 @@ void present_image(VkImage src, uint32_t sw, uint32_t sh, const int crop[4], VkI
     // (and frame generation's multiplier, swapchain_framegen: a spare image a frame; and swapchain_dlssg: FIFO under V-Sync
     // Auto with DLSS Frame Generation making the frames. It turns to no once, when NGX's answer at the first present is a no
     // or fewer frames than the multiplier asks)
-    const int vsync_now = menu_vsync() * 16 + swapchain_framegen() * 2 + (swapchain_dlssg() ? 1 : 0);
+    // (and AMD's frame generation as the row or RX_VK_FG_AMD asks it: its swapchain takes the window's place, or gives it back)
+    const int vsync_now = menu_vsync() * 32 + swapchain_framegen() * 2 + (swapchain_dlssg() ? 1 : 0) + (fg_amd_wanted() ? 16 : 0);
     const bool vsync_changed = vsync_was >= 0 && vsync_was != vsync_now;
     if (vsync_was < 0) vsync_was = vsync_now;
     if (presenter_surface_lost.exchange(false, std::memory_order_acquire)) {   // (the presenter's present found the surface lost)

@@ -13,12 +13,19 @@
 
 namespace mkwvk {
 
-/// RX_VK_FG_AMD=1: asked for. (Read once; not a promise that it runs.)
+/// (longshot) The menu's Frame generation by at AMD FSR FG (2), or RX_VK_FG_AMD=1 / 0 over it: asked for. (Read each time:
+/// the row applies at once. Not a promise that it runs.)
 bool fg_amd_requested();
+
+/// (longshot) And it can run here: asked for, Windows, an AMD GPU. False: the plain swapchain and the renderer's own frames
+bool fg_amd_wanted();
 
 /// AMD's swapchain owns the window's handle: every swapchain call must go through fg_amd_get_images / fg_amd_acquire /
 /// fg_amd_present, never through the Vulkan ones.
 bool fg_amd_active();
+
+/// And its frame generation context is in place: the frames between the game's are AMD's (the FPS counter's maker name)
+bool fg_amd_generating();
 
 /// The swapchain for ci, AMD's when it can be made. VK_ERROR_FEATURE_NOT_PRESENT: not asked for, not available, or it
 /// refused before a swapchain existed: the caller makes the plain one. Any other result: AMD's context is in place and
