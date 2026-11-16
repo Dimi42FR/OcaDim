@@ -3,6 +3,33 @@
 Tout ce qu'il faut pour reprendre sans rien redécouvrir : où sont les choses, ce qui est fait, ce qui est mesuré,
 ce qui reste, et les pièges qui ont coûté du temps.
 
+## 0. Mise à jour du 16/11 au soir — trois chantiers mesurés, deux fermés
+
+Commits : `e490b62f` (mémoire), `6cbe53be` (chargement), `8ddfcbd9` + `3ac201c5` (coût par draw).
+
+1. **Le magasin zstd de textures est écarté.** Son plafond était le temps des re-décodes : **43 ms par run de 90 s**
+   (0,05 %). La courbe fps est plate de 4 Go à 512 Mo (55,6 → 52,8), et les textures résidentes restent à ~2,8 Go à
+   tous les budgets : `RX_VK_VRAM_MB` force des évictions sans jamais faire payer la pression au driver.
+   → `docs/OCADIM-MEMORY-CENSUS.md`. Sonde `RX_VK_MEM_CENSUS=1` (re-makes, âge du retour, ASTC premier/refait).
+2. **Le chargement ne traduit rien.** 0 traduction, 668 enregistrements lus (344 ms), 209 pipelines créés, 90 du
+   cache du driver. 23 premières utilisations ≥ 10 ms font 39 % du coût, et certaines sont des hits de cache : le
+   pré-construit ne supprime pas la classe de coût. Cette installation n'a **aucune prédiction** (pas de
+   `longshot_pipelines.bin.predicted_keys`, 73 Mo de cache contre 1,4 Go dans `F:\test`).
+   → `docs/OCADIM-PROGRAMS-LOAD.md`, sonde `RX_VK_LOG_PROGRAM_LIFE=1` (existante).
+3. **Le coût par draw est bouclé.** `RX_VK_PROF_FINE=1` (existant, étendu de 8 sections) : `draw()` = **16,2 ms par
+   frame, 5,9 µs par draw**, réparti sans hog (textures 2,43, appel de draw 1,80, pick 1,48, binds descripteurs 1,27,
+   binds vertex 1,20, UBO 1,05). Le GPU fait 1,6 ms : la frame est du CPU d'enregistrement.
+   → `docs/OCADIM-DRAW-COST.md`. **Gain pris** : les notes DLSS/FSR appelées par draw (0,92 ms, deux verrous chacune)
+   sautent quand les cibles sont celles du draw précédent, frame comparée : **0,12-0,17 ms** après.
+   Fermé aussi : plus de threads (`RX_VK_PARALLEL=8` → 53,7 fps) et segments plus fins (`RX_VK_PARALLEL_SEG=8` →
+   53,3) sont **pires** que le défaut (55,3-55,6) ; la segmentation est à son optimum.
+
+**Prochains chiffres à attaquer** (tous dans `build_descriptors`/`draw`), dans l'ordre : textures 2,43 ms (vue 0,85,
+test pointeur storage 0,42, handle 0,25, empreinte 0,15), UBO utilisateur 1,05 ms (2,31 appels par draw), sélection
+de programme 1,48 ms. Les fps d'un run à l'autre ne valent rien ici (la sauvegarde et la zone ont changé plusieurs
+fois) : **comparer les ms du profil, jamais les moyennes de fps**.
+
+
 ## 1. Les trois dossiers, et à quoi ils servent
 
 | Dossier | Ce que c'est | État |
