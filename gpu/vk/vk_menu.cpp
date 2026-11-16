@@ -3657,6 +3657,7 @@ void draw_debug_rows(ui::Ctx& c, float cx0, float cx1, float top, float bottom, 
         if (r.cheat == 0 || r.cheat == 1 || r.cheat == 7 || r.value) return halves_w + pad;
         if (is_share_row(r)) return ui::size_of(c.f.strong, px, "Not saved").x + (tight ? 56 : 60) * s;   // (Save, Saved, Not saved)
         if (is_laptop_row(r)) return ui::size_of(c.f.strong, px, "Applied").x + (tight ? 56 : 60) * s;   // (Apply, Applied)
+        if (is_governor_row(r)) return ui::size_of(c.f.strong, px, "Check").x + (tight ? 56 : 60) * s;   // (Check)
         const std::string v = r.cheat == 11 ? "1.25x" : cheat_value(r.cheat);   // (Movement speed: its widest, the cell kept still)
         const char* const says = cheat_button_text(r.cheat);
         return ui::size_of(c.f.strong, px, v.empty() ? says : v.c_str()).x + (cheat_chooses(r.cheat) ? 68 : tight ? 56 : 60) * s;   // (choice_cell keeps 48 for arrows either way)
@@ -3730,6 +3731,8 @@ void draw_debug_rows(ui::Ctx& c, float cx0, float cx1, float top, float bottom, 
                         row_fixed(r.value));
         } else if (is_share_row(r)) {   // (Save my pipeline list: what the last press did)
             choice_cell(c, va, vb, share_value.empty() ? "Save" : share_value, selected, false, false);
+        } else if (is_governor_row(r)) {
+            choice_cell(c, va, vb, "Check", selected, false, false);
         } else if (is_laptop_row(r)) {
             choice_cell(c, va, vb, laptop_applied ? "Applied" : "Apply", selected, false, false);
         } else if (r.cheat == 0 || r.cheat == 1 || r.cheat == 7) {
