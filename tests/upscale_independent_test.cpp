@@ -57,6 +57,8 @@ struct {
     Pipe scale; VkSampler linear = 0; Img cropped, scaled;
     uint32_t cropped_w = 0, cropped_h = 0, scaled_w = 0, scaled_h = 0;
 } fg;
+// (RX_VK_FG_AMD=1 in production: off here, so the site under test is the renderer's own)
+inline bool fg_amd_active() { return false; }
 bool vkCmdPushDescriptorSetKHR = true;
 int pipe_calls = 0, sampler_calls = 0, image_calls = 0, dispatches = 0, blits = 0, copies = 0, logs = 0;
 int destroyed_pipes = 0, destroyed_layouts = 0, destroyed_sets = 0, waits = 0, flushes = 0;

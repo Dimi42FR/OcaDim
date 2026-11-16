@@ -94,6 +94,36 @@ int env_fsr4() { static const int v = env_switch("RX_VK_FSR4"); return v; }
 int env_xess() { static const int v = xess_rules::env_mode(getenv("RX_VK_XESS")); return v; }
 }  // namespace
 
+namespace {
+// (longshot, RX_VK_FG_AMD=1) one frame's inputs at a time: the chain's thread publishes, the display's thread takes
+std::mutex fg_mu;
+TemporalFgInputs fg_slot;
+bool fg_fresh = false;
+}  // namespace
+
+void temporal_fg_publish(const TemporalFrame& f) {
+    if (!f.depth.image || !f.motion.image) return;
+    std::lock_guard lk(fg_mu);
+    TemporalFgInputs& o = fg_slot;
+    o.depth = f.depth.image, o.depth_format = f.depth.format;
+    o.motion = f.motion.image, o.motion_format = f.motion.format;
+    o.width = f.depth.width ? f.depth.width : f.motion.width;
+    o.height = f.depth.height ? f.depth.height : f.motion.height;
+    o.jitter[0] = f.jitter[0], o.jitter[1] = f.jitter[1];
+    o.near_z = f.near_z, o.far_z = f.far_z, o.fov_y = f.fov_y;
+    o.reset = f.reset;
+    o.depth_reversed = f.depth_reversed;
+    fg_fresh = true;
+}
+
+bool temporal_fg_take(TemporalFgInputs* out) {
+    std::lock_guard lk(fg_mu);
+    if (!fg_fresh) return false;
+    *out = fg_slot;
+    fg_fresh = false;
+    return true;
+}
+
 bool temporal_env_chosen() {
     // (only where the engine asked for runs: else a saved FSR 3.1 stays, not the game's own. DLSS before FSR 4 before XeSS,
     // as below)
@@ -1329,6 +1359,8 @@ bool temporal_upscale(VkCommandBuffer cmd, uint64_t key, bool known, Texture* in
     // (NVIDIA DLSS Frame Generation through NGX, vk_dlss.cpp: this frame's depth, motion and camera for the present's made
     // frames. Nothing unless the run asked for it)
     dlss_fg_inputs(cmd, f, cam.projection, cam.current, cam.jitter, motion);
+    // (longshot, RX_VK_FG_AMD=1: the same depth, motion and camera for AMD's frame generation. The present takes them)
+    temporal_fg_publish(f);
     s.last_frame = now;
     s.drawn_mode = draw_mode;
     s.last_jitter[0] = cam.jitter[0], s.last_jitter[1] = cam.jitter[1];

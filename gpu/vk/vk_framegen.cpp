@@ -20,6 +20,7 @@
 #include <cmath>
 
 #include "vk_framegen.h"
+#include "vk_fg_amd.h"   // (AMD's frame generation: the renderer's own makes none while it runs)
 #include "vk_antilag.h"   // (AMD Anti-Lag 2: which game frame a set shows, antilag_frame / antilag_present_frame)
 #include "vk_dlss.h"   // (NVIDIA DLSS Frame Generation through NGX: dlss_fg_frames)
 #include "vk_reflex.h"   // (NVIDIA Reflex: which game frame a set shows, reflex_frame / reflex_present_frame)
@@ -662,7 +663,8 @@ bool framegen_wanted(int menu_value, int allow) {
 
 bool framegen_on() {
     static const int allow = !getenv("RX_VK_FRAMEGEN") || atoi(getenv("RX_VK_FRAMEGEN")) != 0;
-    return framegen_wanted(opts.framegen, allow) && !dev.offscreen && !fg.failed;
+    // (RX_VK_FG_AMD=1: AMD's frame generation makes the frames between the game's; the renderer's own would stack on them)
+    return framegen_wanted(opts.framegen, allow) && !dev.offscreen && !fg.failed && !fg_amd_active();
 }
 
 // Ultrawide's menus (the Insert menu's Ultrawide menus): which of nx2/oot_wide.py's keep-list screens keep the whole picture, told

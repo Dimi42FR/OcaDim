@@ -38,4 +38,10 @@ VkResult fg_amd_get_images(VkSwapchainKHR sc, uint32_t* count, VkImage* images);
 VkResult fg_amd_acquire(VkSwapchainKHR sc, uint64_t timeout, VkSemaphore semaphore, uint32_t* index);
 VkResult fg_amd_present(const VkPresentInfoKHR* present);
 
+/// (P2) One game frame's frame generation: the frame's command buffer gets AMD's preparation (depth, motion, camera),
+/// and the configuration the swapchain's present uses to generate between this frame and the one before. Called once a
+/// frame right after the picture is recorded, before the submit; true when the frame was configured (generation on or
+/// off, its inputs being there or not). No-op without AMD's swapchain.
+bool fg_amd_frame(VkCommandBuffer cmd, VkSwapchainKHR sc, VkFormat format, VkExtent2D display);
+
 }  // namespace mkwvk

@@ -112,6 +112,21 @@ struct TemporalFrame {
     /// else that reads this frame's depth (frame generation, other passes) must look here, not assume the plain depth
     bool depth_reversed = false;
 };
+/// (longshot, RX_VK_FG_AMD=1) One frame's inputs for AMD's frame generation, as the chain made them. The chain publishes
+/// one per frame on the recording thread; the present takes it once. A take that finds nothing is a frame without a
+/// scene upscale (a menu, a movie, the start-up screen): frame generation stays off for it.
+struct TemporalFgInputs {
+    VkImage depth = VK_NULL_HANDLE, motion = VK_NULL_HANDLE;
+    VkFormat depth_format = VK_FORMAT_UNDEFINED, motion_format = VK_FORMAT_UNDEFINED;
+    uint32_t width = 0, height = 0;   // (the render size the depth and motion are at)
+    float jitter[2]{};                // (render pixels, x right and y down)
+    float near_z = 0.1f, far_z = 1000.0f, fov_y = 1.0f;
+    bool reset = false;               // (no history: the first frame, a gap, a camera cut)
+    bool depth_reversed = false;      // (the engine's fsr_depth wrote 1 - d: FSR 3.1 only)
+};
+void temporal_fg_publish(const TemporalFrame& f);
+bool temporal_fg_take(TemporalFgInputs* out);
+
 /// An engine: plain functions, each called with the chain's lock held, on the recording thread
 struct TemporalEngine {
     const char* name;           // (for the log and the status line: "NVIDIA DLSS", "AMD FSR 4")

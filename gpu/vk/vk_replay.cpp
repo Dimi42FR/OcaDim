@@ -5799,6 +5799,9 @@ void present_image(VkImage src, uint32_t sw, uint32_t sh, const int crop[4], VkI
         }
     }
     menu_record(f.cmd, index, dev.swap_extent.width, dev.swap_extent.height);   // (longshot) Dear ImGui's overlays, over all of it
+    // (longshot, RX_VK_FG_AMD=1) this frame's inputs for AMD's frame generation: the preparation in this frame's commands,
+    // the configuration its present's callback uses to generate between it and the one before
+    if (fg_amd_active()) fg_amd_frame(f.cmd, dev.swapchain, dev.swap_format, dev.swap_extent);
     image_barrier(f.cmd, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
     if (vkEndCommandBuffer(f.cmd) == VK_ERROR_DEVICE_LOST) device_lost();
     // after the image's acquisition. (Not on the timeline: one queue runs submits in order, and a wait for a value
