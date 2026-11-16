@@ -24,6 +24,9 @@ mesurés, et un Setup qui compile le jeu chez le joueur.
 Le jeu **n'est pas** dans ce dépôt et n'y sera jamais. Rien n'est distribué : tout se compile sur ta machine, à partir de
 ton `.nup`.
 
+**27 heures.** C'est le temps qu'il a fallu pour sortir cette première version : du premier commit (14 novembre, 23:53)
+à la version livrée (16 novembre, 03:19). La frame generation d'AMD y est entrée dans la dernière nuit.
+
 **Tu viens tester ?** Il y a trois choses à essayer ce soir et quatre façons d'aider sans coder, plus bas, dans
 **À tester chez toi**. Un retour qui dit *où ça casse* vaut dix « c'est bien ».
 
@@ -58,7 +61,7 @@ accord, le log dit **pourquoi** et le chemin simple reste.
 | Ce qui a été mesuré | Résultat |
 |---|---|
 | **Une zone chargée** (la Place du Château, 2765 draws), FSR 4 en 2134x1200 → 2560x1440 | **44,1 fps réels** — c'est le cas difficile — 36 000 présents, **42 130 affichées**, **6 148 générées**, aucun *device lost* |
-| **Les zones normales**, hors des plus chargées | **69-76 fps réels** |
+| **Les zones normales**, hors des plus chargées | **60 à 76 fps réels selon l'endroit** — **autour de 60 le plus souvent**, 69-76 dans les plus légères |
 | Activé **par le menu seul** (aucune variable) | contexte 4.0.2 en **118 ms**, 10 800 présents, 15 729 affichées, **4 931 générées**, swapchain refaite en place à 2560x1373 et contexte refait en **86 ms**, aucun refus, aucun écran noir |
 
 **Limite connue** : le HUD et les éléments 2D bougent avec les frames générées — c'est la limite de la FG sur un HUD
@@ -140,7 +143,7 @@ ce qui a besoin de **ton** PC pour être confirmé. Le but n'est pas qu'on te cr
 
 | Ce qu'il y a en plus | Où le voir | L'état |
 |---|---|---|
-| **La frame generation d'AMD (FSR) dans le jeu** : une image entre deux des tiennes, nourrie par la vraie profondeur, les vrais vecteurs de mouvement, le jitter et la caméra de la scène, et choisie au menu | Graphics → *Frame generation by* → **AMD FSR FG** | mesuré ici sur RX 9070 XT : 44,1 fps en zone chargée, 69-76 en zone normale. **À confirmer** sur RDNA 2 et 3, sur portable |
+| **La frame generation d'AMD (FSR) dans le jeu** : une image entre deux des tiennes, nourrie par la vraie profondeur, les vrais vecteurs de mouvement, le jitter et la caméra de la scène, et choisie au menu | Graphics → *Frame generation by* → **AMD FSR FG** | mesuré ici sur RX 9070 XT : 44,1 fps en zone chargée, **autour de 60 à 76** en zone normale. **À confirmer** sur RDNA 2 et 3, sur portable |
 | **Deux réparations du jeu au-dessus de 60 fps** : les sols qui portent un personnage, et les surfaces d'eau en pas fixes | Graphics → *Above-60 fixes* | mesuré ici (voir le test de la plateforme, plus bas). **À confirmer** chez toi |
 | **Six leviers CPU mesurés** : batched submits, prefetch des descripteurs, affinité CCX, workers et segments du replay, barrières d'ordre de draw | Graphics, les lignes signées « Added by Dimi42FR » | batched submits : 33-41 → 46-61 fps sur RADV ; prefetch : ~215 000 scans sautés. **À confirmer sur NVIDIA et Intel** |
 | **Un Setup qui compile chez le joueur** : ton `.nup` vérifié avant tout, les outils vérifiés par SHA-256, un seul build à la fois, reprise après un abandon, rien qui sorte de la machine | `OcaDimSetup.exe` | utilisé ici. **À confirmer** : une installation complète sur un PC vierge |
