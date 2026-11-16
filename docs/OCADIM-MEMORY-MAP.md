@@ -36,10 +36,15 @@ moyennes, pas d'une pièce unique.
 ## Ce qui reste vraiment
 
 1. **Le cache de pipelines : 1 400 Mo chez le driver**, dont la préparation a rempli 32 778 pipelines pour toutes les
-   zones. Ce que le jeu en utilise par session, à côté : les fichiers de jeu pèsent **1,2 Mo** (« 6 play files merged
-   (1265 KB) »). Un découpage par zone (l'idée 3 de la liste) est le seul poste à trois chiffres qui reste, et il
-   demanderait que la préparation écrive des caches par zone — un projet, pas un réglage.
-2. **Le mode `create`** : −1,3 Go de RAM, bloqué par un plantage driver sur une grosse traduction. C'est de la
+   zones. Un découpage par zone (l'idée 3 de la liste) bute sur une donnée : **la liste d'états n'a aucune étiquette de
+   zone** (c'est « ce que le jeu a demandé », fusionné par le builder), donc le runtime ne peut pas choisir « le cache de
+   la zone où l'on est ». Il faudrait que la préparation (nx2/`assets/pipeline_states/`) enregistre les zones — un projet
+   qui touche le builder et le format, pas un réglage.
+2. **Ne pas charger ce cache du tout ?** Mesuré, et écarté : sans lui, le chargement d'une zone tombe à **3,2 fps sur
+   les 120 premières frames contre 11,1** (≈ 27 s de plus), sur AMD où le cache du driver persiste pourtant. Le fichier
+   gagne sa place ; il n'y a pas de gras à couper côté runtime.
+3. **Le mode `create`** : −1,3 Go de RAM, bloqué par un plantage driver sur une grosse traduction. C'est de la
    robustesse avant d'être de la mémoire.
-3. Les 4 Go de textures sont le jeu de travail ; les réduire veut dire évincer ce qui sert, et on a mesuré ce que ça coûte
+4. Les 4 Go de textures sont le jeu de travail ; les réduire veut dire évincer ce qui sert, et on a mesuré ce que ça coûte
    (et que le blanc vient des uploads reportés, pas du budget).
+
