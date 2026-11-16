@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define MKWVK_API_VERSION 26
+#define MKWVK_API_VERSION 27
 enum { HOS_OPT_CHEAT_HEARTS = 32, HOS_OPT_CHEAT_FLIGHT, HOS_OPT_CHEAT_ACTION, HOS_OPT_CHEAT_CAMERA, HOS_OPT_CHEAT_SPEED };
 /* (longshot) the Gameplay tab's Text size (host/oot_text_size.c): 0 the game's, 1 110%, 2 125%, 3 150%, 4 175% */
 enum { HOS_OPT_TEXT_SIZE = 10 };
@@ -261,6 +261,10 @@ typedef struct MkwVkHost {
        keep up with the sound, [2] shown late (over 50 ms after the one before), [3] decoding time in ns, [4] decoders that did
        not start (another one took over). Returns the build's version (LONGSHOT_VERSION) */
     const char *(*perf_info)(char *map, int cap, int64_t movie[5]);
+    /* Version 27 (longshot): the frame trace's main-thread columns (RX_VK_FRAME_TRACE, gpu/vk/vk_replay.cpp): the game's main
+       thread's (sead::MainThread) time so far, in ns: [0] waiting for a virtual core, [1] blocked in a wait or sleep, both
+       counted while fps_timing is on, [2] its CPU time. 0 before the game names that thread */
+    int (*main_thread_times)(int64_t out[3]);
 } MkwVkHost;
 
 /* One completed temporal-upscale sample; all zero while inactive. */

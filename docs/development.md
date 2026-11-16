@@ -499,11 +499,39 @@ case-sensitive, and an unknown one is ignored.
 
 ### Time and profiles
 
+#### Recording a stutter
+
+A stutter is a rare frame, so it is recorded as it happens rather than looked for in a whole-run profile afterwards.
+`HOS_RECORD_STUTTERS=1` (in the environment or `longshot_env.txt`; it is the line [Report slow
+performance](performance-report.md#if-it-stutters) gives players) turns on, for one run, everything below at once:
+
+- **The slow-frame recorder** (`HOS_SLOW_FRAMES`) into the game folder's `logs/slow_frame-<n>.txt`: each frame of 50 ms
+  or more, with the 250 ms before it, sampled on every game and renderer thread. Read one with
+  `python -I scripts/crit.py logs/slow_frame-1.txt` (the critical path: what ran, and what the main thread waited in
+  while nothing did) or `scripts/cpu_report.py`. They name the frames from the same build's linker maps
+  (`RX_MAPS=<folder>`; on Linux the game folder, its `longshot` and `longshot_vk.so`), so read a player's files against
+  the build they played.
+- **The frame trace** (`RX_VK_FRAME_TRACE=1`), `logs/longshot_frames.csv`: a line a present. A slow frame's line says
+  whether the game's main thread was on the CPU (`main_cpu_ms`), blocked (`main_blocked_ms`), or waiting for a virtual
+  core (`main_vcore_ms`), and what the renderer waited for in it.
+- **The long waits for a virtual core** (`HOS_VCORE_LOG_MS`, on by default anyway): a log line for each wait of 50 ms or
+  more, naming the thread whose release ended it.
+
+What it sets, it sets only where the switch's own name is not set already (`HOS_SLOW_FRAMES=<path>` from the environment
+goes first, `RX_VK_FRAME_TRACE=0` leaves the trace off), and the log's `env: HOS_RECORD_STUTTERS:` line says what it
+turned on. It costs frame rate (the recorder samples every 4 ms): a diagnostic, off by default, not for fps numbers. A
+stutter that follows a pattern (one per load, the same place each time) is also worth a run of `HOS_CHAIN` there, for each
+frame's waits and wake-ups.
+
+#### The switches
+
 | Switch | What it does |
 |---|---|
+| `HOS_RECORD_STUTTERS=1` | [Recording a stutter](#recording-a-stutter): the slow-frame recorder into `logs/slow_frame-<n>.txt` and the frame trace, in one switch that `longshot_env.txt` takes. Off by default |
 | `HOS_PROFILE=<seconds>` | Every interval, the busiest threads in the log; it also starts the samplers below |
 | `HOS_SAMPLE=<thread>` + `HOS_SAMPLE_FILE=<file>` | One thread's stacks, sampled every millisecond (needs `HOS_PROFILE`); `python -I scripts/prof.py <file>` reads them |
 | `HOS_SAMPLE_ALL=<file>` | Every game and renderer thread every 2 ms while `<file>.go` exists (needs `HOS_PROFILE`); `scripts/crit.py`, `scripts/vkprof.py`, `scripts/hotlist.py` and `scripts/cpu_report.py` (the [CPU profile](cpu-profile.md): CPU time by category, thread and function, and what limits the frame) read it (on Linux with `RX_MAPS=<game folder>`: they name frames from its `longshot` and `longshot_vk.so`) |
+| `HOS_SLOW_FRAMES=<path>`, `HOS_SLOW_FRAME_MS=<ms>`, `HOS_SLOW_FRAMES_EVERY_MS=<ms>`, `HOS_SLOW_FRAMES_MAX=<n>` | The slow-frame recorder (`host/slow_frames.c`): every game and renderer thread sampled every 4 ms for the whole run into a ring in memory, and when a present comes 50 ms or more after the one before, that frame's samples and the 250 ms before it written to `<path>-<n>.txt` in `HOS_SAMPLE_ALL`'s format (`scripts/hotlist.py`, `scripts/crit.py`, `scripts/cpu_report.py` read it); at most 40 files a run, a second apart, each named in the log. It costs frame rate; not with `HOS_SAMPLE_ALL`. A path, so from the environment only, not `longshot_env.txt`: `HOS_RECORD_STUTTERS=1` sets it to `logs/slow_frame` |
 | `HOS_CHAIN=<file>` | While `<file>.go` exists, every wait of a game thread that blocks, every signal that can end one, every sleep and every present, with the time, the thread, the object and the caller; written to `<file>` when `<file>.go` goes away (about 2 million records at most). `python -I scripts/chain.py <file> [<HOS_SAMPLE_ALL file>]` walks each frame back from its present (the thread that ran, the wait that stopped it, the thread whose signal ended it) and prints the frame's critical path by thread: running, wake-ups, sleeps, and, with a sample file of the same run, the functions on it |
 | `HOS_HLE_STATS=1` | About every 5 s, calls of each HLE function and host call (`hle:` lines, most called first), with measured monotonic clock boundaries. `scripts/cpu_report.py --calls` joins complete blocks to native frames in that clock span; per-call occupancy estimates require the same run's timestamped stacks. Off by default; take performance numbers from a run without counting |
 | `HOS_THREAD_TIMES=<seconds>` | Every interval, the threads that used over 5% of a core |
@@ -513,6 +541,7 @@ case-sensitive, and an unknown one is ignored.
 | `HOS_MOVIE_PACE=0` | Leave the pacing at the Game frame rate cap row while a movie plays, instead of raising a 60 FPS cap to 240 for the movie's pictures (issue #73); an explicit 30 FPS cap remains 30 |
 | `RX_VK_PERF_INTERVAL=<60-840>` | Seconds of play between two performance summaries, with Send performance statistics on (default 300; at most 840, a minute under the relay's 900 s a summary): [performance statistics](performance-statistics.md#switches) |
 | `RX_VK_FRAME_LOG=<csv>` | A CSV line per present: frame, seconds, frame time in ms. Also works with `HOS_HEADLESS`: CPU intervals after submitting the offscreen copy, without swapchain/display waits. Not `RX_VK_FRAMELOG` (no underscore: pictures, above) |
+| `RX_VK_FRAME_TRACE=1` | `logs/longshot_frames.csv`: a line a present with what the frame did (waits for pipelines, translation, uploads, the memory sync, the GPU behind, the read-backs' and the capture's waits), then the frame as the FPS counter's Breakdown splits it (`game_ms`, `render_ms`, `gpu_wait_ms`, `pace_ms`, `wait_render_ms`, `wait_gpu_ms`, `wait_main_ms`; measured whatever the counter shows) and the game's main thread's own time in the frame: on the CPU (`main_cpu_ms`), blocked in waits and sleeps (`main_blocked_ms`) and waiting for a virtual core (`main_vcore_ms`); the frame less those three is its time running but off the CPU |
 | `RX_VK_PRESENTS_AHEAD=<1-8>` | How many presents the game may hand over ahead of the render thread (`RX_VK_ASYNC=1`; 1 by default). Not `RX_VK_PRESENT_AHEAD` |
 | `RX_VK_PRESENT_AHEAD=0` | Frame generation's copies into the window submitted each at its own time, as before #1702 (default on: a set's copies go to the GPU together). Not `RX_VK_PRESENTS_AHEAD` |
 | `RX_VK_PASS_TIMING=1` or `2` | GPU time per pass (2: per program too), logged every 600 presents |
@@ -652,6 +681,7 @@ Pipeline-cache file ownership, temporary storage and failure behavior are descri
 | `RX_VK_FIFO=1`, `RX_VK_IMMEDIATE=1` | V-Sync On (FIFO) or Off (immediate) for one run, over the menu's V-Sync row |
 | `HOS_VCORES=0`, `HOS_CORES=<1..8>`, `HOS_RESERVE_CORE=0` | No virtual cores; the cores the game sees (6); no core kept for the replay (one is, with 8 or more logical processors) |
 | `HOS_VCORE_STARVE_US=<microseconds>` | A game thread that has waited this long for a virtual core (default 1000000, 1 s; 0: never) goes before every other waiter at the next release of a core it may use, and asks the holder to give the core up at its next checkpoint whatever the holder's priority, so a wait that better threads keep winning ends in a grant, not in the escape after 2 s (`HOS_VCORE_ESCAPE_US`, `HOS_VCORE_ESCAPE_EQ_US`). The `vcores:` line every 5 s counts these grants (`starved grants`) |
+| `HOS_VCORE_LOG_MS=<ms>` | A game thread's wait for a virtual core this long (default 50; 0: none) is logged with its cause: the thread whose release ended it (its priority, how long it had held the core, how long after it was asked to give it up it did), or how it ended otherwise, and the holders of the cores it may use as it ends. The first 200 a run; the 5 s `vcores:` line counts them all |
 | `HOS_NATIVE_ZSTD=1/2`, `HOS_NATIVE_ZSTD_FRAMES` (set) | The game's zstd decodes on the host's libzstd 1.5.7 (`host/hos_zstd.c`), both off by default: `HOS_NATIVE_ZSTD` the stream decode (ParallelDecompThread; 1 gives the virtual core up while it decodes, 2 keeps it), `HOS_NATIVE_ZSTD_FRAMES` the resource loaders' whole-buffer decode (the ARes_Loading threads). The log names each switch that is on, and each kind of decode that still runs lifted, once |
 | `HOS_SHADOW_BUCKET=<step>` | The storage a character's shadow map reserves (`host/shadow_slot.h`). OoT sizes each near character's square depth map anew every frame (384 from far, up to 1920 near) and makes a frame's render targets one after another in a first-fit heap, so a map a few pixels larger moved every target after it to a new address: 15-16 textures made a frame in Castle Town's market with the camera turning. Such a map is answered the storage size and alignment of the next multiple of the step up (384 by default: 768, 1152, 1536, 1920), so the targets after it stay where they are until it crosses a step; the texture keeps its own size. `0`: every texture its own storage, as before |
 
@@ -1242,7 +1272,7 @@ under Audio with its existing settings keys and behavior unchanged.
 The host reads the startup output preference from `hos_options_file()`, the same settings path the menu receives through
 `MkwVkHost.options_path`: `HOS_OPTIONS_FILE`, then `--user`, otherwise beside the game. A missing or unchosen file means
 Default, without independently falling back to another settings file. API version 24 appends the playback callbacks after
-version 22's `take_text` and version 23's `options_path`, version 25 the microphone test's `mic_test`, and version 26 the performance summary's `perf_info` after it; build the host and renderer together. `tests/test_audio_output_devices.py`
+version 22's `take_text` and version 23's `options_path`, version 25 the microphone test's `mic_test`, version 26 the performance summary's `perf_info` and version 27 the frame trace's `main_thread_times` after it; build the host and renderer together. `tests/test_audio_output_devices.py`
 checks their positional wiring and layout, and `tests/test_audio_output_preferences.py` compiles the actual settings-path
 and preference modules together against synthetic settings files, without enumerating or opening a device.
 

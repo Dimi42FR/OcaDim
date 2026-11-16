@@ -4795,7 +4795,8 @@ void status_tick() {
         FILE* f = fopen(log_path("longshot_frames.csv").c_str(), "w");   // (the game folder's logs/: vk_paths.h)
         if (f) fprintf(f, "frame,ms,pipe_waits,pipe_wait_ms,left_out,translate_ms,uploads,upload_mb,textures,memsync_ms,pipelines_ms,"
                           "uploads_ms,programs_ms,slot_wait_ms,gpu_behind_ms,draw_ms,desc_ms,cmds_ms,tex_lookup_ms,textures_gone,"
-                          "late_wait_ms,readback_wait_ms,tex_frame_ms\n");
+                          "late_wait_ms,readback_wait_ms,tex_frame_ms,game_ms,render_ms,gpu_wait_ms,pace_ms,wait_render_ms,"
+                          "wait_gpu_ms,wait_main_ms,main_cpu_ms,main_blocked_ms,main_vcore_ms\n");
         return f;
     }();
     if (trace && last_ns) {
@@ -4813,13 +4814,25 @@ void status_tick() {
         // texture_frame as a whole (the present's eviction and sweeps; the read-back's wait is inside it when an eviction asked))
         static int64_t l_late, l_rb, l_tf;
         const int64_t late = memory_late_wait_ns(), rb = texture_readback_wait_ns(), tf = texture_frame_ns();
-        fprintf(trace, "%llu,%.2f,%lld,%.2f,%lld,%.1f,%lld,%.2f,%zu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%llu,%.2f,%.2f,%.2f\n",
+        // (longshot) the game's frame as the FPS counter's Breakdown splits it (vk_fps.cpp: measured while the trace is on; the
+        // presenting thread's frame, which with the render thread on is the game's present before this one), and the game's main
+        // thread's own time over the trace's frame (MkwVkHost main_thread_times): on the CPU, blocked in waits and sleeps, and
+        // waiting for a virtual core. Its time running but off the CPU (the system's other work) is the frame less the three
+        const fps_stats::Frame ff = fps_last_frame();
+        static int64_t l_mt[3];
+        int64_t mt[3] = {0, 0, 0};
+        if (host->main_thread_times) host->main_thread_times(mt);
+        fprintf(trace, "%llu,%.2f,%lld,%.2f,%lld,%.1f,%lld,%.2f,%zu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%llu,%.2f,%.2f,%.2f,"
+                       "%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f\n",
                 (unsigned long long)frames, (now_ns - last_ns) / 1e6, (long long)(pw - l_pw), pwms - l_pwms, (long long)(ps - l_ps),
                 tr - l_tr, (long long)(up - l_up), (upb - l_upb) / 1048576.0, texture_count(), dp(PROF_MEMSYNC), dp(PROF_PIPE),
                 dp(PROF_UPLOAD), dp(PROF_PROGRAM), dp(PROF_SLOTWAIT), (st_wait_ns - l_wait) / 1e6, dp(PROF_DRAW), dp(PROF_DESC),
                 dp(PROF_CMDS), dp(PROF_TEXGET), (unsigned long long)(gone - l_gone), (late - l_late) / 1e6, (rb - l_rb) / 1e6,
-                (tf - l_tf) / 1e6);
+                (tf - l_tf) / 1e6, ff.part[fps_stats::kGame], ff.part[fps_stats::kRender], ff.part[fps_stats::kGpuWait],
+                ff.part[fps_stats::kPace], ff.part[fps_stats::kWaitRender], ff.part[fps_stats::kWaitGpu], ff.part[fps_stats::kWaitMain],
+                (mt[2] - l_mt[2]) / 1e6, (mt[1] - l_mt[1]) / 1e6, (mt[0] - l_mt[0]) / 1e6);
         l_gone = gone, l_late = late, l_rb = rb, l_tf = tf;
+        std::memcpy(l_mt, mt, sizeof l_mt);
         if (frames % 60 == 0) fflush(trace);
         l_ps = ps, l_pw = pw, l_pwms = pwms, l_up = up, l_upb = upb, l_tr = tr, l_wait = st_wait_ns;
         std::memcpy(l_prof, prof_ns, sizeof l_prof);

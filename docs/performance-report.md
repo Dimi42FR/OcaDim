@@ -28,6 +28,19 @@ Without any of these lines, the log already records the frame rate and the sprea
 On Windows, check that the file isn't really called `longshot_env.txt.txt`: in File Explorer, turn on **View → Show →
 File name extensions**.
 
+### If it stutters
+
+If the problem is short freezes or hitches rather than a low frame rate all the time, add one more line:
+
+```
+HOS_RECORD_STUTTERS=1
+```
+
+Each time a frame takes 50 ms or longer, the game then writes down what every part of it was doing during that frame,
+into the `logs` folder in the game folder: a file `slow_frame-1.txt` for the first stutter, `slow_frame-2.txt` for the
+next, and so on (40 at most). It also writes `longshot_frames.csv` there, a line for every frame, so the team can see
+how each stutter fits in with the frames around it. It makes the game a little slower while it is on.
+
 ## 2. Play where it's slow
 
 1. Start the game. If it was already running, close it and start it again, because it only reads the file at startup.
@@ -43,17 +56,21 @@ File name extensions**.
 Send the team, on [Discord](https://discord.gg/magicbean) or with a [report](https://git.magicbean.dev/MagicBeanDev/Longshot/issues/new):
 
 - the **bug report folder** from step 3, and `longshot_log.txt` from the game folder's `logs` folder;
+- if you added `HOS_RECORD_STUTTERS=1`: the `slow_frame-*.txt` files and `longshot_frames.csv` from the same `logs`
+  folder (zip them if there are many), and say about when in your play the worst stutters were;
 - **where** you were in the game, and **what you did** there;
 - your **settings**: the quality preset, render resolution, upscaler, frame generation and V-Sync (or a screenshot of
   the menu);
 - your **graphics card and driver version**.
 
-Send nothing else from the game folder: no game files, keys or saves.
+Send nothing else from the game folder: no game files, keys or saves. The files above hold only times, the names of the
+game's threads and addresses in its code, nothing of yours.
 
 ## 4. Turn it off again
 
 Delete `longshot_env.txt`, or the lines you added to it. Measuring costs a little speed, so don't leave it on while you
-play normally.
+play normally. You can delete the `slow_frame-*.txt` files and `longshot_frames.csv` once they are sent; the next run
+with the line writes them again.
 
 If you already had a `longshot_env.txt` before step 1 (with a workaround from [common problems](common-issues.md), for
 example), add the lines to it rather than replacing it, and remove only those lines afterwards.
