@@ -78,6 +78,9 @@ std::map<uint64_t, Pool> imported;
 #include "rb_table.inc"
 uint64_t mirror_epoch = 0;
 bool mirror_upload = false;
+uint64_t mem_rec_value = 0;
+void early_in_place_write(uint64_t, uint64_t, uint64_t) {}  // early readback tracking is exercised separately
+thread_local int ec_kind = 0;   // (RX_VK_LOG_EARLY_CHECK's kind: tests/test_readback_early.py)
 #include "rb_writeback.inc"
 std::vector<WriteBack> writebacks;
 void mirror_sync(Pool& p) {   // (model: no CPU page is dirty here)
