@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define MKWVK_API_VERSION 25
+#define MKWVK_API_VERSION 26
 enum { HOS_OPT_CHEAT_HEARTS = 32, HOS_OPT_CHEAT_FLIGHT, HOS_OPT_CHEAT_ACTION, HOS_OPT_CHEAT_CAMERA, HOS_OPT_CHEAT_SPEED };
 /* (longshot) the Gameplay tab's Text size (host/oot_text_size.c): 0 the game's, 1 110%, 2 125%, 3 150%, 4 175% */
 enum { HOS_OPT_TEXT_SIZE = 10 };
@@ -255,6 +255,12 @@ typedef struct MkwVkHost {
        Call every menu tick (enabled=0 releases only the test reference). Does not play or save capture.
        Result: 1 testing, 2 capture open, 4 default fallback, 8 fresh samples, 16 clipping, 32 mic Off. */
     int (*mic_test)(int enabled, int gain, int *levels);
+    /* (version 26, longshot) the performance summary (gpu/vk/perf_report.cpp), asked about once a second while the launcher's
+       Send performance statistics is ticked: the map Link is in and his age ("Kokiri Forest (child)", as the log's map: line;
+       "" before a save is loaded) into map, and the movies' totals so far (host/nn_video.c): [0] pictures shown, [1] skipped to
+       keep up with the sound, [2] shown late (over 50 ms after the one before), [3] decoding time in ns, [4] decoders that did
+       not start (another one took over). Returns the build's version (LONGSHOT_VERSION) */
+    const char *(*perf_info)(char *map, int cap, int64_t movie[5]);
 } MkwVkHost;
 
 /* One completed temporal-upscale sample; all zero while inactive. */

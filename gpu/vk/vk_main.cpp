@@ -25,6 +25,7 @@
 static_assert(mkwvk::kQueueGraphics == VK_QUEUE_GRAPHICS_BIT && mkwvk::kQueueCompute == VK_QUEUE_COMPUTE_BIT);
 #include "gpu_choice.h"
 #include "vk_menu.h"
+#include "vk_bug_report.h"
 #include "auto_settings.h"
 #include "vk_dlss.h"
 #include "vk_fsr4.h"
@@ -36,6 +37,7 @@ static_assert(mkwvk::kQueueGraphics == VK_QUEUE_GRAPHICS_BIT && mkwvk::kQueueCom
 #include "vk_programs.h"
 #include "mesh_mode.h"
 #include "crash_markers.h"   // (mkwvk_close_asked: a close is not a crash)
+#include "vk_fps.h"
 #ifndef LONGSHOT_ENV_H   // (env_on: the switches' one rule)
 #include "longshot_env.h"
 #endif
@@ -1584,6 +1586,8 @@ const char* describe() {
 MkwVkRenderer table;
 
 } // namespace
+/// (longshot) The shaders are being prepared (the start-up screen): the performance summary's "map" then (perf_report.cpp)
+bool shaders_preparing() { return prep_running.load(std::memory_order_relaxed); }
 } // namespace mkwvk
 
 // (longshot) The window is being closed (host/display.c, host/posix/display_sdl.c, before they end the process), or the game quit
@@ -1600,6 +1604,7 @@ __attribute__((visibility("default")))
 void mkwvk_close_asked(void) {
     using namespace mkwvk;
     programs_census_log("close");
+    perf_report_final(-1);    // (the performance summary's last: ExitProcess is _exit on Linux, so no atexit runs there)
     module_ids_flush();
     page_table_census_log("close");   // (the guest pools the page table cannot reach: how many came, vk_memory.cpp)
     fsr4_close();             // (AMD FSR 4's tuned layers: their background builds stopped first, what they made then saved below)
@@ -1653,6 +1658,10 @@ const MkwVkRenderer* mkwvk_init(const MkwVkHost* h) {
          dev.props.driverVersion, dev.mesh_shader ? "yes" : "no", dev.external_memory_host ? "yes" : "no",
          dev.graphics_pipeline_library ? "yes" : "no");
     logf("vk: driver: %s", driver_text().c_str());   // (the builders' Save my pipeline list reads it: nx2/pipeline_share.py)
+    // (the crash report's facts, as the bug report words them: host/hos_crash_dialog.h reads the last of each)
+    logf("report: gpu %s", device_report_text().c_str());
+    logf("report: cpu %s", mkwvk::bug_report::cpu_text().c_str());
+    logf("report: os %s", mkwvk::bug_report::os_text().c_str());
     if (!dev.mesh_shader && !dev.mesh_fallback && !env_on("RX_VK_NO_MESH_WARNING")) {
         // (the game draws its foliage, grass and many effects with mesh shaders: without them those draws are left out and the
         // picture is broken (an RX 580's "static"-like scenes, 2026-11-08). Said once, on its own thread, and the game goes on.)

@@ -3097,8 +3097,20 @@ def main(a=None):
     if tag:
         with open(os.path.join(out, "longshot_version.txt"), "w", encoding="utf-8", newline="\n") as f:
             f.write("version=%s\n" % tag)
+            # (packaged tools (a tag comes from their VERSION or version.txt; a checkout has neither): their sources'
+            # fingerprint, as the game's first log line names it. The crash report's release flag (host/hos_crash_dialog.c) wants
+            # the two equal and a release's version, so a checkout's build, or a log from another build of the folder, is not a
+            # release)
+            import version as _version
+            f.write("source=%s\n" % _version.fingerprint(ROOT))
             if os.environ.get("LONGSHOT_BUILDER_EXE"):
                 f.write("builder=%s\n" % os.environ["LONGSHOT_BUILDER_EXE"])
+            # (where the crash window's Report automatically posts the report, and the issue its Sent page may link to: the game
+            # sends it itself, with the system's curl (host/hos_crash_dialog.c). Either left out of nx2/addresses.ini: no Send)
+            import addresses as _addresses
+            reports, issue = _addresses.address("crash_reports"), _addresses.address("crash_issue")
+            if reports.startswith("https://") and issue.startswith("https://"):
+                f.write("crash_reports=%s\ncrash_issue=%s\n" % (reports, issue))
     PHASES.part("pipeline lists, icon and stamps")
     # (the game's code as read: written again by every build, so not left behind in the work folder. The translated code (sa\gen)
     # and the compiled objects stay: the next build skips the lift when nothing it reads changed (#428) and compiles only what

@@ -63,6 +63,7 @@ int hos_mic_test(int enabled, int gain, int *levels);
 void hos_bind(int set, int button, int slot, int code);
 int hos_prompts_face(void);         /* prompts.c */
 int hos_prompts_live_parts(void);   /* prompts.c */
+const char *hos_perf_info(char *map, int cap, int64_t movie[5]);   /* hos_main.c: the performance summary's map and movies */
 #if defined(A64_WRITE_TRACK) && !defined(__EMSCRIPTEN__)
 void hos_mark_written(const void *p, size_t n);
 #endif
@@ -274,7 +275,7 @@ static const MkwVkHost vk_host = {
     host_romfs_dir, host_wide_menus, host_slept_ns, host_fps_timing, hos_prompts_live_parts, host_screen_size,
     host_take_text, hos_options_file,
     hos_audio_output_count, hos_audio_output_info, hos_audio_output_select, hos_audio_output_state,
-    hos_mic_test,
+    hos_mic_test, hos_perf_info,
 };
 
 static const MkwVkRenderer *vk;   /* the Vulkan back end, when it was chosen and started */
@@ -388,11 +389,13 @@ int rx_start(void *hwnd) {
     if (r && r->start(hwnd)) {
         vk = r;
         hos_log("rx: renderer: Vulkan (%s)", dll);
+        hos_log("report: renderer Vulkan");   /* (the crash report's renderer: host/hos_crash_dialog.h) */
         flush_early();
         return 1;
     }
     if (r) hos_log("rx: the Vulkan back end could not start on the window: nothing is drawn");
     const int ok = wgr_start(hwnd);
+    if (ok) hos_log("report: renderer WebGPU (no usable Vulkan device)");
     flush_early();
     return ok;
 }

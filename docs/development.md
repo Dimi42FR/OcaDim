@@ -402,8 +402,13 @@ even the dedicated worker can fail or stall after heap/loader corruption.
 
 Right after the game crashes, at start or in play, a window says so: **Longshot closed unexpectedly** (or **Longshot
 couldn't start**), when (during the start, while it prepared the shaders, while playing; nothing when the run's log
-isn't found), what went wrong where that is known, and **Report**, **Open the log folder**, **Close** (`host/hos_crash_dialog.c`; what decides is
-`host/hos_crash_dialog.h`).
+isn't found), what went wrong where that is known, and **Report manually**, **Open the log folder**, **Close**
+(`host/hos_crash_dialog.c`; what decides is `host/hos_crash_dialog.h`). The window is drawn as the Insert menu is
+(`gpu/vk/vk_crash_window.cpp`, through SDL's renderer, never Vulkan), SDL's message box when it can't be. For a crash
+**Report automatically** comes first: it shows the crash report it would send, and the game sends it with the system's
+curl only when Send is pressed ([crash-report-window.md](crash-report-window.md)). `make_game.py` writes its addresses,
+`crash_reports=` and `crash_issue=`, into `longshot_version.txt` from `nx2/addresses.ini` in a build from packaged tools
+(the launcher's); without them, as in a build from a checkout, the window has Report manually alone.
 
 It is shown by a helper the game starts early in `game_main`, once the crash record and its run id are set up and before
 the guest, the renderer, the sound and the input: the same executable, `longshot --crash-watch <pid> <run id> <game
@@ -428,7 +433,7 @@ The cause is the first that holds: the game's files, Vulkan, the window (before 
 Windows out of memory, `0xC0000017`, or an unclean end after the start's low-memory warning), the graphics driver
 (`device lost`, a Vulkan fatal, a crash in the driver's own module), ended from outside; else "an unexpected error".
 
-**Report** builds a plain-text report: what happened, the version and its channel, the GPU and driver (from the log's
+**Report manually** builds a plain-text report: what happened, the version and its channel, the GPU and driver (from the log's
 `vk:` lines), CPU, RAM and system, what the game was built for, the log's first DLSS and FSR 4 lines,
 `longshot_options.ini`'s settings and the switches set (a value only when it is a number, a size or on/off, never for a
 name with TOKEN, KEY, ROOM, SECRET, PASS, SERVER or USER; not the controls' bindings), the crash and unclean records of
@@ -505,6 +510,7 @@ case-sensitive, and an unknown one is ignored.
 | `HOS_FPS_LOG` (set), `HOS_PRESENT_TRACE=<csv>` | The game's frame limiter, VRR flags and nominal rate every 300 presents, and the game clock's speed (1.000: real time); a CSV line per game present with host-clock times before queue flushing, around the renderer call, after virtual-core reacquisition, and at the return counter. These are CPU wall times, not GPU completion or scanout; async rendering measures the enqueue call. Unset/empty trace adds no clock reads |
 | `HOS_FPS_MAX=30` or `HOS_FPS_MAX=<61-1000>` | A frame rate cap for one run, over the Game frame rate cap row (1000 is Uncapped's) |
 | `HOS_MOVIE_PACE=0` | Leave the pacing at the Game frame rate cap row while a movie plays, instead of raising a 60 FPS cap to 240 for the movie's pictures (issue #73); an explicit 30 FPS cap remains 30 |
+| `RX_VK_PERF_INTERVAL=<60-840>` | Seconds of play between two performance summaries, with Send performance statistics on (default 300; at most 840, a minute under the relay's 900 s a summary): [performance statistics](performance-statistics.md#switches) |
 | `RX_VK_FRAME_LOG=<csv>` | A CSV line per present: frame, seconds, frame time in ms. Also works with `HOS_HEADLESS`: CPU intervals after submitting the offscreen copy, without swapchain/display waits. Not `RX_VK_FRAMELOG` (no underscore: pictures, above) |
 | `RX_VK_PRESENTS_AHEAD=<1-8>` | How many presents the game may hand over ahead of the render thread (`RX_VK_ASYNC=1`; 1 by default). Not `RX_VK_PRESENT_AHEAD` |
 | `RX_VK_PRESENT_AHEAD=0` | Frame generation's copies into the window submitted each at its own time, as before #1702 (default on: a set's copies go to the GPU together). Not `RX_VK_PRESENTS_AHEAD` |
@@ -1234,7 +1240,7 @@ under Audio with its existing settings keys and behavior unchanged.
 The host reads the startup output preference from `hos_options_file()`, the same settings path the menu receives through
 `MkwVkHost.options_path`: `HOS_OPTIONS_FILE`, then `--user`, otherwise beside the game. A missing or unchosen file means
 Default, without independently falling back to another settings file. API version 24 appends the playback callbacks after
-version 22's `take_text` and version 23's `options_path`; build the host and renderer together. `tests/test_audio_output_devices.py`
+version 22's `take_text` and version 23's `options_path`, version 25 the microphone test's `mic_test`, and version 26 the performance summary's `perf_info` after it; build the host and renderer together. `tests/test_audio_output_devices.py`
 checks their positional wiring and layout, and `tests/test_audio_output_preferences.py` compiles the actual settings-path
 and preference modules together against synthetic settings files, without enumerating or opening a device.
 
@@ -1309,6 +1315,14 @@ Hold-to-toggle uses ID 54 and latches the final Switch-button word. Walk reads i
 only the movement-key stick, so it never receives a latched Switch button as another toggle input. `toggle_walk` is
 not accepted; choose `walk_mode` instead. Walk's Toggle selection survives Insert, focus loss and Switch-button latch
 resets; a key held across Insert/focus return must be released before it can switch walking again.
+
+`longshot_perf.ini`, beside it, is the launcher's Send performance statistics tick: `send=1` is on, no file is off (the
+default), and `keep_sent=0` when the launcher's Keep a copy of what was sent is off. The game reads it at its first frame
+(`gpu/vk/perf_report.cpp`) and writes its summaries into `perf_pending/`; see
+[performance statistics](performance-statistics.md). `python -I nx2/perf_report.py <game folder>` prints what the
+launcher would send. The sender's switches (`LONGSHOT_PERF_MAX_SENDS`, `LONGSHOT_PERF_TIMEOUT`, `LONGSHOT_PERF_BACKOFF`,
+`LONGSHOT_PERF_KEEP_SENT`, `LONGSHOT_PERF_URL`) are read from the launcher's environment, not `longshot_env.txt`:
+[performance statistics, Switches](performance-statistics.md#switches).
 
 `HOS_CONTROL=<socket path>` turns on the control bridge: a local socket a tool or coding agent drives the running game
 through (inputs timed in frames, screenshots, waits, the Insert menu's settings, quit), with `scripts/longshot_ctl.py`

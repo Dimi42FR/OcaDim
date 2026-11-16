@@ -334,8 +334,11 @@ line with the video memory in use against what the driver allows, and DLSS's det
 | **Other** | |
 | The game is in the wrong language | Change the code in `language.txt` in the game folder. The file lists them all, and an update keeps the one you set. |
 
-After a crash, at the start or in play, a window says what happened; its **Report** button copies a report (no saves or
-game files, your home folder and user name taken out) and opens the issue form, for you to paste it into. Still stuck?
+After a crash, at the start or in play, a window says what happened. **Report manually** copies a report (no saves or
+game files, your home folder and user name taken out) and opens the issue form, for you to paste it into. In a build the
+Longshot Launcher made, **Report automatically** shows the crash report it would send (the version, your PC, the
+settings, the crash and the log before it), and posts it to [#81](https://git.magicbean.dev/MagicBeanDev/Longshot/issues/81)
+only when you press it ([crash-report-window.md](docs/crash-report-window.md)). Still stuck?
 [Report it](https://git.magicbean.dev/MagicBeanDev/Longshot/issues/new) with the version, where you were in
 the game, your graphics card, `longshot_log.txt` and a screenshot or video, and never game files. **Gameplay → Bug
 report** in the [in-game menu](#in-game-menu) gathers all of it in one press.
@@ -763,6 +766,10 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
   Linux's Noto CJK where a game font lacks one.
 - **Discord status** shows "Playing Longshot" and the time played in your Discord status. It is on by default and does
   nothing unless a Discord client is running on this PC; with the row Off nothing is sent to it.
+- **Send performance statistics** (a tick on the launcher's page, off by default): the game counts how its frames,
+  hitches and movies went on each map, and the launcher sends the counts to the team at its next start, with the GPU,
+  driver, CPU, OS and renderer but no paths, user name or ID. It costs a few nanoseconds a frame; unticking it deletes
+  what hasn't been sent. What is in a summary: [performance statistics](docs/performance-statistics.md).
 - **Controller in background:** On keeps the controller working while another window has the focus. The keyboard and
   mouse still need the game's window.
 - **Mouse camera:** Native turns the camera with the mouse one to one, as in a PC game. As the stick uses the mouse in
