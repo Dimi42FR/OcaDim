@@ -760,7 +760,11 @@ constexpr uint32_t kBcDim = 2048, kBcLayers = 8;   // the scratch: the largest l
 /// The scratch's layers, which are the layers one run decodes and encodes: 1, or RX_VK_BC_LAYERS=<n> up to kBcLayers
 /// (upload_astc_gpu says why one). It had kBcLayers whatever the runs used: 140 of its 160 MB held and never written.
 uint32_t bc_layers() {
-    static const uint32_t n = getenv("RX_VK_BC_LAYERS") ? std::clamp<uint32_t>((uint32_t)atoi(getenv("RX_VK_BC_LAYERS")), 1u, kBcLayers) : 1u;
+    // (OcaDim: 8 by default. #384 made it 1 to hold 20 MB instead of 160, but its own risks list names a copy of several
+    // layers into a BC3 texture as untested, and on an RX 9070 XT those copies came out red, white or yellow: the
+    // textures that go through the scratch (terrain, sky, big ASTC) were taking another layer/format. RX_VK_BC_LAYERS=1
+    // opts back into the 20 MB, where no multi-layer copy is made.)
+    static const uint32_t n = getenv("RX_VK_BC_LAYERS") ? std::clamp<uint32_t>((uint32_t)atoi(getenv("RX_VK_BC_LAYERS")), 1u, kBcLayers) : kBcLayers;
     return n;
 }
 /// (longshot) RX_VK_ASTC_BC7=1: big ASTC textures as BC7 instead of BC3. Both are 8 bits a texel; BC7's mode 6 keeps
