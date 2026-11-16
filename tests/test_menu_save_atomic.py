@@ -362,8 +362,11 @@ def main():
     p.add_argument("--cxx", default="g++")
     p.add_argument("cases", nargs="*", default=CASES)
     a = p.parse_args()
-    if os.geteuid() == 0:
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
         print("SKIP: as root the read-only cases' modes do not hold")
+        return
+    if os.name == "nt":
+        print("SKIP: the fixture's read-only and resource-limit cases need POSIX (sys/resource.h)")
         return
     src = (ROOT / "gpu/vk/vk_menu.cpp").read_text(encoding="utf-8")
     fixture = FIXTURE.replace("@SAVE@", block(src, "void save() {"))

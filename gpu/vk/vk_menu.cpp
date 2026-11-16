@@ -2587,9 +2587,9 @@ void governor_apply() {
         const int parts[4] = {fps_stats::kRender, fps_stats::kGpuWait, fps_stats::kPace, fps_stats::kGame};
         const char* levers[4] = {
             "lower Render resolution one step, or Texture detail (the renderer's own work)",
-            "lower Render resolution one step, or Shadow resolution (waiting on the GPU)",
+            "lower Render resolution one step (waiting on the GPU)",
             "try Frame pacing off, or a higher Game frame rate cap (the cap or V-Sync)",
-            "raise Threaded rendering (restart) - the game itself is the limit",
+            "raise Threaded rendering (it applies after a restart) - the game itself is the limit",
         };
         int best = 0;
         for (int i = 1; i < 4; i++)
