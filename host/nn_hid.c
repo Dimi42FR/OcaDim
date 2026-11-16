@@ -1140,6 +1140,7 @@ static void read_input(uint64_t *buttons, uint64_t *taps, int32_t stick[4]) {
               cy = bound_down(HOS_KEY_CAM_UP, captured) - bound_down(HOS_KEY_CAM_DOWN, captured);
     const int32_t keys[4] = {move[0], move[1], cx * 32767, cy * 32767};
     stick_max(stick, keys);
+    if (keys[0] || keys[1] || keys[2] || keys[3]) player_used();
     /* (OcaDim) the Run key: the left stick to its edge on the axes it is pushed on, the game running him; Walk wins if both
        are somehow on) */
     const int run = run_held(bound_down(HOS_KEY_RUN, captured), !rx_option(1, 0), rx_option(HOS_OPT_RUN_MODE, 0) == 1);
@@ -1149,7 +1150,6 @@ static void read_input(uint64_t *buttons, uint64_t *taps, int32_t stick[4]) {
         stick[1] = stick[1] > 0 ? full : stick[1] < 0 ? -full : 0;
         player_used();
     }
-    if (keys[0] || keys[1] || keys[2] || keys[3]) player_used();
     /* (longshot, mouse_native.c) the keys and the pads are the right stick too: while they turn the camera, its angles are
        the native mouse's new start, so the two do not undo each other */
     hos_mouse_native_stick(stick[2] != 0 || stick[3] != 0);

@@ -191,7 +191,7 @@ void test_rows_and_labels() {
     CHECK(!std::strcmp(ini_key(rows[0]), "crt_filter"));
     CHECK(!std::strcmp(ini_key(rows[1]), "crt_lines"));
     for (const Row& r : rows) {
-        CHECK(r.tab == TAB_GRAPHICS && r.preset_exempt && !r.restart);
+        CHECK(r.tab == TAB_DISPLAY && r.preset_exempt && !r.restart);
         CHECK(!r.heading && r.cheat < 0 && !row_fixed(r.value));
         CHECK(r.text && r.help && r.hint);
     }
@@ -330,11 +330,11 @@ def fixture(source):
     table = block(menu, menu.index("Row rows[] = {"))
     rows = {}
     for name in ("CRT filter", "CRT lines"):
-        match = re.search(r'\{TAB_GRAPHICS, "' + name + r'",', table)
+        match = re.search(r'\{TAB_DISPLAY, "' + name + r'",', table)
         if not match:
             raise SystemExit("FAIL: missing production " + name + " row")
         rows[name] = block(table, match.start())
-    names = re.findall(r'\{TAB_GRAPHICS,\s*"([^"]+)"', table)
+    names = re.findall(r'\{TAB_DISPLAY,\s*"([^"]+)"', table)
     window = names.index("Window scaling filter")
     if names[window + 1:window + 3] != ["CRT filter", "CRT lines"]:
         raise SystemExit("FAIL: CRT filter and CRT lines must immediately follow Window scaling filter")

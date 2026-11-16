@@ -30,7 +30,8 @@ enum { HOS_OPT_VOLUME = 27, HOS_OPT_MUTE_BACKGROUND };
 /* (longshot) the Controls tab's Walk mode and Walk speed (host/nn_hid.c: the Walk control, HOS_KEY_WALK): 0 Link walks
    while its key is held, 1 one press walks and the next runs again; how far the movement keys then tilt the left stick, in
    percent of the way (15 to 90) */
-enum { HOS_OPT_WALK_MODE = 49, HOS_OPT_WALK_SPEED, HOS_OPT_RUN_MODE = 63 };
+enum { HOS_OPT_WALK_MODE = 49, HOS_OPT_WALK_SPEED };
+enum { HOS_OPT_RUN_MODE = 63 };
 /* (longshot) the Insert menu's HDR set to Native (host/nn_vi.c QueryDisplayHdrStatus and QueryDisplayHdrPaperWhite): whether
    the game is told its display is HDR10 (the swapchain is one), and the peak and paper white it is told, in nits */
 /* (HOS_OPT_DISCORD, 43: the Insert menu's Discord status row, host/discord_rpc.c: 1 on; HOS_OPT_SKIP_TITLE, 44: its Skip

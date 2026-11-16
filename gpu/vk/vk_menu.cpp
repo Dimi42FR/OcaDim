@@ -994,7 +994,7 @@ void apply_preset(int p) {
     if (p > 0)
         for (const int* v : {&opts.resolution, &opts.upscale, &opts.sharpness, &opts.pace, &opts.realtime, &opts.handheld})
             env_release(v);
-        switch (p) {
+    switch (p) {
     case 1: // Minimum (4GB VRAM / iGPU)
         opts.resolution = 4; opts.upscale = 2; opts.sharpness = 30;
         opts.pace = 1;    opts.realtime = 1; opts.handheld = 1;

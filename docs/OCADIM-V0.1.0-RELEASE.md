@@ -112,3 +112,38 @@ pas encore publiée.
 - **Auto** pour le rendu threadé reste actif à partir de 12 processeurs : le premier rapport de crash (RX 6900 XT) a
   été rapproché du frame generation activé par le testeur, pas du rendu threadé, et la piste reste à confirmer.
 
+## 7. Le menu F1 refait, et les correctifs du soir
+
+**Pour le joueur**
+
+- **Nouveau menu F1**, sa propre identité (bleu nuit et or) : plus de copie du menu pause. **Display** arrive en premier,
+  avec **Aspect ratio / widescreen en tête**, puis Picture (taille, résolution), Frame rate, Screen et HDR. **Graphics**
+  garde qualité, upscaling, frame generation, détail et GPU/mémoire. L'onglet **NVIDIA** (DLSS model, Reflex) n'apparaît
+  que là où une de ses lignes existe : jamais sur AMD.
+- **Touche Run**, le miroir de Walk : assignable dans Controls, mode Hold/Toggle, elle pousse le stick gauche à fond sur
+  les axes déjà poussés (utile aussi à une manette dont le stick n'atteint plus le bord).
+- **Ombres verrouillées au 1600 du jeu.** Le réglage Shadow resolution est retiré : Auto prenait 3072 sur une 16 Go et
+  coûtait **6 à 7 fps en ville** (`a510b3cc`). Un fichier d'options qui garde `shadow_resolution` est lu et ignoré.
+- **DLSS est maintenant compilé** (SDK NVIDIA dans `ngx/`) : sur une RTX, l'Upscaler propose DLSS et le frame generation
+  NVIDIA. Sur une machine limitée par le CPU, c'est un gain de qualité/choix, pas de fps.
+- **Deux collisions d'identifiants réparées** : Auto run et Shadow resolution partageaient l'id 56, Above-60 fixes et
+  Transition autosave l'id 59 — une option de chaque paire ne recevait jamais sa valeur.
+
+**Perf et mémoire**
+
+- **#994 — cibles de rendu réutilisées** : le jeu recréait ses cibles par frame et le renderer faisait une image Vulkan
+  par cible puis la détruisait (~20 % du temps du thread de rendu dans le marché de Castle Town la nuit).
+- **#1035 — pool de cibles à 3 paliers** : moitié à 90 % de ce que le pilote autorise, rendu à 97 %, plutôt qu'un seul
+  seuil à 90 %.
+- **#472 — le gap des uniformes lit la liste sur place** : plus de copie en vecteurs à chaque vérification.
+- **#391 — coûts d'un draw** : `dyn_same` compare les mots et octets d'un coup, le compteur de pipelines n'est lu que si
+  le journal de vie le lit, la clé hexadécimale du journal push n'est formée qu'avec son commutateur.
+- Déjà en place depuis les passages précédents : descripteurs gardés par stage (#794), set layouts partagés (#795),
+  uniformes indexés par page de 1 Ko (#796), buffer écrit une fois (#797).
+
+**Vérifications**
+
+- Les 16 tests du menu passent, ainsi que les tests textures/mémoire (`target_image_pool`, `target_pool_cap`,
+  `vram_pressure`, `vram_compact`, `bc_levels`, `astc_bc_policy`), `test_ub_gap`, `test_same_dyn` et `test_desc_keep`.
+- La suite complète est lancée avant l'installation ; son résultat est reporté ici.
+

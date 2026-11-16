@@ -361,7 +361,8 @@ class WalkKeyTests(unittest.TestCase):
     def test_wiring(self):
         api, hid, menu = read("gpu", "vk", "vk_api.h"), read("host", "nn_hid.c"), read("gpu", "vk", "vk_menu.cpp")
         header, replay = read("gpu", "vk", "vk_menu.h"), read("gpu", "vk", "vk_replay.cpp")
-        self.assertIn("enum { HOS_OPT_WALK_MODE = 49, HOS_OPT_WALK_SPEED, HOS_OPT_RUN_MODE = 63 };", api)
+        self.assertIn("enum { HOS_OPT_WALK_MODE = 49, HOS_OPT_WALK_SPEED };", api)
+        self.assertIn("enum { HOS_OPT_RUN_MODE = 63 };", api)
         self.assertRegex(api, r"HOS_KEY_OC_NOTE_X, HOS_KEY_WALK, HOS_KEY_RUN, HOS_KEY_N \};")
         # (the host's two copies of the names: the ini's key_walk)
         self.assertEqual(names(hid), names(menu))

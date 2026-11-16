@@ -234,7 +234,7 @@ def main():
     # (the menu's row: Uncapped is its 6, after the six caps, so a saved 0 to 5 means what it did)
     menu = (ROOT / "gpu" / "vk" / "vk_menu.cpp").read_text(encoding="utf-8")
     check('"60 (the console\'s)", "90", "120", "144", "165", "240", "Uncapped"}' in menu, "tx_fps_cap does not end with Uncapped")
-    row = menu[menu.index('{TAB_GRAPHICS, "Game frame rate cap"'):]
+    row = menu[menu.index('{TAB_DISPLAY, "Game frame rate cap"'):]
     row = row[:row.index("},") + 2]
     check("&opts.fps_cap, 0, 6, 1, tx_fps_cap," in row, "the Game frame rate cap row does not reach Uncapped")
     check("V-Sync" in row and "real time" in row, "the row's help does not say Uncapped keeps real time and V-Sync limits it")

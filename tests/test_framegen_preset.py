@@ -153,7 +153,7 @@ def fixture(source):
     row = re.search(r"struct Row \{.*?\n\};", menu, re.S)
     if not options or not tabs or not row:
         raise SystemExit("the menu's options, tabs, or row definition is missing")
-    fps_cap = re.search(r'\{TAB_GRAPHICS, "[^"]+", &opts\.fps_cap,', menu)
+    fps_cap = re.search(r'\{TAB_DISPLAY, "[^"]+", &opts\.fps_cap,', menu)
     if not fps_cap:
         raise SystemExit("missing game frame rate cap row")
     replacements = {
@@ -169,7 +169,7 @@ def fixture(source):
         "/* QUALITY_ROW */": block(menu, menu.index('{TAB_GRAPHICS, "Quality preset"')),
         "/* UPSCALER_ROW */": block(menu, menu.index('{TAB_GRAPHICS, "Upscaler"')),
         "/* RESOLUTION_ROW */": block(menu, menu.index('{TAB_GRAPHICS, "Render resolution"')),
-        "/* DLSS_MODEL_ROW */": block(menu, menu.index('{TAB_GRAPHICS, "DLSS model"')),
+        "/* DLSS_MODEL_ROW */": block(menu, menu.index('{TAB_NVIDIA, "DLSS model"')),
     }
     result = FIXTURE
     for marker, value in replacements.items():

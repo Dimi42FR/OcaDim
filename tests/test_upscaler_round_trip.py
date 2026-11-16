@@ -104,6 +104,7 @@ const char* tx_dlss_model(int) { return ""; }
 const char* hn_dlss_model(int, int) { return ""; }
 const char* tx_preset(int) { return ""; }
 const char* hn_preset(int, int) { return ""; }
+static int perf_value;   /* (the Performance tab's rows, stops_at_ends) */
 Row rows[] = {/* UPSCALER_ROW */, /* RESOLUTION_ROW */, /* MODEL_ROW */, /* PRESET_ROW */};
 constexpr int kRows = sizeof rows / sizeof rows[0];
 /* OVERRIDES */
@@ -406,7 +407,8 @@ def fixture(source):
         replacements[marker] = definition(menu, name)
     for marker, label in (("UPSCALER_ROW", "Upscaler"), ("RESOLUTION_ROW", "Render resolution"),
                           ("MODEL_ROW", "DLSS model"), ("PRESET_ROW", "Quality preset")):
-        replacements[marker] = block(menu, menu.index('{TAB_GRAPHICS, "' + label + '"'))
+        m = re.search(r'\{TAB_\w+, "' + re.escape(label) + r'"', menu)
+        replacements[marker] = block(menu, m.start())
     result = FIXTURE
     for marker, value in replacements.items():
         result = result.replace("/* " + marker + " */", value)
