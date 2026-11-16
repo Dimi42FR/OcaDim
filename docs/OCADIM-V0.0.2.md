@@ -127,6 +127,6 @@ RX_VK_STATE_KEYS=1 (avec RX_VK_DRAW_RUNS=1, qui calcule les hachages) compte les
 2000 draws, 1856 cles (1,08)
 `
 
-**1,08 draw par cle en scene reelle** : chaque draw a son propre etat. Memoiser la preparation ne reutiliserait rien.
+Mesure refaite proprement (la premiere avait plante : mon unordered_set n etait pas protege contre les threads de replay ; mutex ajoute). Scene lourde confirmee (2 797 draws max, 42,9 fps) : **1,21-1,28 draw par cle**. Un cache d etat eviterait donc au mieux ~20 % de la preparation par draw, soit ~0,5 ms (~2 %) : faible, garde pour plus tard.
 
 Conclusion : ce stream est **unique par draw**, ce qui explique que batching, fusion de runs et cache d etat echouent tous. Le seul levier restant qui attaque la frame normale ET le chargement est **l enregistrement parallele / async** (le projet a le rendu threade ; voir docs/MINAGE-NX2NAVI.txt, PR #543 et son gate d ordre des evenements).

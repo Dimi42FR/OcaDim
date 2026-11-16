@@ -778,10 +778,12 @@ void draw_runs_note(const void* prog) {
     // bound on what memoising a draw's state preparation could save. Few keys for many draws: worth it.
     static const bool keys_on = env_on("RX_VK_STATE_KEYS");
     if (keys_on) {
+        static std::mutex keys_mu;   // (the replay records on more than one thread: the set is shared)
         static std::unordered_set<uint64_t> seen;
         static uint64_t n = 0;
         const uint64_t k = (uint64_t)(uintptr_t)prog ^ (last_push_hash * 0x9E3779B97F4A7C15ull) ^
                            (last_desc_hash * 0xC2B2AE3D27D4EB4Full);
+        std::lock_guard lk(keys_mu);
         seen.insert(k);
         if (++n == 2000) {
             logf("vk: state keys (RX_VK_STATE_KEYS=1): %llu draws, %llu distinct keys, %.2f draws a key",
