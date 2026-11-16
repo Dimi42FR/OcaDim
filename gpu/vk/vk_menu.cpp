@@ -1470,7 +1470,6 @@ Row rows[] = {
     {TAB_GRAPHICS, "Frame generation by", &opts.framegen_by, 0, 1, 1, tx_framegen_by,
      "Who makes the frames at 2x and up. NVIDIA DLSS Frame Generation needs a temporal Upscaler (DLSS, DLAA or FSR) for "
      "the scene's depth and motion. Changes at once.", hn_framegen_by, false, true},
-    {TAB_GRAPHICS, "Frame pacing", &opts.pace, 0, 1, 1, tx_onoff, "When each frame is shown.", hn_pace},
     {TAB_GRAPHICS, "Game frame rate cap", &opts.fps_cap, -1, 6, 1, tx_fps_cap,
      "Limits frames rendered by the game. Generated frames are additional. Changes at once. "
      "Past 60 is experimental: the game keeps real time, but some cutscenes and bosses can misbehave (Gohma, the intro's "
@@ -1529,11 +1528,6 @@ Row rows[] = {
     {TAB_GRAPHICS, "GPU and memory", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, false, true, -1, true},
     {TAB_GRAPHICS, "GPU device", &opts.gpu_device, 0, 8, 1, tx_gpu,
      "Which graphics card the game runs on. Applies after a restart.", hn_gpu, true, true},
-    // (longshot, threaded_rendering.h: the render thread and the recorder thread together, one row. Auto, On, Off as V-Sync's,
-    // so its text is tx_vsync's. Read once, at the start: menu_threaded_rendering)
-    {TAB_GRAPHICS, "Threaded rendering", &opts.threaded_rendering, 0, 2, 1, tx_vsync,
-     "Draws the picture on threads of its own, beside the game's, on a processor with threads to spare. Applies after a "
-     "restart.", hn_threaded, true, true},
     // (no Mesh shaders row: changing it translated every shader again at the next start, for nothing a player gains. A launch
     // switch now, RX_VK_MESH_SHADERS: gpu/vk/mesh_mode.h)
 
@@ -1724,6 +1718,13 @@ Row rows[] = {
      "Helps remove first-load stutter for everyone: saves the pipelines your play built (shader hashes and draw state, no game "
      "data) with a filled-in report as a zip in Downloads, copies the report and opens the \"Submit your pipelines\" issue. "
      "Attach the zip there and paste the report. Nothing is uploaded for you."},
+    // (longshot) for testing, not a player's choice: when each made frame is shown (vk_framegen.cpp)
+    {TAB_DEBUG, "Frame pacing", &opts.pace, 0, 1, 1, tx_onoff, "When each frame is shown.", hn_pace},
+    // (longshot, threaded_rendering.h: the render thread and the recorder thread together, one row. Auto, On, Off as V-Sync's,
+    // so its text is tx_vsync's. Read once, at the start: menu_threaded_rendering)
+    {TAB_DEBUG, "Threaded rendering", &opts.threaded_rendering, 0, 2, 1, tx_vsync,
+     "Draws the picture on threads of its own, beside the game's, on a processor with threads to spare. Applies after a "
+     "restart.", hn_threaded, true, true},
     {TAB_DEBUG, "Descriptor reuse", &opts.descriptor_reuse, 0, 1, 1, tx_onoff,
      "A draw keeps its descriptors while the texture slots it samples are unchanged, so streaming elsewhere in the game no longer "
      "rebuilds every set each frame. Changes at once.", nullptr, false, true},
@@ -2043,7 +2044,9 @@ bool row_shown(int i) {
            (v != &opts.dlss || ur::upscaler_shown(upscalers_available())) &&
            (v != &opts.dlss_model || ur::model_shown(dlss_why() == DLSS_OK)) &&
            ((v != &opts.hdr_white && v != &opts.hdr_peak && v != &opts.hdr_contrast) || opts.hdr != 0) &&
-           (v != &opts.hdr_tonemap || opts.hdr == 2);
+           (v != &opts.hdr_tonemap || opts.hdr == 2) &&
+           // (longshot) who makes the frames only with Frame generation on; the CRT raster only with a CRT filter
+           (v != &opts.framegen_by || opts.framegen != 0) && (v != &opts.crt_lines || opts.crt_filter != 0);
 }
 int tab_row_count(int t) {
     int c = 0;
