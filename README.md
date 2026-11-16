@@ -1279,8 +1279,9 @@ a time**, the safe choice on a CPU with 4 cores or fewer; **Side by side**, fast
 Intel's driver can crash the game while building them; or **Auto**, the default: side by side on the Arc B-series with
 driver 101.9154 or newer (on a B580 a new area's first visit froze the picture for four to seven minutes one at a time,
 and not at all side by side, with no fault in ten areas), one at a time on every other Intel GPU. It applies after a
-restart. `RX_VK_NO_INTEL_SERIAL=1` is Side by side for a run and `=0` One at a time, whatever the row says. NVIDIA, AMD, and Intel on other systems are
-unchanged.
+restart. `RX_VK_NO_INTEL_SERIAL=1` is Side by side for a run and `=0` One at a time, whatever the row says; the Longshot
+Launcher's build settings set `=1` for the build's shader preparation and the game when their **Intel shader compiles**
+is on Side by side. NVIDIA, AMD, and Intel on other systems are unchanged.
 
 `RX_VK_SKIP_CODE=<prefix,...>` leaves out the draws of every program with a stage whose native code key starts with one
 of the prefixes (the keys the log prints after "its code:"). On a Steam Deck, `RX_VK_SKIP_CODE=2c56dc1006942f74`
