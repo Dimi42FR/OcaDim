@@ -42,6 +42,7 @@ const char *hos_version(void) { return LONGSHOT_VERSION; }   /* (discord_rpc.c's
 #include <unistd.h>
 #include <sys/syscall.h>
 #endif
+#include "hos_atomic_file.h"   /* (the files the saves' move copies, saves-moved.txt and the stand-ins' clean-up: whole or not at all) */
 /* (linux) the separator of the paths the executable's folder is joined with */
 #ifdef _WIN32
 #define SEP 92
@@ -312,14 +313,7 @@ static int has_link(const char *p) {
 static int copy_tree(const char *from, const char *to) {
     if (is_link(from)) return copy_link(from, to);
     if (!is_dir(from)) {
-        FILE *in = fopen(from, "rb"), *out = in ? fopen(to, "wb") : NULL;
-        int ok = in && out;
-        char buf[1 << 16];
-        for (size_t n; ok && (n = fread(buf, 1, sizeof buf, in)) > 0;) ok = fwrite(buf, 1, n, out) == n;
-        ok = ok && in && !ferror(in);
-        if (in) fclose(in);
-        if (out && fclose(out)) ok = 0;
-        return ok;
+        return hos_atomic_copy_file(from, to);   /* (each file whole under its name, or not there) */
     }
     if (!CreateDirectoryA(to, NULL) && !is_dir(to)) return 0;
     char pattern[MAX_PATH];
@@ -428,16 +422,31 @@ static const char *saves_dir(const char *beside) {
         char note[MAX_PATH];
         const char *sep = strrchr(beside, SEP);
         snprintf(note, sizeof note, "%.*s" SEP_S "saves-moved.txt", sep ? (int)(sep - beside) : 0, beside);
-        FILE *f = fopen(note, "w");
-        if (f) {
-            fprintf(f, "Longshot's saves are now in\n%s\n\nThey moved there from the user folder that was here.\n", dir);
-            fclose(f);
-        }
+        char text[MAX_PATH + 160];
+        const int n = snprintf(text, sizeof text, "Longshot's saves are now in\n%s\n\nThey moved there from the user folder that was here.\n", dir);
+        if (n > 0 && (size_t)n < sizeof text) hos_atomic_write(note, text, (size_t)n);
         hos_log("saves: moved from %s to %s", beside, dir);
     }
     return dir;
 }
 #endif
+
+/* (longshot) What a write of a setting that a kill cut left (host/hos_atomic_file.h), at the start, before the game reads any
+   setting: a "<name>.hosnew" beside the setting. language.txt is the game folder's; mouse_sens.txt is the user folder's; the
+   settings file is where options_path.c chose it (the user folder's with --user, HOS_OPTIONS_FILE's, else the game folder's):
+   the options' one-time copy into the user folder leaves its stand-in there. */
+static void recover_writes(void) {
+    char path[MAX_PATH];
+    const DWORD len = hos_game_path_a(path, MAX_PATH);
+    char *slash = len ? strrchr(path, SEP) : NULL;
+    if (slash) {
+        snprintf(slash + 1, (size_t)(path + MAX_PATH - slash - 1), "language.txt");
+        hos_atomic_remove_stale(path);
+    }
+    if (hos_options_file()[0]) hos_atomic_remove_stale(hos_options_file());
+    snprintf(path, sizeof path, "%s" SEP_S "mouse_sens.txt", hos_user_dir);
+    hos_atomic_remove_stale(path);
+}
 
 /* longshot_env.txt beside the game: NAME=VALUE lines set as environment variables before anything reads them, for the
    switches players are asked to test (RX_VK_NOOPT and the rest). Lines starting with # are notes. On Linux this runs
@@ -2000,6 +2009,7 @@ static int game_main(int argc, char **argv) {
         hos_hle_stats_start();
     }
     if (!hos_user_dir) hos_user_dir = "user";
+    recover_writes();   /* (what a write of a setting that a kill cut left: before anything reads the settings) */
     CreateDirectoryA(hos_user_dir, NULL);
     hos_options_carry();   /* (a game folder's settings from before into the user folder, once: host/options_path.c) */
     if (!reserve_guest()) {
