@@ -36,12 +36,24 @@ ton `.nup`.
 
 ---
 
-## Ce qu'OcaDim ajoute à la base
+## Ce qu'OcaDim ajoute, et d'où ça vient
 
-### 1. La génération d'images d'AMD, dans le jeu
+Trois de ces ajouts **n'existent pas chez l'amont Longshot** : on les a écrits ici. Un quatrième vient de NX2navi et est
+porté. Le reste est de l'assemblage. C'est dit ligne par ligne, pour que tu saches qui remercier.
+
+| Ajout | D'où ça vient | Où le voir |
+|---|---|---|
+| **La frame generation d'AMD (FSR) dans le jeu** | **écrit ici** — `gpu/vk/vk_fg_amd.cpp` n'existe pas chez l'amont | Graphics → *Frame generation by* |
+| **Le prefetch des descripteurs** (seqlock, cache négatif, *asks* apprises) | **écrit ici** — zéro occurrence de `prefetch` dans le replay de l'amont | Graphics → *Descriptor prefetch* |
+| **Batched submits, Draw order barriers, CPU affinity (CCX)**, et l'auto-échelle petite config | **écrits ici** — absents de son menu, et `gpu/vk/par_scale.h` n'existe pas chez lui | Graphics |
+| **Deux réparations au-dessus de 60 fps** (sols porteurs, eau à pas fixes) | **portées** de NX2navi (domaine public / MIT) | Graphics → *Above-60 fixes* |
+| **Le Setup, l'identité, le confort** | assemblés ici | `OcaDimSetup.exe`, le menu |
+
+### 1. La génération d'images d'AMD — écrit ici
 
 La **frame generation du SDK FidelityFX d'AMD** (celle de FSR : 4.x sur RDNA 4, 3.1.x sur les autres GPU AMD) tourne
-dans le renderer, alimentée par les vraies données de la scène, et se choisit dans le menu du jeu.
+dans le renderer, alimentée par les vraies données de la scène, et se choisit dans le menu du jeu. L'amont a sa propre
+interpolation et la FG de NVIDIA ; celle d'AMD, non.
 
 Comment c'est branché, en quatre morceaux :
 
@@ -69,7 +81,48 @@ dessiné en 2D. Une capture « sans HUD » a été tentée (copie compute, parce
 `vkCmdBlitImage` de cette cible) : elle tournait sans planter et le SDK générait bien, mais le rendu composé n'a pas été
 jugé bon et a été retiré. Le code n'est pas dans ce dépôt ; la voie reste ouverte.
 
-### 2. Deux réparations du jeu au-dessus de 60 fps, que l'amont n'a pas
+### 2. Le prefetch des descripteurs — écrit ici
+
+C'est le poste qui coûte le plus cher au replay : pour **chaque** descripteur (uniform buffer, texture), et sur **chaque**
+worker, le replay relit la mémoire du jeu au travers de la capture — le mutex des pools, la recherche de page, le scan
+des updates. Des milliers de fois par frame.
+
+**L'idée** : un thread helper, en priorité `BELOW_NORMAL`, re-marche chaque tronçon du *dry pass* et publie dans une
+table *seqlock* les octets de chaque overlay que le record demandera. Le record fait alors un `memcpy` au lieu de refaire
+le travail.
+
+Trois pièces :
+
+1. **Les octets** : les pages de la capture et les updates du lieu par-dessus, clé `(addr, take, lim, view, rec)`.
+2. **Les asks apprises** (`pf_learned`) : le record note ce qu'il demande ; le helper publie la plus grande demande vue
+   par borne, donc la table apprend au lieu d'être devinée.
+3. **Le négatif** : « pas d'update sur cette borne à ce lieu » — `ub_overlay` **et** `ub_read` sautent leurs scans
+   (~2600 par buffer, deux fois).
+
+**La justesse** : la clé est auto-vérifiante (une demande non couverte = un *miss* = le chemin d'avant, mot pour mot), le
+*seqlock* fait qu'une réécriture sous une copie est vue, et les stamps `view`/`rec` couvrent le helper en retard. Un
+*miss* ne coûte jamais plus que ce que le code coûtait avant.
+
+**En jeu** : 357-682 overlays servis par fenêtre, **~215 000 scans sautés**, zéro artefact. La ligne est en **Auto** (on
+là où le processeur a des threads à donner) et `RX_VK_DESC_PREFETCH` force pour un run.
+
+### 3. Trois leviers CPU et l'auto-échelle — écrits ici
+
+| Ligne du menu | Ce qu'elle fait | Le chiffre |
+|---|---|---|
+| **Batched submits** | Garde les soumissions d'une frame et les envoie en une seule au prochain *wait*, *readback* ou *present* | sur RADV, Kokiri Forest passe de **33-41 à 46-61 fps** |
+| **Draw order barriers** | Une passe de draw après une autre n'attend que dans ses étages de fragment ; un compute après un compute ne prend pas de barrière, comme les barrières du jeu l'ordonnent déjà | Auto sur NVIDIA, où c'est mesuré ; On essaie sur ta carte |
+| **CPU affinity (CCX)** | Garde les workers du replay sur la moitié haute des CPU logiques (le second CCD d'un Ryzen), pour que le thread du jeu garde son cache | Auto à partir de 12 processeurs logiques |
+
+Et **l'auto-échelle petite config** (`gpu/vk/par_scale.h`, écrit ici) : les workers du replay sont un pour quatre CPU
+logiques, bornés à quatre, et **aucun** sous six ; les segments valent 32 ; le prefetch s'allume dès six CPU logiques.
+C'est ce qui fait que ces lignes ne punissent pas un petit PC : elles restent en Auto, et l'Auto regarde ton processeur.
+
+*Pour être exact* : les deux lignes **Replay workers** et **Replay segments** exposent des mécanismes qui existaient déjà
+dans l'amont, mais seulement par variables d'environnement (`RX_VK_PARALLEL`, `RX_VK_PARALLEL_SEG`). Les lignes, les
+valeurs et l'Auto sont de nous.
+
+### 4. Deux réparations du jeu au-dessus de 60 fps — portées de NX2navi
 
 Le jeu suppose 60 fps. L'amont en répare déjà deux endroits — le gestionnaire de son ramené à 60 Hz, et le nombre de
 pas du solveur physique — et prévient que le reste peut dérailler (« certaines cinématiques et certains boss comptent les
@@ -86,20 +139,7 @@ et `owater` : domaine public / MIT, repris dans Triforce). Nous les avons **port
 retrouver exactement le comportement d'avant. Le troisième de leurs correctifs (`orecord`, l'horloge de l'ocarina) est
 déjà couvert dans cet arbre par `patch_whole_frames`.
 
-### 3. Les leviers CPU, mesurés
-
-| Ligne du menu | Ce qu'elle fait | Le chiffre |
-|---|---|---|
-| **Batched submits** | Garde les soumissions d'une frame et les envoie en une seule au prochain *wait*, *readback* ou *present* | sur RADV, Kokiri Forest passe de **33-41 à 46-61 fps** |
-| **Descriptor prefetch** | Un thread helper pré-résout les descripteurs des command buffers pendant le replay (tables *seqlock*, cache négatif, *asks* apprises) | 357-682 overlays servis par fenêtre, **~215 000 scans sautés**, zéro artefact |
-| **CPU affinity (CCX)** | Garde les workers du replay sur les CPU logiques du haut (le second CCD d'un Ryzen) pour que le thread du jeu garde son cache | Auto à partir de 12 processeurs logiques |
-| **Replay workers** / **Replay segments** | Le nombre de threads du replay et la taille des tranches (32 / 64 / 160) | Auto selon les processeurs disponibles |
-| **Draw order barriers** | Une passe de draw après une autre n'attend que dans ses étages de fragment ; un compute après un compute ne prend pas de barrière | Auto sur NVIDIA, où c'est mesuré |
-| **Le profil PGO de jeu** | Le renderer est compilé avec le profil du jeu, committé dans le dépôt | **3-5 % de frame time** |
-
-Chaque ligne dit *Auto / On / Off*, ce que fait *Auto*, et si elle demande un redémarrage.
-
-### 4. Le Setup : le jeu se compile chez le joueur
+### 5. Le Setup, l'identité, le confort — assemblés
 
 `OcaDimSetup.exe` (WinForms, .NET 8 *self-contained*) prend **ton** `.nup`, récupère les outils, compile le jeu, et
 lance. Le paquet ne contient **aucune donnée de jeu** : le programme du Setup (164 Mo) et **19,4 Mo de sources**. Le
@@ -114,12 +154,9 @@ reste — les outils, ~250 Mo — se télécharge au premier lancement, **chaque
 - **Rien ne sort de la machine** : aucune télémétrie, aucun serveur, aucune mise à jour en ligne.
 - Il faut : ta copie du jeu, **~60 Go** libres, Windows 10/11 x64. Compte **~40 minutes** la première fois.
 
-### 5. L'identité et le confort
-
-- Le jeu s'appelle **OcaDim 0.0.1** partout : fenêtre, titre, sauvegardes (`%LOCALAPPDATA%\OcaDim`), statut Discord
-  (« Playing OcaDim », avec son propre artwork et le temps joué).
-- Un **backdrop** et un blason dessinés pour le projet, en fond du menu et sur les raccourcis.
-- Le menu est traduit en **12 langues**, lignes ajoutées comprises.
+Et l'identité : le jeu s'appelle **OcaDim 0.0.1** partout (fenêtre, titre, sauvegardes dans `%LOCALAPPDATA%\OcaDim`,
+statut Discord « Playing OcaDim » avec son artwork et le temps joué), un **backdrop** et un blason dessinés pour le
+projet, et le menu traduit en **12 langues**.
 
 ---
 
@@ -141,12 +178,13 @@ le preset, l'upscaler et les résolutions) et le dossier `bug-reports`. C'est to
 Pas de palmarès : la liste de ce qu'il y a **en plus** dans cette version, avec son état réel — ce qui est mesuré ici, et
 ce qui a besoin de **ton** PC pour être confirmé. Le but n'est pas qu'on te croie : c'est que tu vérifies.
 
-| Ce qu'il y a en plus | Où le voir | L'état |
-|---|---|---|
-| **La frame generation d'AMD (FSR) dans le jeu** : une image entre deux des tiennes, nourrie par la vraie profondeur, les vrais vecteurs de mouvement, le jitter et la caméra de la scène, et choisie au menu | Graphics → *Frame generation by* → **AMD FSR FG** | mesuré ici sur RX 9070 XT : 44,1 fps en zone chargée, **autour de 60 à 76** en zone normale. **À confirmer** sur RDNA 2 et 3, sur portable |
-| **Deux réparations du jeu au-dessus de 60 fps** : les sols qui portent un personnage, et les surfaces d'eau en pas fixes | Graphics → *Above-60 fixes* | mesuré ici (voir le test de la plateforme, plus bas). **À confirmer** chez toi |
-| **Six leviers CPU mesurés** : batched submits, prefetch des descripteurs, affinité CCX, workers et segments du replay, barrières d'ordre de draw | Graphics, les lignes signées « Added by Dimi42FR » | batched submits : 33-41 → 46-61 fps sur RADV ; prefetch : ~215 000 scans sautés. **À confirmer sur NVIDIA et Intel** |
-| **Un Setup qui compile chez le joueur** : ton `.nup` vérifié avant tout, les outils vérifiés par SHA-256, un seul build à la fois, reprise après un abandon, rien qui sorte de la machine | `OcaDimSetup.exe` | utilisé ici. **À confirmer** : une installation complète sur un PC vierge |
+| Ce qu'il y a en plus | D'où ça vient | Où le voir | L'état |
+|---|---|---|---|
+| **La frame generation d'AMD (FSR) dans le jeu** : une image entre deux des tiennes, nourrie par la vraie profondeur, les vrais vecteurs de mouvement, le jitter et la caméra de la scène, et choisie au menu | **écrit ici** | Graphics → *Frame generation by* → **AMD FSR FG** | mesuré ici sur RX 9070 XT : 44,1 fps en zone chargée, **autour de 60 à 76** en zone normale. **À confirmer** sur RDNA 2 et 3, sur portable |
+| **Le prefetch des descripteurs** : un helper pré-résout les descripteurs, cache négatif et *asks* apprises | **écrit ici** | Graphics → *Descriptor prefetch* | ~215 000 scans sautés, zéro artefact. **À confirmer sur un petit CPU** |
+| **Batched submits, Draw order barriers, CPU affinity (CCX)** et l'auto-échelle petite config | **écrits ici** | Graphics, les lignes signées « Added by Dimi42FR » | batched submits : 33-41 → 46-61 fps sur RADV. **À confirmer sur NVIDIA et Intel** |
+| **Deux réparations du jeu au-dessus de 60 fps** : les sols qui portent un personnage, et les surfaces d'eau en pas fixes | **portées** de NX2navi | Graphics → *Above-60 fixes* | mesuré ici (voir le test de la plateforme, plus bas). **À confirmer chez toi** |
+| **Un Setup qui compile chez le joueur** : ton `.nup` vérifié avant tout, les outils vérifiés par SHA-256, un seul build à la fois, reprise après un abandon, rien qui sorte de la machine | assemblé ici | `OcaDimSetup.exe` | utilisé ici. **À confirmer** : une installation complète sur un PC vierge |
 
 Rien de tout ça n'est une première mondiale, et on ne le prétend pas : c'est ce qu'on a ajouté, avec ses chiffres et ses
 limites. Deux des correctifs viennent de **NX2navi** (domaine public / MIT) et sont portés ici. Le détail complet, avec
