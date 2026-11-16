@@ -667,12 +667,13 @@ up to 4 on Windows, still run under a smaller number). The builders' `--cli` pas
 
 **What a build compiles again.** Each object is named by its source, its flags and the headers it depends on
 (`nx2/build.py` `object_key`), and kept in the object cache under that name. The Vulkan back end's own files (`gpu/vk`,
-not eden or sirit) are compiled with `-MD`, and the next build names each by the headers its depfile says it read
-(`renderer_deps`), so a renderer header edit compiles the files that include it. A file with no depfile yet (the first
-build, or one fetched from the object store, `LONGSHOT_OBJ_STORE` above) is named by every header under `gpu/vk`,
-`gpu/render` and `gpu/compat`, as before. Lifted files depend on every runtime header, and the host's on every
-`host/*.h`. `vk_menu.cpp` and `host/hos_main.c` carry the version, a fingerprint of every source, so any source change
-compiles those two again.
+not eden or sirit) and the host's (`host/`) are compiled with `-MD`, and the next build names each by the headers its
+depfile says it read (`renderer_deps`), so a header edit compiles the files that include it. A file with no depfile yet
+(the first build, or one fetched from the object store, `LONGSHOT_OBJ_STORE` above) is named by every header it could
+read: for the back end, every header under `gpu/vk`, `gpu/render` and `gpu/compat`; for the host, every header under
+`host/`, the lifted ones, and `gpu/`'s own (not eden's, sirit's or `gpu/third_party`'s). Lifted files depend on every
+runtime header. `vk_menu.cpp` and `host/hos_main.c` carry the version, a fingerprint of every source, so any source
+change compiles those two again.
 
 Builds keep the button prompts when their source, fonts, game assets, button tables, image overrides,
 Python, package/library versions and generation options still match, and every generated file still has its recorded
