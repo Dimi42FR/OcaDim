@@ -75,3 +75,40 @@ nommer est la partie honnête. Une ligne par pression dans `longshot_log.txt` (`
 - **Pas de FSR 3.1 FG** : seul le chemin FSR 4 (RDNA 4) est livré.
 - **Pas de lookahead** : les hoquets de 6,6 et 13,2 fps mesurés restent la prochaine cible.
 - **Pas de bindless** : c'est le prérequis du batching et son gain propre (~2,4-3 ms), mais c'est un chantier long.
+
+## 6. Ajouté après la rédaction (16/11, soir) — perf et mémoire
+
+Même build, mesuré dans l'arbre de dev et sur l'installation (RX 9070 XT) ; à reprendre tels quels si la 0.1.0 n'est
+pas encore publiée.
+
+**Pour le joueur**
+
+- **Moins de textures blanches au loin après un chargement de zone.** Les uploads ASTC repoussés faute de budget
+  étaient dessinés avec un placeholder. Le budget quadruple désormais pendant une frame longue (aucun présent depuis
+  100 ms) : mesuré sur un run, **1 303 → 571 textures repoussées**, la frame d'uploads la plus lourde de 115 à 256 ms
+  (absorbée par un chargement qui dure déjà 2,8 s), et **fps de jeu inchangés** (61-62).
+- **Le rendu parallèle s'engage sur les machines à command buffers courts.** La granularité réelle était le point du
+  dry pass (un tous les 64 draws) : sous 64 draws, rien ne pouvait être découpé, quel que soit le réglage. Une session
+  qui ne fait que des buffers courts abaisse maintenant les deux ensemble (segments 32→16→8, points 64→8). Mesuré :
+  **6,0 segments par command buffer** au plancher, dry pass 0,34 ms, fps inchangés là où il s'engageait déjà. C'est le
+  levier d'un PC à 6 cœurs qui enregistrait 18-21 ms sur un seul thread avec 3 workers inactifs (rapport RTX 2060).
+- **~0,75 ms par frame de moins** : les notes DLSS/FSR n'étaient plus recalculées à chaque draw quand les cibles n'ont
+  pas changé (0,92 → 0,12-0,17 ms).
+
+**Mémoire**
+
+- **Le seed de shaders (539 Mo sur une installation préparée) est mappé au lieu d'être copié en RAM.** Il n'est jamais
+  écrit : ses pages sont celles du fichier, récupérables sous pression et hors du commit privé — celui qui règle le
+  budget de textures sur les petites cartes.
+
+**Diagnostic**
+
+- Le log dit désormais **ce que le joueur a demandé pour le frame generation** :
+  `vk: frame generation asked: on (3x), by AMD FSR FG`. Un rapport sur une carte où l'AMD FG manque ne permettait pas
+  de savoir si l'option était allumée.
+
+**Ce qui n'a pas changé**
+
+- **Auto** pour le rendu threadé reste actif à partir de 12 processeurs : le premier rapport de crash (RX 6900 XT) a
+  été rapproché du frame generation activé par le testeur, pas du rendu threadé, et la piste reste à confirmer.
+

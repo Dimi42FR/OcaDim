@@ -29,6 +29,22 @@ test pointeur storage 0,42, handle 0,25, empreinte 0,15), UBO utilisateur 1,05 m
 de programme 1,48 ms. Les fps d'un run à l'autre ne valent rien ici (la sauvegarde et la zone ont changé plusieurs
 fois) : **comparer les ms du profil, jamais les moyennes de fps**.
 
+### Mettre à jour `F:\test` (la procédure, et où elle est écrite)
+
+Elle existe déjà : `docs/development.md` (make_game, les variables `LONGSHOT_*` et `RX_*`) et le §2 ci-dessus (notre
+environnement). Ce qui est spécifique à cette machine :
+
+1. Dans l'arbre de dev, **avec l'environnement de build** (§2 — sans lui, `make_game.py` échoue sur « No C compiler ») :
+   `python -I nx2/make_game.py --update "F:\test"`. Ne jamais copier exe/DLL à la main : le launcher vérifie
+   `.longshot_installed.json` et écrit depuis `image.bin` (§9, `CRASH … read 0xffff…`).
+2. ~45 s de build, puis le jeu se lance **une fois** pour se préparer : state list ~151 s + précompilation ~41 s quand
+   les caches sont froids, donc ~5 min en tout. La préparation est un écran animé : elle présente ses frames.
+3. Vérifier : la taille de `longshot_vk.dll` a changé, `F:\test\logs\longshot_log.txt` montre la préparation puis le jeu,
+   et la ligne `vk: frame generation asked: …` dit le choix du joueur (ajoutée le 16/11).
+4. Mesurer **avant et après sur la même fenêtre** (120 s, même scène) : mémoire privée et working set au pic, et les fps
+   du log. Sinon on compare des scènes différentes et « les mêmes perf » ne veut rien dire.
+
+
 
 ## 1. Les trois dossiers, et à quoi ils servent
 
