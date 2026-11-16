@@ -35,8 +35,10 @@ if (-not (Test-Path (Join-Path $app "coreclr.dll"))) {
 $zip = Join-Path $app "source.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }
 Write-Host "source.zip <- $repo" -ForegroundColor Cyan
+# (jeu/ is the game a developer installed beside the sources: 3.6 GB beside the 19 MB the parcel needs. Without this, a
+# source.zip made in a checkout that has one is 3.8 GB)
 $excludes = @(
-    ".git", "work", "out", "dist",
+    ".git", "work", "out", "dist", "jeu",
     "setup/dist", "setup/OcaDimSetup/bin", "setup/OcaDimSetup/obj",
     "tests", "docs", "website", ".forgejo", ".claude", ".github",
     "__pycache__", "*.pyc", "*.log", "*.pdb", "*.zip",
