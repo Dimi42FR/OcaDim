@@ -80,10 +80,29 @@ Mesuré au profil fin, même scène, même build à une ligne près :
 Soit ~0,75 ms repris, 4 % d'une frame de 18,1 ms. Vérifié que l'upscaler suit : `AMD FSR 4: 600 frames drawn` et un
 jitter non nul dans le status, comme avant.
 
+## Les textures : ce qui a été essayé, et pourquoi c'est écarté
+
+Le plus gros poste nommé (2,43 ms) est la résolution des descripteurs de texture : ~4,6 par draw, dont la vue coûte
+0,85 ms (67 ns par vue). Le mécanisme de réutilisation par étage existe (`kept_tex_holds`, `ks->tex_on`), mais il ne
+touche que **0,16 binding par draw**. La raison est dans le code, pas dans une mesure : `desc_keep_textures` refuse un
+étage dont un descripteur passe par un **programme de handles** (`d.handle_program != ~0U`), donc tous les étages qui
+lisent leurs textures dans une table (OoT en est plein) n'y ont jamais droit.
+
+Essai fait et **écarté** : remplacer l'invalidation globale (`dgen`, qui bouge à chaque texture retirée, les cibles
+transitoires comprises) par un contrôle par texture (même objet via son `serial`, non retirée, `view_gen` inchangée).
+Mesuré : `stages' textures kept` reste à 0,16 et `textures` à 2,59 ms — aucun gain. Reverti, l'arbre est propre.
+
+Pour rouvrir ce poste il faudrait **versionner les tables de handles** (le tampon que lit le programme de handles) pour
+que le kept puisse s'appliquer aux étages à table : c'est un changement de conception, pas une clé plus permissive, et
+c'est le même terrain que l'issue 1126 (vues périmées), donc à faire avec des captures à chaque étape.
+
+
 ## Ce que les fps ne disent pas
 
 Les comparaisons de fps entre deux runs ne valent rien ici : la sauvegarde et la zone ont changé plusieurs fois pendant
 la session, et la même scène donne 53 à 56 fps d'un run à l'autre (les runs `mem-census*`, `draw-cost*`, `notes-skip2`
-le montrent). Les chiffres qui tiennent sont ceux du profil (ms par frame), pas les moyennes de fps.
+le montrent). Un run peut aussi finir sur un écran de menu (le run `tex-keep` a passé la moitié du sien sur l'écran
+Load : sa capture le montre). Les chiffres qui tiennent sont ceux du profil (ms par frame), et même eux ne valent que
+si le run a réellement joué : filtrer les lignes `draw all (exact)` au-dessus de 5 ms.
 
 
