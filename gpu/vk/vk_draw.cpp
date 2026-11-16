@@ -418,6 +418,7 @@ struct RecordingRes {
     uint32_t idle = 0;             // (recordings of the slot that stayed in the first stream)
     // (flat (flat_map.h): an unordered_map put a malloc into every c1 upload kept, and a free into the next recording's clear)
     FlatMap<uintptr_t, std::pair<VkBuffer, uint64_t>> c1_at;   // (c1 of a stage, by the stage's address: uploaded once a recording)
+    uint64_t ub_snap_epoch = 0;   // (this recording's number among all: its uniform copies in ub_snaps)
 };
 // (a recording's first stream: one for each of the kRecordings slots. RX_VK_STREAM_MB=<n>: that size, 2 by default; a recording
 // that needs more is given a bigger stream for the rest of it (RX_VK_STREAM_GROW_OFF=1: draws are skipped instead, and the default
@@ -3377,6 +3378,114 @@ bool ub_snapshot_wanted() {
     if (const char* e = getenv("RX_VK_UB_SNAPSHOT")) return !env_value_off(e);
     return dev.props.vendorID == 0x8086;
 }
+/// (longshot) A draw's uniform copies (uniform_range) are read from guest memory together once its descriptors are built, with
+/// pools_mu taken once for all of them (memory_read_as_submitted_many) rather than once a copy: the lock and its release were
+/// two thirds of a copy's time on an Arc B580 (HOS_SAMPLE, Castle Town's market: about 10,000 copies a frame, 4 a draw). The
+/// stream's bytes they fill are read by the GPU alone, after the recording is submitted. RX_VK_UB_READ_BATCH=0: each read where
+/// it is asked, as before; 2 (a test): both, compared, the differences counted in the log
+int ub_read_batch_mode() {
+    static const int mode = [] {
+        const char* e = getenv("RX_VK_UB_READ_BATCH");
+        return e && *e ? std::clamp(atoi(e), 0, 2) : 1;
+    }();
+    return mode;
+}
+TLS_OBJECT(ub_reads_pending, std::vector<SubmittedRead>)   // (the build's reads not made yet: ub_reads_flush)
+void ub_reads_flush() {
+    std::vector<SubmittedRead>& p = ub_reads_pending();
+    if (p.empty()) return;
+    if (ub_read_batch_mode() == 2) {
+        static thread_local std::vector<uint8_t> again;
+        static std::atomic<int64_t> asked{0}, differ{0};
+        for (const SubmittedRead& r : p) {
+            again.resize(r.n);
+            const SubmittedRead one{r.gpu, again.data(), r.n};
+            memory_read_as_submitted_many(&one, 1);
+            if (std::memcmp(again.data(), r.dst, r.n)) differ++;
+            if (++asked % 200000 == 0)
+                logf("vk: ub read batch (check): %lld reads made again at their draw's end, %lld differed", (long long)asked.load(),
+                     (long long)differ.load());
+        }
+    } else {
+        memory_read_as_submitted_many(p.data(), p.size());
+    }
+    p.clear();
+}
+struct UbReadsScope {   // (build_descriptors: its reads made when it is over, whichever way it ends)
+    ~UbReadsScope() { ub_reads_flush(); }
+};
+/// (longshot) A recording's uniform copies, by address and size: a draw that binds the range an earlier draw of the recording had
+/// copied into the stream, with the same captures in view (memory_capture_view), is given that copy instead of one of its own. In
+/// Castle Town's market on an Arc B580 the snapshot made 10,400 copies a frame, 19 MB, of 4,200 distinct ranges, 2.4 MB, and a
+/// range's contents were the same in every copy of it within a recording (RX_VK_UB_SNAP_DEDUP=2 in the market: 9.9 million
+/// compared, none differed). By size as well as address: an address is bound with different sizes (a program's used size of
+/// it). The stream's own updates to a range (ub_overlay) come before this, as before. RX_VK_UB_SNAP_DEDUP=0: a copy for every
+/// binding, as before; 2 (a test): a copy for every binding all the same, each compared with the recording's first copy of its
+/// range, the differences counted in the log
+int ub_snap_dedup_mode() {
+    static const int mode = [] {
+        const char* e = getenv("RX_VK_UB_SNAP_DEDUP");
+        return e && *e ? std::clamp(atoi(e), 0, 2) : 1;
+    }();
+    return mode;
+}
+struct UbSnap {
+    uint64_t addr = 0, n = 0, view = 0, epoch = 0, at = 0;
+    VkBuffer buf = VK_NULL_HANDLE;
+    std::vector<uint8_t> bytes;   // (RX_VK_UB_SNAP_DEDUP=2: the first copy's contents)
+};
+constexpr size_t kUbSnaps = 4096;   // (a thread's: a recording in the market held about 130 distinct ranges)
+TLS_OBJECT(ub_snaps, std::vector<UbSnap>)
+/// The slot of (addr, n) in the thread's table: its own (hit: this recording's copy, with these captures in view), or one to fill
+/// (another recording's, or this one's of the range with other captures in view); nullptr when 16 probes found neither
+UbSnap* ub_snap_slot(uint64_t addr, uint64_t n, uint64_t view, bool& hit) {
+    hit = false;
+    if (!cur) return nullptr;
+    std::vector<UbSnap>& snaps = ub_snaps();
+    if (snaps.empty()) snaps.resize(kUbSnaps);
+    uint64_t h = (addr ^ n * 0x9E3779B97F4A7C15ull) * 0xBF58476D1CE4E5B9ull;
+    h ^= h >> 31;
+    const uint64_t epoch = cur->ub_snap_epoch;
+    for (size_t i = 0; i < 16; i++) {
+        UbSnap& e = snaps[(h + i) & (kUbSnaps - 1)];
+        if (e.epoch != epoch) return &e;
+        if (e.addr == addr && e.n == n) {
+            hit = e.view == view;
+            return &e;
+        }
+    }
+    return nullptr;
+}
+void ub_snap_count(bool hit, uint64_t n) {
+    static thread_local int64_t asked, given, saved;
+    asked++;
+    if (hit) given++, saved += (int64_t)n;
+    if (asked % 4000000 == 0)
+        logf("vk: uniform copies (RX_VK_UB_SNAP_DEDUP=%d): %lld of %lld given the recording's earlier copy of their range, %.1f MB not "
+             "copied", ub_snap_dedup_mode(), (long long)given, (long long)asked, saved / 1048576.0);
+}
+/// (RX_VK_UB_SNAP_DEDUP=2) The copy made now, as with the switch off, and compared with the recording's first of the range
+void ub_snap_check(UbSnap* memo, bool hit, uint64_t addr, uint8_t* dst, uint64_t n) {
+    static thread_local std::vector<uint8_t> now;
+    now.assign(n, 0);
+    memory_read_as_submitted(addr, now.data(), n);
+    std::memcpy(dst, now.data(), n);   // (the stream is written, never read back: write-combined)
+    if (hit && memo && memo->bytes.size() == n) {
+        static std::atomic<int64_t> compared{0}, differ{0};
+        if (std::memcmp(memo->bytes.data(), now.data(), n)) {
+            static std::atomic<int> shown{0};
+            if (shown++ < 8)
+                logf("vk: uniform copies (check): %#llx +%#llx differs from the recording's first copy of it",
+                     (unsigned long long)addr, (unsigned long long)n);
+            differ++;
+        }
+        if (++compared % 100000 == 0)
+            logf("vk: uniform copies (check): %lld compared with the recording's first copy of their range, %lld differed",
+                 (long long)compared.load(), (long long)differ.load());
+    } else if (memo) {
+        memo->bytes.assign(now.begin(), now.end());
+    }
+}
 VkDescriptorBufferInfo uniform_range(const NvnState& s, const Stage& st, uint32_t index) {
     VkDescriptorBufferInfo bi{VK_NULL_HANDLE, 0, VK_WHOLE_SIZE};
     const uint64_t align = std::max<uint64_t>(dev.props.limits.minUniformBufferOffsetAlignment, 16);
@@ -3494,12 +3603,28 @@ VkDescriptorBufferInfo uniform_range(const NvnState& s, const Stage& st, uint32_
         static std::atomic<int64_t> after_gpu[2][2];
         if (gpu_written) after_gpu[gpu_written - 1][b && b.offset % align == 0 ? 0 : 1].fetch_add(1, std::memory_order_relaxed);
         if (b && b.offset % align == 0) return {b.buffer, b.offset, n};
+        // (the sharing and the batched reads are the snapshot's alone: with it off, a range that can't be bound in place, unaligned
+        // or outside the pools, is read and copied at its binding as before, and bind_descriptors keeps its delta push)
+        static const int dedup = snapshot ? ub_snap_dedup_mode() : 0;   // (the recording's earlier copy of the range: ub_snap_slot)
+        bool hit = false;
+        const uint64_t view = dedup ? memory_capture_view() : 0;
+        UbSnap* memo = dedup ? ub_snap_slot(u.addr, n, view, hit) : nullptr;
+        if (dedup) ub_snap_count(hit && dedup == 1, n);
+        if (hit && dedup == 1) return {memo->buf, memo->at, n};
         const uint64_t at = stream_alloc(n, align);   // (unaligned or outside the pools: copied into the stream)
         if (at == UINT64_MAX) return bi;
         FINE_N(FC_UBO_STREAM, 1);
         // (as the submission had it, not as the game has rewritten it since: the captures' pages. A range the GPU wrote that
         // can't be bound in place, unaligned or outside the pools, is copied all the same, without that write, as before)
-        memory_read_as_submitted(u.addr, cur->mapped + at, n);
+        static const int batch = snapshot ? ub_read_batch_mode() : 0;
+        if (dedup == 2) {
+            ub_snap_check(memo, hit, u.addr, cur->mapped + at, n);
+        } else {
+            if (batch != 1) memory_read_as_submitted(u.addr, cur->mapped + at, n);
+            if (batch != 0) ub_reads_pending().push_back({u.addr, cur->mapped + at, n});   // (read at the build's end: UbReadsScope)
+        }
+        if (memo && !hit)
+            memo->addr = u.addr, memo->n = n, memo->view = view, memo->epoch = cur->ub_snap_epoch, memo->at = at, memo->buf = cur->stream;
         static int64_t copied;
         if (++copied % 5000 == 1)
             logf("vk: uniform buffer %#llx +%#llx copied into the stream (%s; %lld so; after a GPU write in the submission: "
@@ -3757,6 +3882,7 @@ void desc_counts_unpack(uint64_t packed, size_t* nbuf, size_t* nimg, size_t* nvi
 void build_descriptors(const NvnState& s, const Program& p) {
     // (longshot) the thread's writer asked for once: each dw() is a thread-local lookup, a call in a shared library, and a
     // build made dozens of them
+    const UbReadsScope ub_reads;   // (the uniform copies' reads made together when the build is over: ub_read_batch_mode)
     DescWriter& out = dw();
     out.reset();
     out.prog = &p;
@@ -4359,10 +4485,21 @@ bool bind_descriptors(VkCommandBuffer cmd, VkPipelineBindPoint bp, const Program
         static thread_local std::vector<VkWriteDescriptorSet> changed;
         static thread_local std::vector<uint64_t> words;
         changed.clear();
+        // (longshot) With the uniform copies shared within a recording (ub_snap_dedup_mode), a draw's uniform buffer writes are
+        // often the ones pushed for the draw before. An Arc B580 (driver 32.0.101.9154) draws wrong when a push carries some of a
+        // draw's uniform buffer writes and leaves others out as unchanged: objects with other objects' matrices (Castle Town's
+        // market), as with the snapshot off (RX_VK_UB_SNAPSHOT=0: main's delta push there). Pushing those left out along with them
+        // puts it right; adding them to a push with no uniform buffer write, or to a draw that pushes nothing, does not (one
+        // session each, PR 952). The banks and c1, left out unchanged beside a draw's own new copies, draw right: what tells the
+        // two apart is not known. Before the sharing each draw had copies of its own, so every one of its uniform buffer writes
+        // had changed and was pushed: they still all are, the textures and storage buffers only when changed, as before
+        static const bool ub_every = ub_snapshot_wanted() && ub_snap_dedup_mode() == 1;
+        const auto again = [&](const VkWriteDescriptorSet& w) { return ub_every && w.descriptorType == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; };
         if (old_state) {
             for (size_t i = 0; i < wr.writes.size(); i++) {
                 write_words(wr.writes[i], words);
                 if (words != ps.writes[i]) changed.push_back(wr.writes[i]), ps.writes[i].swap(words);
+                else if (again(wr.writes[i])) changed.push_back(wr.writes[i]);
             }
         } else {   // (the same layout, so the same count of words in each write: compared and kept in place)
             for (size_t i = 0; i < wr.writes.size(); i++) {
@@ -4372,7 +4509,7 @@ bool bind_descriptors(VkCommandBuffer cmd, VkPipelineBindPoint bp, const Program
                     ps.cmd = VK_NULL_HANDLE;
                     return bind_descriptors(cmd, bp, p);
                 }
-                if (!same) changed.push_back(wr.writes[i]);
+                if (!same || again(wr.writes[i])) changed.push_back(wr.writes[i]);
             }
         }
         if (!changed.empty()) {
@@ -5588,6 +5725,8 @@ void draw_begin_recording(int slot, VkCommandBuffer cmd, uint64_t value) {
              c1_peak.load(std::memory_order_relaxed), (unsigned long long)pools_extra.load(std::memory_order_relaxed));
     r.used = 0, r.before = 0;
     r.c1_at.reset();   // (its array kept: emptied at every recording's start, it fills again to about the same size)
+    static std::atomic<uint64_t> ub_snap_epochs{0};   // (every recording a number of its own: ub_snap_slot gives out only its copies)
+    r.ub_snap_epoch = ++ub_snap_epochs;   // (the uniform copies of the slot's last recording are no longer given out)
     cur = &r;
     pass() = Pass{};
     work_since_barrier = false;
