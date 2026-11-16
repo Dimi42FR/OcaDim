@@ -143,3 +143,18 @@ Session en ville, async **On** contre la session d hier (Off), meme machine :
 Aucun flash (bonne nouvelle pour la stabilite du chemin), mais **le cout n est pas enleve : il est deplace dans submit** (9,4 s d attente), et la frame de chargement est pire. Les frames suivantes sont plus legeres (draw 20-200 ms).
 
 Ce que la mesure designe : **programs 1581 ms** et 265 nouveaux pipelines sur cette frame -> c est la **traduction / compilation de programmes** au chargement, pas l enregistrement. Piste suivante : pre-traduire a partir du pipeline tour / des etats prepares, pas l async.
+
+## La VRAM simulee a 2 Go, mesure : le chantier memoire est justifie
+
+RX_VK_VRAM_MB=2048 (comme une carte 4-6 Go), meme scene, meme build :
+
+| | 16 Go | 2 Go simules |
+|---|---|---|
+| fps | ~43-46 | **32,1** |
+| uploads par frame | ~1-2 | **7,5** (2,3 Mo) |
+
+**~25 % de fps perdus** par le thrashing. Mais la bande passante est negligeable (2,3 Mo) : le cout est dans le **decodage/deswizzle** de chaque re-upload (et la traduction, programs 5,5-9,9 s sur les frames lentes).
+
+Donc l idee 1 est justifiee, dans sa version utile : garder la texture **deja decodee**, compressee en RAM (zstd, third_party/zbic), pour qu une re-mise en VRAM soit un decompresser + copier au lieu d un decodage complet.
+
+Note : a 2 Go, le journal affiche 3 404 Mo de textures : le budget ne couvre pas tout ce que le renderer garde (a verifier).
