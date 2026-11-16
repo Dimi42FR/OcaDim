@@ -97,6 +97,28 @@ que le kept puisse s'appliquer aux étages à table : c'est un changement de con
 c'est le même terrain que l'issue 1126 (vues périmées), donc à faire avec des captures à chaque étape.
 
 
+## Sur l'installation de référence (`F:\test`, après l'update du 16/11)
+
+Même profil fin, même build, sauvegarde et scène de l'installation (ce n'est **pas** un A/B avec l'arbre de dev : les
+scènes diffèrent ; c'est ce que voient les joueurs) :
+
+| | arbre de dev | `F:\test` |
+|---|---|---|
+| `draw()` par frame | 16,2 ms | **20,4-20,7 ms** |
+| dont textures | 2,43 ms | **5,3-5,7 ms** |
+| dont résolution de vue | 0,85 ms | **3,4-3,8 ms** |
+| dont notes DLSS/FSR | 0,12-0,17 ms | **0,21 ms** (le saut tient) |
+| draws par frame | 2 750 | 2 000-2 600 |
+| textures résidentes | ~2 800 Mo | **2 081 / 4 573 Mo** |
+| uploads par frame | 0,1 Mo | 0,5 (2-3 Mo) |
+| pipelines | 1 123 | 44 276 (11 513 ms) |
+| fps | 53-56 | 52-62 |
+
+Sur l'installation réelle, **les textures sont le double** de l'arbre de dev et la résolution de vue à elle seule fait
+3,4-3,8 ms : ~28 % d'une frame de 19 ms. C'est le poste le plus rentable du projet pour les joueurs, et il est fermé
+par les étages à table de handles (section précédente).
+
+
 ## Ce que les fps ne disent pas
 
 Les comparaisons de fps entre deux runs ne valent rien ici : la sauvegarde et la zone ont changé plusieurs fois pendant

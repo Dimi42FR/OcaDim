@@ -36,7 +36,7 @@ fois) : **comparer les ms du profil, jamais les moyennes de fps**.
 |---|---|---|
 | `D:\Emulateur\Longshot-src\longshot` | **l'arbre de développement** (le vrai travail) | branche **`v0.1.0-amont`**, ~14 commits au-dessus de `mine-a` |
 | `C:\Users\Administrator\Desktop\Nouveau dossier (9)\OcaDim` | **le dépôt public** (ce que GitHub voit) | `main` = la 0.0.1 + les pages + `CREDITS.md` ; **pas encore la 0.1.0** |
-| `F:\test` | **l'installation du jeu** (launcher + `image.bin` + DLL) | à jour avec la 0.1.0 + gouverneur (exe 514 126 336, DLL 17 020 928) |
+| `F:\test` | **l'installation du jeu** (launcher + `image.bin` + DLL) | à jour au 16/11 14:35 (`make_game.py --update`, source `0e9fd82a` ; exe 514 126 336, DLL **17 028 096**) |
 
 `F:\test` n'est pas un dossier de dev : `longshot.exe` y est un **launcher** qui vérifie `​.longshot_installed.json` et
 écrit depuis `image.bin`. Copier un exe et une DLL à la main **ne marche pas** (voir pièges) : il faut `make_game.py --update`.
