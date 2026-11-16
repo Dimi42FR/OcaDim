@@ -736,7 +736,9 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
   Linux outputs are ambiguous and are not offered; use Default and the system mixer to route those.
 - **Speaker layout** is the speakers the game mixes its sound for. Auto is 5.1 when the selected/default output device has 5.1
   or more speakers, else stereo; Stereo or 5.1 chooses one whatever the device has (5.1 on stereo speakers is mixed
-  down). Mono averages the stereo channels into both ears, for one-sided hearing or one earbud. Mono/Stereo
+  down). Auto counts the speakers Windows names, not the channels: an audio interface whose outputs are not set up as
+  surround speakers (a Focusrite Scarlett's 8 outputs, for one) is stereo, so voices and the ocarina do not go to an
+  output with nothing connected. Mono averages the stereo channels into both ears, for one-sided hearing or one earbud. Mono/Stereo
   changes apply live while output is stereo; changing the channel layout (from or to 5.1) needs a restart.
   Auto never applies the mono average. Saved `audio_output` values remain 0 Auto, 1 Stereo, 2 5.1; Mono is 3.
   For one run, `HOS_AUDIO_CHANNELS=2` or `6` chooses the channel layout over the menu (6 leaves Mono inactive).
