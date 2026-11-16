@@ -14,13 +14,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-GRAPHICS = [
-    ("Resolution and upscaling", ["Aspect ratio", "Output resolution", "Profile", "Upscaler", "DLSS model", "Render resolution", "Sharpness"]),
-    ("Frame generation and latency", ["Frame generation", "Frame generation by", "Frame pacing", "Game frame rate cap",
-                                      "NVIDIA Reflex", "AMD Anti-Lag 2"]),
+DISPLAY = [
+    ("Picture", ["Aspect ratio", "Output resolution", "Custom output size"]),
+    ("Frame rate", ["Frame pacing", "Game frame rate cap"]),
     ("Screen", ["Fullscreen", "V-Sync", "Window scaling filter", "CRT filter", "CRT lines", "Ultrawide menus"]),
     ("HDR", ["HDR", "HDR paper white", "HDR peak brightness", "HDR contrast", "HDR tone mapper"]),
-    ("Detail", ["Anisotropic filtering", "Shadow resolution"]),
+]
+GRAPHICS = [
+    ("Resolution and upscaling", ["Profile", "Upscaler", "Render resolution", "Sharpness"]),
+    ("Frame generation and latency", ["Frame generation", "Frame generation by", "AMD Anti-Lag 2"]),
+    ("Detail", ["Texture detail", "Anisotropic filtering"]),
     ("GPU and memory", ["GPU device", "Threaded rendering"]),
 ]
 
@@ -77,23 +80,26 @@ def main():
                 raise SystemExit("FAIL: %s: every row of the section %r can be hidden (row_shown): a GPU without them "
                                  "would show its title over nothing" % (tab, name))
 
-    graphics = tabs.get("TAB_GRAPHICS", [])
-    if not graphics or graphics[0][0] != "Quality preset" or graphics[0][2]:
-        raise SystemExit("FAIL: the Graphics tab does not start with the Quality preset")
-    titles = [name for name, _, heading in graphics if heading]
-    want = [title for title, _ in GRAPHICS]
-    if titles != want:
-        raise SystemExit("FAIL: the Graphics tab's sections are %r, not %r" % (titles, want))
-    section_of, current = {}, None
-    for name, value, heading in graphics:
-        if heading:
-            current = name
-        elif current:
-            section_of[name] = current
-    for title, members in GRAPHICS:
-        for name in members:
-            if section_of.get(name) != title:
-                raise SystemExit("FAIL: Graphics: %r is under %r, not %r" % (name, section_of.get(name), title))
+    for tab, expected, first_row in (("TAB_DISPLAY", DISPLAY, None), ("TAB_GRAPHICS", GRAPHICS, "Quality preset")):
+        entries = tabs.get(tab, [])
+        if not entries:
+            raise SystemExit("FAIL: the %s tab has no rows" % tab)
+        if first_row and (entries[0][0] != first_row or entries[0][2]):
+            raise SystemExit("FAIL: the Graphics tab does not start with the Quality preset")
+        titles = [name for name, _, heading in entries if heading]
+        want = [title for title, _ in expected]
+        if titles != want:
+            raise SystemExit("FAIL: the %s tab's sections are %r, not %r" % (tab, titles, want))
+        section_of, current = {}, None
+        for name, value, heading in entries:
+            if heading:
+                current = name
+            elif current:
+                section_of[name] = current
+        for title, members in expected:
+            for name in members:
+                if section_of.get(name) != title:
+                    raise SystemExit("FAIL: %s: %r is under %r, not %r" % (tab, name, section_of.get(name), title))
 
     # the heading rows are drawn as titles and stepped over by the keys (no code of their own per tab)
     draw = function(menu, "void draw_options(ui::Ctx& c) {")
@@ -102,7 +108,8 @@ def main():
     tick = function(menu, "void menu_tick() {")
     if "while (heading_at(selected));" not in tick:
         raise SystemExit("FAIL: menu_tick's keys no longer step over heading rows")
-    print("menu sections: OK (%d headings; Graphics in %d sections)" % (sum(r[3] for r in rows), len(titles)))
+    print("menu sections: OK (%d headings; Display in %d sections, Graphics in %d)" %
+          (sum(r[3] for r in rows), len(DISPLAY), len(GRAPHICS)))
 
 
 if __name__ == "__main__":

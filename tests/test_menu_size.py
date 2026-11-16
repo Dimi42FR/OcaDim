@@ -39,11 +39,12 @@ def main():
     check('!strcmp(line, "menu_size") && atoi(eq + 1) == 0' in init and "if (menu_auto) opts.menu_size = 2;" in init,
           "an options file's menu_size=0 (Auto) does not load as Medium")
 
-    banner = menu[menu.index("which build, at the banner"):]
+    banner = menu[menu.index('std::string ver = std::string("OcaDim ") + version_text(LONGSHOT_VERSION);'):]
     banner = banner[:banner.index("\n    }\n")]
-    check("ui::fit_px(px, opts.menu_size == 3 ? px : kVersionMinPt * s, 0.5f * s, room, width)" in banner and "if (fit > 0)" in banner,
+    check("ui::fit_px(px, opts.menu_size == 3 ? px : kVersionMinPt * s, 0.5f * s, std::max(room, 40 * s), width)" in banner
+          and "if (fit > 0)" in banner,
           "the banner's version is not shrunk to fit at Small and Medium (and kept at its size at Large)")
-    check('std::string("Longshot ") + version_text(LONGSHOT_VERSION)' in banner and "(source" not in banner.split("ui::fit_px(")[0].split("version_text")[1],
+    check('version_text(LONGSHOT_VERSION)' in banner and "(source" not in banner.split("ui::fit_px(")[0].split("version_text")[1],
           "the banner's version is not shown as players see it (version_text: no source fingerprint)")
     check("constexpr float kVersionMinPt = 10;" in menu, "the version's smallest size is not 10 points")
 

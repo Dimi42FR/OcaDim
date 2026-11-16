@@ -26,7 +26,7 @@ def sources():
     win, sdl = read("host", "display.c"), read("host", "posix", "display_sdl.c")
     if '#include "vk_menu_hit.h"' not in menu or "hits.at(" not in menu or "hits.clear(" not in menu or "hits.drag(" not in menu:
         raise SystemExit("the menu does not hit-test with vk_menu_hit.h's record of what it drew")
-    for part in ("kTabPrev", "kTabNext", "kTab", "kRow", "kCtlRow", "kCtlCell", "kListLine", "kButton"):
+    for part in ("kTab", "kRow", "kCtlRow", "kCtlCell", "kListLine", "kButton"):   # (OcaDim: the rail lists every tab)
         if not re.search(r"hits\.add\([^;]*menu_hit::%s\b" % part, menu):
             raise SystemExit("the menu draws a control it does not record (menu_hit::%s): the mouse cannot reach it" % part)
     # (a click on a row's name selects it and leaves its value: row_click, checked in test_menu_hit.cpp)

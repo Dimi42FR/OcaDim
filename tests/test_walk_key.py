@@ -122,13 +122,17 @@ static int64_t hos_now_ns(void) { return 0; }
 static int npresses;
 static int64_t script_end_ms;
 static int64_t script_elapsed_ms(int64_t now) { (void)now; return 0; }
-static void scripted_input(uint64_t *b, int32_t s[4]) { (void)b; (void)s; }
+static void scripted_input(uint64_t *b, uint64_t *taps, int32_t s[4]) { (void)b; (void)taps; (void)s; }
+/* read_input's controller path: no controller here (keys only), and the menu's chord state */
+static uint64_t bound_pad_buttons(uint64_t raw);
+static uint64_t pad_raw_game;
 void hos_oot_autoload_input(void) {}   /* (host/oot_autoload.c: Skip title screen off) */
 int hos_control_input(uint64_t *buttons, int32_t stick[4]) { (void)buttons; (void)stick; return 0; }   /* (host/control.c: off) */
 static int game_in_front(void) { return front; }
 static volatile LONG pad_raw_now;
 static int pad_after_menu;   /* (main shares this state with the ocarina note word) */
 static void player_used(void) {}
+static uint64_t bound_pad_buttons(uint64_t raw) { return raw; }
 """
 
 STUBS = r"""
@@ -152,10 +156,10 @@ static int mouse_stick(int32_t *x, int32_t *y, int pointing) {
 MAIN = r"""
 static int fails;
 #define CHECK(c) do { if (!(c)) { printf("FAIL line %d: %s\n", __LINE__, #c); fails++; } } while (0)
-static uint64_t buttons;
+static uint64_t buttons, taps;
 static int32_t st[4];
 static void poll(void) {
-    read_input(&buttons, st);
+    read_input(&buttons, &taps, st);
     CHECK(oc_consumed_pads == 0);   /* the inactive note layer must not consume the controller while walking */
 }
 static void release(void) { memset(held, 0, sizeof held); }
@@ -327,20 +331,23 @@ class WalkKeyTests(unittest.TestCase):
             self.skipTest("no C compiler")
         hid = read("host", "nn_hid.c")
         code = [block(hid, "enum { B_A"), block(hid, "static int key("), block(hid, "static int kmap_down("),
-                between(hid, "static const char *const bind_names[HOS_KEY_N]", "void hos_bind("),
-                between(hid, "static int mouse_vk_slot(", "static int bound_down("), block(hid, "static void stick_max("),
+                between(hid, "static const char *const bind_names[HOS_KEY_N]", "static int pad_code("),
+                block(hid, "static void binds_load("),
+                block(hid, "int hos_binding(int set, int button, int slot) {"),
+                block(hid, "void hos_bind(int set, int button, int slot, int code) {"),
+                between(hid, "static int mouse_vk_slot(", "static uint64_t flight_input;"), block(hid, "static void stick_max("),
                 block(hid, "static void oc_notes("),
-                block(hid, "static int pads_in_background("), block(hid, "static int walk_held("),
+                block(hid, "static int pads_in_background("), block(hid, "static int walk_held("), block(hid, "static int run_held("),
                 block(hid, "enum { WALK_SPEED_DEFAULT"), block(hid, "static int walk_percent("),
                 block(hid, "static void move_keys_stick(")]
-        source = PRELUDE + "\n".join(code) + STUBS + block(hid, "static void read_input(") + MAIN
+        source = PRELUDE + ";\n".join(code) + STUBS + block(hid, "static void read_input(") + MAIN
         env = {k: v for k, v in os.environ.items() if not k.startswith(("HOS_INPUT_", "HOS_MOUSE_"))}
         with tempfile.TemporaryDirectory(prefix="longshot-walk-key-") as tmp:
             tmp = Path(tmp)
             (tmp / "t.c").write_text(source, encoding="utf-8")
             binary = tmp / ("t.exe" if sys.platform == "win32" else "t")
             build = subprocess.run([compiler, "-std=gnu11", "-D_CRT_SECURE_NO_WARNINGS", "-include", ENV_ON_H, "-Wall", "-Wextra", "-Werror",
-                                    "-Wno-unused-function", "-I", str(ROOT / "gpu" / "vk"), str(tmp / "t.c"), "-o", str(binary)],
+                                    "-Wno-unused-function", "-Wno-unused-variable", "-I", str(ROOT / "gpu" / "vk"), str(tmp / "t.c"), "-o", str(binary)],
                                    text=True, capture_output=True)
             self.assertEqual(build.returncode, 0, build.stderr)
             for mode, ini in INI.items():
@@ -354,15 +361,17 @@ class WalkKeyTests(unittest.TestCase):
     def test_wiring(self):
         api, hid, menu = read("gpu", "vk", "vk_api.h"), read("host", "nn_hid.c"), read("gpu", "vk", "vk_menu.cpp")
         header, replay = read("gpu", "vk", "vk_menu.h"), read("gpu", "vk", "vk_replay.cpp")
-        self.assertIn("enum { HOS_OPT_WALK_MODE = 49, HOS_OPT_WALK_SPEED };", api)
-        self.assertRegex(api, r"HOS_KEY_OC_NOTE_X, HOS_KEY_WALK, HOS_KEY_N \};")
+        self.assertIn("enum { HOS_OPT_WALK_MODE = 49, HOS_OPT_WALK_SPEED, HOS_OPT_RUN_MODE = 63 };", api)
+        self.assertRegex(api, r"HOS_KEY_OC_NOTE_X, HOS_KEY_WALK, HOS_KEY_RUN, HOS_KEY_N \};")
         # (the host's two copies of the names: the ini's key_walk)
         self.assertEqual(names(hid), names(menu))
-        self.assertEqual(names(hid)[-1], "walk")
+        self.assertEqual(names(hid)[-2:], ["walk", "run"])
         self.assertIn('{HOS_KEY_WALK, "Walk"}', menu, "the Controls page has no Walk row")
+        self.assertIn('{HOS_KEY_RUN, "Run"}', menu, "the Controls page has no Run row")
         option = replay[replay.index("t.option = "):]
         option = option[:option.index("};")]
         self.assertIn("if (id == HOS_OPT_WALK_MODE) return opts.walk_mode;", option)
+        self.assertIn("if (id == HOS_OPT_RUN_MODE) return opts.run_mode;", option)
         self.assertIn("if (id == HOS_OPT_WALK_SPEED) return opts.walk_speed;", option)
         # (the rows: Controls tab, kept out of the quality preset; the speed's range is the host's)
         mode = re.search(r'\{TAB_CONTROLS, "Walk mode", &opts\.walk_mode, 0, 1, 1, tx_walk_mode,[^}]*\}', menu)
@@ -374,7 +383,9 @@ class WalkKeyTests(unittest.TestCase):
         default = int(re.search(r"enum \{ WALK_SPEED_DEFAULT = (\d+) \};", hid).group(1))
         self.assertIn("int walk_speed = %d;" % default, header, "the menu's default is not the host's")
         self.assertIn("int walk_mode = 0;", header)
+        self.assertIn("int run_mode = 0;", header)
         self.assertIn("rx_option(HOS_OPT_WALK_MODE, 0) == 1", block(hid, "static void read_input("))
+        self.assertIn("rx_option(HOS_OPT_RUN_MODE, 0) == 1", block(hid, "static void read_input("))
         # (documented where the rows and the ini's keys are)
         readme, development = read("README.md"), read("docs", "development.md")
         lo, hi = speed.groups()

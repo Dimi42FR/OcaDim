@@ -429,26 +429,18 @@ A row for something this PC cannot use is not shown: NVIDIA Reflex and AMD Anti-
 have them, the DLSS model where DLSS does not run. HDR paper white and
 HDR peak brightness and HDR contrast show only while HDR is on, the HDR tone mapper only with HDR set to Native.
 
-The Graphics tab groups its rows under section titles: Resolution and upscaling, Frame generation and latency, Screen,
-HDR, Detail, and GPU and memory (last: the rows to change when something is wrong). The table lists them in that order.
+The Display tab groups the picture's rows under section titles: Picture (its shape and size), Frame rate, Screen, and HDR.
+The Graphics tab groups its rows under: Resolution and upscaling, Frame generation and latency, Detail, and GPU and memory
+(last: the rows to change when something is wrong). The NVIDIA tab gathers DLSS's model and NVIDIA Reflex, and is not
+shown on a PC where neither runs. The table lists each tab's rows in that order.
 
 | Tab | Option | Choices | Default |
 |---|---|---|---|
-| Graphics | Quality preset | Custom, Minimum (4GB), Low (6GB), Balanced (8GB), High (12GB), Ultra (16GB+), Auto (this PC) | Auto (this PC) on a first start; Custom in an options file from before it |
-| | Aspect ratio | The shapes your screen's resolutions have, narrowest first (5:4, 4:3, 16:10, 16:9, 21:9, 32:9, ...), your monitor's own marked "(monitor's)" (after a restart) | Your monitor's |
+| Display | Aspect ratio | The shapes your screen's resolutions have, narrowest first (5:4, 4:3, 16:10, 16:9, 21:9, 32:9, ...), your monitor's own marked "(monitor's)" (after a restart) | Your monitor's |
 | | Output resolution | The Aspect ratio's sizes: your screen's resolutions and the common ones (1440p, 4K, 5K at 16:9; 1920x1200, 2560x1600 at 16:10; 3440x1440 at 21:9; ...), and 2048x1152 (the game's own reduced size, 80% of its 2560x1440, marked "(reduced)") at 16:9; your screen's own size is marked "(native)" (after a restart) | 2560x1440, the game's own picture, or your screen's size where it is smaller (a Steam Deck's 1280x800, a 1080p monitor), at its own shape (a 2560x1080 ultrawide starts at 2560x1080, a 2256x1504 laptop at 2256x1504); Auto (this PC) leaves it as it is |
 | | Custom output size | A size of your own, typed as `<width>x<height>` (after a restart) | None |
-| | Profile | Docked, Handheld (after a restart) | Docked; a quality preset sets it |
-| | Upscaler | Game's own, NVIDIA DLSS (only in builds with NVIDIA's DLSS SDK, below, on NVIDIA RTX GPUs), AMD FSR 3.1 (every build, on GPUs it runs on, below), AMD FSR 4 (only in builds with FSR 4, below, on GPUs AMD's files cover), Off (no upscaling), Intel XeSS (Windows, with Intel's `libxess.dll` beside the game, below). NVIDIA DLAA, AMD FSR 4 Native AA and Intel XeSS Native AA are DLSS's, FSR 4's and XeSS's Native, chosen on the Render resolution row | Game's own; Auto (this PC) chooses DLSS or FSR 4 where they run, never XeSS |
-| | DLSS model | Transformer (K), Transformer 2 (M), Transformer 2 (L), NVIDIA default (shown where DLSS runs; used by DLSS and DLAA) | Transformer (K) |
-| | Render resolution | Auto (the game's own dynamic resolution), 100%, 75%, 67%, 50% (each with its size). With DLSS or FSR 4: Auto, Native (DLAA or FSR 4 Native AA: the 3D at full size), 92%, 83%, 75%, Quality (67%), Balanced (58%), Performance (50%), Ultra Performance (33%). With Intel XeSS the same stops, named by the XeSS mode each runs under: Native (XeSS Native AA), Ultra Quality Plus (92%, 83%), 75%, Ultra Quality (67%), Balanced (58%, 50%), Ultra Performance (33%). With FSR 3.1: Auto, 100% (its native AA), then the same as DLSS from 92%. With Off: Auto, 100%, 75%, 67%, 50%, 33% | Auto; a quality preset sets it |
-| | Sharpness | 0 to 100%, in steps of 10 | 0%; a quality preset sets it |
-| | Frame generation | Off, Auto, 2x to 8x | Off |
-| | Frame generation by | Auto (NVIDIA DLSS Frame Generation where it runs: RTX 40 and newer, with a temporal Upscaler; else the built-in one; with frame generation on, the row shows who makes the frames, as Auto: DLSS FG, and why not DLSS FG when another does), Built-in FG. Changes at once | Auto |
 | | Frame pacing | Off, On | Off; a quality preset turns it on |
 | | Game frame rate cap | 60 (the console's), 90, 120, 144, 165, 240, Uncapped (changes at once) | 60 |
-| | NVIDIA Reflex | Off, On, On + Boost (shown only on NVIDIA GPUs with `VK_NV_low_latency2`) | Off |
-| | AMD Anti-Lag 2 | Off, On (shown only on AMD GPUs with `VK_AMD_anti_lag`) | Off |
 | | Fullscreen | Off, On (the same as <kbd>F11</kbd>) | Off |
 | | V-Sync | Auto, On, Off | Auto |
 | | Window scaling filter | Off, Catmull-Rom, Lanczos (shows "Not needed (window = output)" while the window is the Output resolution's size) | Off; a quality preset sets it |
@@ -460,9 +452,16 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | HDR peak brightness | 400 to 4000 nits, in steps of 100 (while HDR is on) | 1000 nits |
 | | HDR contrast | 50% to 200% around mid grey, in steps of 5 (while HDR is on) | 100% |
 | | HDR tone mapper | Vanilla (the game's curve), PsychoV35 (RenoDX's; with HDR set to Native). Compatible DLSS/DLAA, FSR 4/native AA and shared-chain FSR 3.1 upscaling run automatically; `RX_VK_PSYCHOV35_DLSS=0` disables that compatibility route. Off and the spatial/FXAA TAAU replacement support PsychoV35 directly. FSR 3.1 FG remains separately opt-in and 2x only; legacy own-input FSR upscaling remains unsupported | Vanilla |
+| Graphics | Quality preset | Custom, Minimum (4GB), Low (6GB), Balanced (8GB), High (12GB), Ultra (16GB+), Auto (this PC) | Auto (this PC) on a first start; Custom in an options file from before it |
+| | Profile | Docked, Handheld (after a restart) | Docked; a quality preset sets it |
+| | Upscaler | Game's own, NVIDIA DLSS (only in builds with NVIDIA's DLSS SDK, below, on NVIDIA RTX GPUs), AMD FSR 3.1 (every build, on GPUs it runs on, below), AMD FSR 4 (only in builds with FSR 4, below, on GPUs AMD's files cover), Off (no upscaling), Intel XeSS (Windows, with Intel's `libxess.dll` beside the game, below). NVIDIA DLAA, AMD FSR 4 Native AA and Intel XeSS Native AA are DLSS's, FSR 4's and XeSS's Native, chosen on the Render resolution row | Game's own; Auto (this PC) chooses DLSS or FSR 4 where they run, never XeSS |
+| | Render resolution | Auto (the game's own dynamic resolution), 100%, 75%, 67%, 50% (each with its size). With DLSS or FSR 4: Auto, Native (DLAA or FSR 4 Native AA: the 3D at full size), 92%, 83%, 75%, Quality (67%), Balanced (58%), Performance (50%), Ultra Performance (33%). With Intel XeSS the same stops, named by the XeSS mode each runs under: Native (XeSS Native AA), Ultra Quality Plus (92%, 83%), 75%, Ultra Quality (67%), Balanced (58%, 50%), Ultra Performance (33%). With FSR 3.1: Auto, 100% (its native AA), then the same as DLSS from 92%. With Off: Auto, 100%, 75%, 67%, 50%, 33% | Auto; a quality preset sets it |
+| | Sharpness | 0 to 100%, in steps of 10 | 0%; a quality preset sets it |
+| | Frame generation | Off, Auto, 2x to 8x | Off |
+| | Frame generation by | Auto (NVIDIA DLSS Frame Generation where it runs: RTX 40 and newer, with a temporal Upscaler; else the built-in one; with frame generation on, the row shows who makes the frames, as Auto: DLSS FG, and why not DLSS FG when another does), Built-in FG. Changes at once | Auto |
+| | AMD Anti-Lag 2 | Off, On (shown only on AMD GPUs with `VK_AMD_anti_lag`) | Off |
 | | Texture detail | Auto, Full, Medium, Low | Auto; a quality preset sets it |
 | | Anisotropic filtering | Game's, 2x, 4x, 8x, 16x | 16x |
-| | Shadow resolution | Auto (for the card's memory), Game's (1600), High (2200), Highest (3072): the sun's shadow maps, applies at once | Auto |
 | | GPU device | Auto, or each graphics card by name (after a restart) | Auto |
 | | Threaded rendering | Auto, On, Off (after a restart). Auto is On with 12 or more processor threads for the game | Auto |
 | | Replay workers | Auto, 1, 2, 3, 4 (the replay's threads; Auto is one for every four the game may use, at most four, none under six) | Auto |
@@ -491,7 +490,7 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | Menu language | Auto (the game's language), or English, Português (Brasil), Español (Latinoamérica), Español (España), Français, Deutsch, Italiano, Nederlands, Polski, Русский, 日本語, 한국어, 简体中文, 繁體中文 | Auto |
 | | Discord status | Off, On ("Playing Longshot" and the time played in your Discord status, while Discord runs on this PC) | On |
 | | Skip opening | Off, On (skips the new-game opening: the story movie and Navi waking Link; later cutscenes and the title screen stay) | Off |
-| | Bug report | Saves a report into a new folder in `bug-reports` (below) | |
+| | Bug report | Saves a report into a new folder in `bug-reports` (below) |  |
 | Controls | Controller in background | Off, On | Off |
 | | Mouse camera | As the stick, Native, Off | As the stick |
 | | Disable camera centering | Off, On | Off |
@@ -506,12 +505,15 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | Rumble strength | Off, 25% to 150%, in steps of 25 | 100% |
 | | Layout preset | Nintendo (Def), Xbox / PC, Swap Face; Custom once you bind a button yourself (on the Controls page) | Nintendo (Def) |
 | | Button prompts | Auto, Switch, Xbox, PlayStation 4, PlayStation 5, Steam Deck, Keyboard (on the Controls page; changes at once where the game allows it, else after a restart) | Auto |
-| | Motion | Opens the Motion page: Motion controls (Off, On; On), Motion sensitivity X (10% to 600%) and Y (10% to 300%, in steps of 10; 100%), Invert motion X and Y (Off, On; Off), Motion deadzone (Low, Standard, High; Standard) | |
+| | Motion | Opens the Motion page: Motion controls (Off, On; On), Motion sensitivity X (10% to 600%) and Y (10% to 300%, in steps of 10; 100%), Invert motion X and Y (Off, On; Off), Motion deadzone (Low, Standard, High; Standard) |  |
 | | Walk mode | Hold, Toggle | Hold |
 | | Walk speed | 15% to 90%, in steps of 5 | 45% |
-| | Controls | Opens the Controls page | |
+| | Run mode | Hold, Toggle | Hold |
+| | Controls | Opens the Controls page |  |
 | | Menu shortcut | Insert or F1; F1 only; Insert, F1 or Esc | Insert, F1 or Esc |
 | | Compact menu key | Right Shift, Right Ctrl | Right Shift |
+| NVIDIA | DLSS model | Transformer (K), Transformer 2 (M), Transformer 2 (L), NVIDIA default (shown where DLSS runs; used by DLSS and DLAA) | Transformer (K) |
+| | NVIDIA Reflex | Off, On, On + Boost (shown only on NVIDIA GPUs with `VK_NV_low_latency2`) | Off |
 | Debug | Debug tools | Off, On (while on, the tools below it: Heart protection, No-clip flight, Mark position, Return to mark, Set time, Inventory item, Change quantity, Free camera, Teleport, Switch age, Inventory, Movement speed) | Off |
 | | Autosave: | On or Off, available with Debug tools off. Enabling Debug tools switches Autosave to Off. Off skips supported autosaves, including the verified map transitions. You can still save manually. | On |
 | | Player: Damage taken | Half, Normal, Double, Quadruple (live, while Debug tools is on; Half rounds damage up to a quarter heart; Heart protection wins) | Normal |
@@ -522,8 +524,8 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | Developer: ASTC as RGBA8 | Off, On (after a restart) | Off |
 | | Developer: Intel shader compiles | Auto, Side by side, One at a time (after a restart; Intel graphics on Windows only) | Auto |
 
-- **Quality preset** sets Render resolution, Window scaling filter, Sharpness, Frame pacing, Game speed, Profile and
-  Shadow resolution (back to Auto) for a card with that much memory; how much video memory the textures use comes from the card itself.
+- **Quality preset** sets Render resolution, Window scaling filter, Sharpness, Frame pacing, Game speed and Profile for a
+  card with that much memory; how much video memory the textures use comes from the card itself.
   It leaves the Upscaler and Frame generation as you chose them: with DLSS, FSR 3.1 or FSR 4, the preset's resolution
   becomes their nearest mode. Changing most other rows yourself sets it back to Custom.
 - **Auto (this PC)**, which a first start begins on, chooses for the PC it runs on: the memory tier from the card's
@@ -642,13 +644,9 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 - **Anisotropic filtering** keeps textures sharp on surfaces seen at a slant: the paths and floors ahead of Link. The game
   asks for 1x or 2x, which at a PC's resolutions smears the ground a few metres off; 16x costs little on most cards, and
   Game's is the console's own. `RX_VK_ANISO=<n>` sets it for one run (0: the game's).
-- **Shadow resolution** sets the size of the sun's shadow maps. The game draws them 1600 pixels a side, which at a PC's
-  resolutions turns the shadows of thin things near Link (the drawbridge's chains, fences, ivy) into stair steps. High
-  (2200) and Highest (3072) are the game's own larger sizes, from its own table: by their size, Highest takes about
-  113 MB of video memory against the game's 31 MB, and on an RTX 4090 0.05 to 0.07 ms more GPU time a frame. Auto, the
-  default, picks by the card's memory, the Quality preset's tier or else the one Auto (this PC) chose: the game's size on
-  Minimum and Low (4 and 6 GB), High on Balanced (8 GB), Highest from High (12 GB) up. Choosing a preset puts the row back
-  on Auto. It applies at once and is saved as `shadow_resolution`.
+- **Shadow resolution** is not a setting here: the sun's shadow maps stay at the game's own 1600 pixels a side. The game's
+  larger sizes (2200 and 3072) cost Castle Town 6-7 fps on a 16 GB card, so OcaDim pins the console's size. An options file
+  that still carries `shadow_resolution` is read and ignored.
 - **Upscaler Off** (`dlss=6` in `longshot_options.ini`) is for slow GPUs and for measuring: no DLSS, no FSR, and not the
   game's own network either, which otherwise runs on every frame (at the game's usual 3/4 share it scales the 3D up and
   smooths its edges; at 100% a pass of the same kind still smooths them). In its place the 3D is stretched to the output
@@ -787,6 +785,11 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
   menu's controller keep the Switch's buttons. A prompt for several directions at once shows W A S D while those are the
   movement keys, and the stick's own icon with other keys.
 - **Save my pipeline list** (Debug tab, under Developer): see [Send your pipeline list](#send-your-pipeline-list).
+- **Auto run:** sprint without holding A (or its key). Hold it until Link sprints, then let go: he keeps going. Let go of
+  the stick or the movement keys, or tap A again, to stop.
+- **Run mode** and **Run:** the Run key makes Link run on demand, the Walk key's mirror. While it is held (unbound until
+  the Controls page gives it a key), the movement keys push the left stick all the way; on Toggle, one press runs and the
+  next walks again. Useful for a controller whose stick no longer reaches its edge. It never overrides Walk.
 - **Walk mode** and **Walk speed:** on the keyboard the movement keys push the stick all the way, so Link runs. While the
   Walk key is held (<kbd>Caps Lock</kbd> unless you change it on the Controls page), they tilt it only Walk speed of the
   way, and he walks; with Walk mode on Toggle, one press walks and the next runs again. 15% is his slowest walk, 45% to

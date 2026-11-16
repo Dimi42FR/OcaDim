@@ -66,11 +66,6 @@ struct Options {
                               // gpu/vk/vk_texture.cpp texture_detail_dims; read as each texture is made)
     int anisotropy = 4;   // (longshot) Anisotropic filtering: 0 the game's own (1x or 2x), 1 2x, 2 4x, 3 8x, 4 16x (the
                           // device's limit at most; gpu/vk/vk_draw.cpp aniso_override, RX_VK_ANISO over it)
-    int shadow_res = 1;   // (longshot) Shadow resolution, the sun's cascades: 0 Auto (the size for the card's memory,
-                          // menu_shadow_res), 1 the game's (1600), 2 2200, 3 3072 (host/oot_shadow.c: HOS_OPT_SHADOW_RES, 56).
-                          // (OcaDim: 1 by default, the game's own size, as 0.0.1 drew them; Auto picked 3072 on a 16 GB card
-                          // and cost the town 6-7 fps)
-                          // The Quality presets set it back to Auto (apply_preset)
     int realtime = 1;     // game time follows the clock (host/nn_vi.c); 0: per frame (slower frames, slower game)
     int handheld = 0;     // the game's handheld profile: ~4 fps, softer; read once, at the start (host/nn_applet.c)
     int ultrawide = 1;    // the Aspect ratio row. Saved as ultrawide=, read once, at the start (host/hos_main.c): 1 the monitor's own
@@ -103,6 +98,8 @@ struct Options {
                           // runs again (host/nn_hid.c walk_held: HOS_OPT_WALK_MODE, 49)
     int walk_speed = 45;  // (longshot) how far the movement keys tilt the left stick while Link walks, percent, 15 to 90
                           // (host/nn_hid.c: HOS_OPT_WALK_SPEED, 50)
+    int run_mode = 0;     // (OcaDim) the Run key (the Controls page): 0 Link runs while it is held, 1 one press runs and the
+                          // next walks again (host/nn_hid.c run_held: HOS_OPT_RUN_MODE, 51)
     int text_speed = 0;   // how fast dialogue prints: 0 the game's, 1 2x, 2 4x, 3 instant (host/nn_vi.c, nx2/oot_patches.py; HOS_TEXT_SPEED)
     int transition_autosave = 1;
     int damage_taken = 1; // 0 Half, 1 Normal, 2 Double, 3 Quadruple (host/oot_damage.c)
@@ -206,7 +203,6 @@ int menu_player_flight();
 int menu_free_camera();
 int menu_link_speed();   // (Movement speed in percent, 100 while the tools are off)
 int menu_transition_autosave();
-int menu_shadow_res();   // (Shadow resolution, HOS_OPT_SHADOW_RES: the size drawn, Auto resolved)
 int menu_damage_taken();   // (Damage taken, HOS_OPT_DAMAGE_TAKEN: 1, Normal, while the tools are off)
 int menu_take_cheat_action();
 void menu_note_frame(bool game_frame, int shown = 1);   // (the frame rates the FPS counter shows)

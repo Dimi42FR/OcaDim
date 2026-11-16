@@ -1182,7 +1182,7 @@ retry state. Device discovery refreshes when the menu opens, rather than polling
 | `sharpness`, `rumble_strength`, `motion_sensitivity_x`, `motion_sensitivity_y`, `walk_speed` | percent |
 | `mouse_sensitivity` | hundredths: 100 is 1.00 |
 | `field_of_view` | 50 to 150 percent of the current vertical gameplay FOV; 100 is the original. Applies immediately, before projection and culling. The resulting vertical angle stays within 5 to 140 degrees |
-| `shadow_resolution` | the sun's shadow maps: 0 Auto (the default: by the memory tier, `memory_budget` or else Auto (this PC)'s, the game's 1600 on Minimum and Low, 2200 on Balanced, 3072 from High up; `menu_shadow_res`), 1 Game's (1600 pixels a side), 2 High (2200), 3 Highest (3072). Read each frame (`host/oot_shadow.c`), so a change applies at once. A Quality preset sets it back to 0 |
+| `shadow_resolution` | left from earlier versions and **ignored**: OcaDim pins the sun's shadow maps at the game's own 1600 pixels a side (`host/oot_shadow.c` is always answered 0), because Auto picked 3072 on a 16 GB card and cost Castle Town 6-7 fps |
 | `robust_buffers` | 0 Auto (on), 1 Off, 2 On |
 | `transition_autosave` | 1 On (default), 0 Off. The Autosave row works independently of Debug tools. Off suppresses the verified map-transition save requests. |
 | `damage_taken` | 0 Half, 1 Normal (default), 2 Double, 3 Quadruple; Debug tools Off uses Normal without changing the saved choice. Half rounds the full hit up to a quarter heart, even on lethal hits; Heart protection wins |
@@ -1191,6 +1191,7 @@ retry state. Device discovery refreshes when the menu opens, rather than polling
 | `microphone` | 0 Off, 1 Default, 2 and up a microphone (the name in `microphone_device` decides which) |
 | `mouse_camera` | 0 As the stick, 1 Native, 2 Off (the mouse is never captured) |
 | `walk_mode` | 0 Hold, 1 Toggle |
+| `run_mode` | 0 Hold, 1 Toggle (the Run key, `HOS_KEY_RUN`; unbound by default) |
 | `layout_preset` | 0 Nintendo, 1 Xbox / PC, 2 Swap Face, 3 Custom |
 
 The other rows are 0 Off and 1 On. Some are read at the start, before the menu exists, by the code that needs them:

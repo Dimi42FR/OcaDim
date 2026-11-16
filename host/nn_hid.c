@@ -521,7 +521,7 @@ static void stick_max(int32_t stick[4], const int32_t v[4]) {
 static const char *const bind_names[HOS_KEY_N] = {"a", "b", "x", "y", "ls", "rs", "l", "r", "zl", "zr", "plus",
                                                   "minus", "left", "up", "right", "down", "move_up", "move_down",
                                                   "move_left", "move_right", "cam_up", "cam_down", "cam_left",
-                                                  "cam_right", "note_l", "note_r", "note_a", "note_y", "note_x", "walk"};
+                                                  "cam_right", "note_l", "note_r", "note_a", "note_y", "note_x", "walk", "run"};
 static const signed char pad_default[HOS_SW_N] = {
     HOS_PAD_EAST, HOS_PAD_SOUTH, HOS_PAD_NORTH, HOS_PAD_WEST, HOS_PAD_LSTICK, HOS_PAD_RSTICK, HOS_PAD_LSHOULDER,
     HOS_PAD_RSHOULDER, HOS_PAD_LTRIGGER, HOS_PAD_RTRIGGER, HOS_PAD_START, HOS_PAD_BACK, HOS_PAD_LEFT, HOS_PAD_UP,
@@ -541,7 +541,7 @@ static int is_mouse_vk(int vk) { return vk == VK_LBUTTON || vk == VK_RBUTTON || 
 static const unsigned char key_default[HOS_KEY_N][2] = {
     {'E'}, {VK_SHIFT}, {VK_SPACE}, {VK_LBUTTON}, {VK_CONTROL}, {'C'}, {'Q'}, {'R'}, {'Z', VK_RBUTTON}, {'X', 'F'},
     {VK_TAB, VK_RETURN}, {'M'}, {'1'}, {'2'}, {'3'}, {'4'}, {'W'}, {'S'}, {'A'}, {'D'}, {VK_UP, 'I'}, {VK_DOWN, 'K'},
-    {VK_LEFT, 'J'}, {VK_RIGHT, 'L'}, {0}, {0}, {0}, {0}, {0}, {VK_CAPITAL}};   /* (the five note rows start unset: oc_pad_word) */
+    {VK_LEFT, 'J'}, {VK_RIGHT, 'L'}, {0}, {0}, {0}, {0}, {0}, {VK_CAPITAL}, {0}};   /* (the five note rows start unset: oc_pad_word; Run starts unbound) */
 static volatile LONG toggle_reset;
 static HoldToggle toggles;
 void hos_input_clear_toggles(void) { InterlockedExchange(&toggle_reset, 1); }
@@ -1002,6 +1002,22 @@ static int walk_held(int down, int readable, int toggle) {
     was_down = down;
     return toggle ? on : down;
 }
+/* (OcaDim) Running on demand, the Walk key's mirror: while the Run control's key is held (unbound unless the Controls page
+   binds it), or with the Controls tab's Run mode on Toggle from one press to the next, the left stick goes to its edge on
+   the axes it is pushed on (a diagonal by its length), where the game runs him — for a stick that no longer reaches its
+   edge, and for a run button beside a walk. down: the key now; readable as walk_held's; the toggled state outlives a menu
+   (the caller's `behind` call keeps it). Returns whether Link runs now */
+static int run_held(int down, int readable, int toggle) {
+    static int was_down = 1, on;
+    if (!toggle) on = 0;
+    if (!readable) {
+        was_down = 1;
+        return toggle && on;
+    }
+    if (toggle && down && !was_down) on = !on, hos_log("hid: running %s (Run mode Toggle)", on ? "on" : "off");
+    was_down = down;
+    return toggle ? on : down;
+}
 /* The Walk speed row (HOS_OPT_WALK_SPEED): 15 to 90 percent of the stick's way; anything else (no Vulkan renderer's menu to
    ask) the row's default. Measured in Kokiri Forest: Link walks his slowest (1.03 m/s) at 15% and below, his walk's top
    speed (1.47 m/s) from 45% to 50%; from 55% he speeds up into a jog, at full tilt he runs at 4.5 m/s */
@@ -1124,6 +1140,15 @@ static void read_input(uint64_t *buttons, uint64_t *taps, int32_t stick[4]) {
               cy = bound_down(HOS_KEY_CAM_UP, captured) - bound_down(HOS_KEY_CAM_DOWN, captured);
     const int32_t keys[4] = {move[0], move[1], cx * 32767, cy * 32767};
     stick_max(stick, keys);
+    /* (OcaDim) the Run key: the left stick to its edge on the axes it is pushed on, the game running him; Walk wins if both
+       are somehow on) */
+    const int run = run_held(bound_down(HOS_KEY_RUN, captured), !rx_option(1, 0), rx_option(HOS_OPT_RUN_MODE, 0) == 1);
+    if (run && !walk && (stick[0] || stick[1])) {
+        const int32_t full = (stick[0] && stick[1]) ? 23170 : 32767;   /* (its length 1/sqrt(2) on a diagonal, as the keys) */
+        stick[0] = stick[0] > 0 ? full : stick[0] < 0 ? -full : 0;
+        stick[1] = stick[1] > 0 ? full : stick[1] < 0 ? -full : 0;
+        player_used();
+    }
     if (keys[0] || keys[1] || keys[2] || keys[3]) player_used();
     /* (longshot, mouse_native.c) the keys and the pads are the right stick too: while they turn the camera, its angles are
        the native mouse's new start, so the two do not undo each other */

@@ -30,7 +30,7 @@ enum { HOS_OPT_VOLUME = 27, HOS_OPT_MUTE_BACKGROUND };
 /* (longshot) the Controls tab's Walk mode and Walk speed (host/nn_hid.c: the Walk control, HOS_KEY_WALK): 0 Link walks
    while its key is held, 1 one press walks and the next runs again; how far the movement keys then tilt the left stick, in
    percent of the way (15 to 90) */
-enum { HOS_OPT_WALK_MODE = 49, HOS_OPT_WALK_SPEED };
+enum { HOS_OPT_WALK_MODE = 49, HOS_OPT_WALK_SPEED, HOS_OPT_RUN_MODE = 63 };
 /* (longshot) the Insert menu's HDR set to Native (host/nn_vi.c QueryDisplayHdrStatus and QueryDisplayHdrPaperWhite): whether
    the game is told its display is HDR10 (the swapchain is one), and the peak and paper white it is told, in nits */
 /* (HOS_OPT_DISCORD, 43: the Insert menu's Discord status row, host/discord_rpc.c: 1 on; HOS_OPT_SKIP_TITLE, 44: its Skip
@@ -65,11 +65,11 @@ enum { HOS_OPT_AUDIO_OUTPUT = 57 };
 enum { HOS_OPT_DAMAGE_TAKEN = 55 };
 /* The Auto run row (Controls): 0 Off, 1 On, A (the sprint) kept held after it is let go (host/auto_run.h,
    host/nn_hid.c). */
-enum { HOS_OPT_AUTO_RUN = 56 };
-/* (HOS_OPT_SHADOW_RES, 56: Graphics' Shadow resolution, host/oot_shadow.c: the sun's cascades as drawn, its Auto resolved
-   (gpu/vk/vk_menu.cpp menu_shadow_res), 0 the game's 1600, 1 2200, 2 3072, read each frame. The existing option callback:
-   no new member.) */
-enum { HOS_OPT_SHADOW_RES = 56 };
+enum { HOS_OPT_AUTO_RUN = 62 };   /* (OcaDim: 56 was Shadow resolution's too: one of the two never got its value) */
+/* (HOS_OPT_SHADOW_RES, 65: the sun's shadow maps, host/oot_shadow.c: the row is gone and 0 is always answered, the game's
+   own 1600 pixels a side. Auto picked 3072 on a 16 GB card and cost Castle Town 6-7 fps (a510b3cc). 65 because 56 was Auto
+   run's too, and one of the two never got its value.) */
+enum { HOS_OPT_SHADOW_RES = 65 };
 /* (HOS_OPT_RENDER_THREAD, 58: whether the render thread runs on this run, 1 or 0, as the renderer resolved it once at the
    start (gpu/vk/vk_replay.cpp async_on: RX_VK_ASYNC=1, or unset and the Insert menu's Threaded rendering On, or its Auto's
    choice). host/nvn_native.c answers the game's present poll at once with it. The existing option callback: no new member.) */
@@ -77,7 +77,7 @@ enum { HOS_OPT_RENDER_THREAD = 58 };
 /* (HOS_OPT_ABOVE60_FIXES, 59: the Insert menu's Above-60 fixes row, host/oot_high_fps.c hos_oot_floor_cut and hos_oot_sim_steps:
    1 the fixes for frame rates above 60 (the default), 0 the game's own 100.0 cut of a floor's carry and its own count of the
    height-field surfaces' steps, as before them. Read once. The existing option callback: no new member.) */
-enum { HOS_OPT_ABOVE60_FIXES = 59 };
+enum { HOS_OPT_ABOVE60_FIXES = 64 };   /* (OcaDim: 59 was Transition autosave's too) */
 enum { HOS_OPT_TRANSITION_AUTOSAVE = 59 };
 /* (HOS_OPT_MOUSE_INVERT_X, 61: Controls' Invert mouse horizontal, 1 on: the mouse's left and right swapped, as option
    8, Invert mouse vertical, swaps its up and down. host/mouse_native.c (the camera's yaw) and host/nn_hid.c (the mouse
@@ -114,7 +114,7 @@ enum { HOS_PROMPTS_LIVE_TEXTURES = 1, HOS_PROMPTS_LIVE_LAYOUTS = 2, HOS_PROMPTS_
    take a gamepad input too, and share it: a note's key can be some other control's key at once, host/nn_hid.c has_pad */
 enum { HOS_KEY_MOVE_UP = HOS_SW_N, HOS_KEY_MOVE_DOWN, HOS_KEY_MOVE_LEFT, HOS_KEY_MOVE_RIGHT, HOS_KEY_CAM_UP,
        HOS_KEY_CAM_DOWN, HOS_KEY_CAM_LEFT, HOS_KEY_CAM_RIGHT, HOS_KEY_OC_NOTE_L, HOS_KEY_OC_NOTE_R,
-       HOS_KEY_OC_NOTE_A, HOS_KEY_OC_NOTE_Y, HOS_KEY_OC_NOTE_X, HOS_KEY_WALK, HOS_KEY_N };
+       HOS_KEY_OC_NOTE_A, HOS_KEY_OC_NOTE_Y, HOS_KEY_OC_NOTE_X, HOS_KEY_WALK, HOS_KEY_RUN, HOS_KEY_N };
 
 /* (longshot) the mouse over the window while it is free (not captured): the Insert menu's (host/display.c,
    host/posix/display_sdl.c). x and y: the cursor in the window's pixels, of a window width x height pixels (the

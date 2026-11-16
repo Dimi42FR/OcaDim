@@ -38,8 +38,8 @@ def source_checks():
     check(re.search(r"if \(id == HOS_OPT_AUTO_RUN\) return opts.auto_run;", read("gpu/vk/vk_replay.cpp")),
           "HOS_OPT_AUTO_RUN does not answer the Auto run row")
     api = read("gpu/vk/vk_api.h")
-    check("enum { HOS_OPT_AUTO_RUN = 56 };" in api, "vk_api.h has no HOS_OPT_AUTO_RUN")
-    check(re.findall(r"HOS_OPT_\w+ = (\d+)", api).count("56") == 1, "option 56 is taken twice in vk_api.h")
+    check("enum { HOS_OPT_AUTO_RUN = 62 };" in api, "vk_api.h has no HOS_OPT_AUTO_RUN")
+    check(re.findall(r"HOS_OPT_\w+ = (\d+)", api).count("62") == 1, "option 62 is taken twice in vk_api.h")
     hid = read("host/nn_hid.c")
     check('#include "auto_run.h"' in hid, "nn_hid.c does not include auto_run.h")
     check(re.search(r"buttons = hos_auto_run\(&auto_run, buttons, stick\[0\], stick\[1\], on,\s*"

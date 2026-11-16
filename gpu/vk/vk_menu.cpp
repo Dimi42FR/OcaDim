@@ -804,18 +804,7 @@ const char* tx_fov(int v) { return v == 100 ? "100% (original)" : tx_percent(v);
 // (longshot) Walk mode: how the Walk key (the Controls page) makes Link walk with the movement keys (host/nn_hid.c walk_held)
 const char* tx_walk_mode(int v) { return v == 1 ? "Toggle" : "Hold"; }
 MENU_HINTS(hn_walk_mode, 0, "Link walks while the Walk key is held.", "One press of the Walk key walks, the next runs again.")
-/// Shadow resolution: the sun's cascades at the game's own sizes (host/oot_shadow.c). Auto, the default, takes the size
-/// for the card's memory (menu_shadow_res)
-const char* tx_shadow_res(int v) {
-    static const char* t[] = {"Auto", "Game's", "High", "Highest"};
-    return (unsigned)v < 4 ? t[v] : t[0];
-}
-MENU_HINTS(hn_shadow_res, 0,
-           "Chosen from the graphics card's memory: the game's size on 4 and 6 GB, High on 8 GB, Highest on 12 GB or "
-           "more.",
-           "1600 pixels a side, the console's. About 31 MB of video memory.",
-           "2200 pixels a side. About 58 MB of video memory.",
-           "3072 pixels a side, the game's own highest. About 113 MB of video memory.")
+MENU_HINTS(hn_run_mode, 0, "Link runs while the Run key is held.", "One press of the Run key runs, the next walks again.")
 const char* tx_prompts(int v) {
     static const char* t[HOS_PROMPT_N + 1] = {"Auto", "Switch", "Xbox", "PlayStation 4", "PlayStation 5", "Steam Deck",
                                               "Keyboard"};
@@ -1005,8 +994,7 @@ void apply_preset(int p) {
     if (p > 0)
         for (const int* v : {&opts.resolution, &opts.upscale, &opts.sharpness, &opts.pace, &opts.realtime, &opts.handheld})
             env_release(v);
-    if (p > 0) opts.shadow_res = 0;   // (Shadow resolution back to Auto: the size for this preset's memory, menu_shadow_res)
-    switch (p) {
+        switch (p) {
     case 1: // Minimum (4GB VRAM / iGPU)
         opts.resolution = 4; opts.upscale = 2; opts.sharpness = 30;
         opts.pace = 1;    opts.realtime = 1; opts.handheld = 1;
@@ -1498,9 +1486,9 @@ Row rows[] = {
      "Sets the scaling rows and Shadow resolution for a GPU with that much memory. The Upscaler and Frame "
      "generation stay yours.",
      hn_preset},
-    // (the picture's way, top to bottom: the output's size, what fills it from the 3D, the 3D's size, its sharpening; then
-    // the frames, and the window it is shown in)
+    // (the rows that shape the picture, then the frames: each tab groups its own; the table's order is each tab's)
     {TAB_GRAPHICS, "Resolution and upscaling", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, false, true, -1, true},
+    {TAB_DISPLAY, "Picture", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, false, true, -1, true},
     // (the shape, then its sizes: the screen's display modes, display_modes.h; outputs_sync sets both rows' ends at the start)
     {TAB_DISPLAY, "Aspect ratio", &opts.ultrawide, 0, 1, 1, tx_ultrawide,
      "The picture's shape: your monitor's own (the default: wider on an ultrawide, narrower on 4:3 or 16:10), the game's "
@@ -1530,6 +1518,7 @@ Row rows[] = {
     {TAB_GRAPHICS, "Frame generation by", &opts.framegen_by, 0, 2, 1, tx_framegen_by,
      "Who makes the frames at 2x and up. NVIDIA DLSS Frame Generation needs a temporal Upscaler (DLSS, DLAA or FSR) for "
      "the scene's depth and motion. Changes at once.", hn_framegen_by, false, true},
+    {TAB_DISPLAY, "Frame rate", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, false, true, -1, true},
     {TAB_DISPLAY, "Frame pacing", &opts.pace, 0, 1, 1, tx_onoff, "When each frame is shown.", hn_pace},
     {TAB_DISPLAY, "Game frame rate cap", &opts.fps_cap, 0, 6, 1, tx_fps_cap,
      "Limits frames rendered by the game. Generated frames are additional. Changes at once. "
@@ -1585,10 +1574,6 @@ Row rows[] = {
     {TAB_GRAPHICS, "Anisotropic filtering", &opts.anisotropy, 0, 4, 1, tx_anisotropy,
      "Keeps textures sharp on surfaces seen at a slant, such as the ground ahead: higher is sharper in the distance, for a "
      "little GPU time. Game's is the console's own (1x or 2x).", nullptr, false, true},
-    {TAB_GRAPHICS, "Shadow resolution", &opts.shadow_res, 0, 3, 1, tx_shadow_res,
-     "The size of the sun's shadow maps: higher keeps the shadows of thin things near you, such as chains, fences and "
-     "leaves, smooth instead of stair-stepped, for more video memory and a little GPU time. Applies at once.",
-     hn_shadow_res},
     // (the rows to change when something is wrong, or on a card short of memory: last)
     {TAB_GRAPHICS, "GPU and memory", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, false, true, -1, true},
     {TAB_GRAPHICS, "GPU device", &opts.gpu_device, 0, 8, 1, tx_gpu,
@@ -1762,6 +1747,9 @@ Row rows[] = {
     {TAB_CONTROLS, "Walk speed", &opts.walk_speed, 15, 90, 5, tx_percent,
      "How far the movement keys tilt the stick while Link walks, in percent of the whole way. Controllers, the mouse and "
      "the camera keys are not changed.", nullptr, false, true},
+    {TAB_CONTROLS, "Run mode", &opts.run_mode, 0, 1, 1, tx_walk_mode,   // (OcaDim: the Walk key's mirror)
+     "How the Run key makes Link run: while it is held, or from one press to the next. It is unbound until the Controls "
+     "page gives it a key; held, it pushes the left stick to its edge on the axes it is already pushed on.", hn_run_mode, false, true},
     {TAB_CONTROLS, "Controls", nullptr, 0, 0, 0, nullptr,   // (longshot: opens its page)
      "The layout preset, the button prompts, and which gamepad button and which keys press each of the Switch's "
      "buttons."},
@@ -2161,6 +2149,13 @@ bool row_shown(int i) {
            ((v != &opts.hdr_white && v != &opts.hdr_peak && v != &opts.hdr_contrast) || opts.hdr != 0) &&
            (v != &opts.hdr_tonemap || opts.hdr == 2);
 }
+/// (OcaDim) Whether the menu shows a section: one whose rows exist on this PC (NVIDIA's only where DLSS or Reflex is there,
+/// so an AMD card never sees it). The navigation and the rail both ask it
+bool tab_shown(int t) {
+    for (int i = 0; i < kRows; i++)
+        if (rows[i].tab == (MenuTab)t && row_shown(i)) return true;
+    return false;
+}
 int tab_row_count(int t) {
     int c = 0;
     for (int i = 0; i < kRows; i++) if (rows[i].tab == (MenuTab)t && row_shown(i)) c++;
@@ -2261,7 +2256,7 @@ const char* ini_key(const Row& r) {
 const char* const bind_names[HOS_KEY_N] = {"a", "b", "x", "y", "ls", "rs", "l", "r", "zl", "zr", "plus", "minus",
                                            "left", "up", "right", "down", "move_up", "move_down", "move_left",
                                            "move_right", "cam_up", "cam_down", "cam_left", "cam_right",
-                                           "note_l", "note_r", "note_a", "note_y", "note_x", "walk"};
+                                           "note_l", "note_r", "note_a", "note_y", "note_x", "walk", "run"};
 bool can_bind() { return host && host->binding && host->bind && host->pad_raw; }
 const char* tx_pad_layout(int v) {
     static const char* t[] = {"Nintendo (Def)", "Xbox / PC", "Swap Face", "Custom"};
@@ -3180,7 +3175,7 @@ const Control controls[] = {{HOS_SW_A, "A"}, {HOS_SW_B, "B"}, {HOS_SW_X, "X"}, {
                             {HOS_KEY_MOVE_DOWN, "Move back"}, {HOS_KEY_MOVE_LEFT, "Move left"},
                             {HOS_KEY_MOVE_RIGHT, "Move right"}, {HOS_KEY_CAM_UP, "Camera up"},
                             {HOS_KEY_CAM_DOWN, "Camera down"}, {HOS_KEY_CAM_LEFT, "Camera left"},
-                            {HOS_KEY_CAM_RIGHT, "Camera right"}, {HOS_KEY_WALK, "Walk"}, {HOS_KEY_OC_NOTE_L, "Ocarina note (L)"},
+                            {HOS_KEY_CAM_RIGHT, "Camera right"}, {HOS_KEY_WALK, "Walk"}, {HOS_KEY_RUN, "Run"}, {HOS_KEY_OC_NOTE_L, "Ocarina note (L)"},
                             {HOS_KEY_OC_NOTE_R, "Ocarina note (R)"}, {HOS_KEY_OC_NOTE_A, "Ocarina note (A)"},
                             {HOS_KEY_OC_NOTE_Y, "Ocarina note (Y)"}, {HOS_KEY_OC_NOTE_X, "Ocarina note (X)"}};
 constexpr int kControls = sizeof controls / sizeof controls[0];   // (then "Reset to defaults")
@@ -3921,6 +3916,7 @@ void rail(ui::Ctx& c, float y0, float y1) {
     c.d->AddLine(ImVec2(x0 + w, y0), ImVec2(x0 + w, y1), ui::alpha(ui::kEdge, 0.55f), std::max(1.0f, s));
     float y = y0;
     for (int i = 0; i < TAB_COUNT; i++) {
+        if (!tab_shown(i)) continue;   // (OcaDim: a section with nothing on this PC, NVIDIA's on an AMD card)
         const bool shown = i == (cur_tab == TAB_MOTION ? TAB_CONTROLS : cur_tab == TAB_FPS_DEV ? TAB_GAMEPLAY : cur_tab);
         const bool hover = hover_tab == i && !shown;
         if (shown || hover)
@@ -5619,14 +5615,6 @@ int menu_heart_protection() {
 int menu_player_flight() { return cheats_on() ? player_flight.load(std::memory_order_relaxed) : -1; }
 int menu_free_camera() { return cheats_on() ? free_camera.load(std::memory_order_relaxed) : 0; }
 int menu_link_speed() { return cheats_on() ? link_speeds[std::clamp(link_speed.load(std::memory_order_relaxed), 0, kLinkSpeeds - 1)] : 100; }
-/// The size the host draws the sun's cascades at (HOS_OPT_SHADOW_RES: 0 the game's 1600, 1 2200, 2 3072): the row's, or for
-/// Auto the one for the card's memory tier, the preset's (opts.budget) or else Auto's own for this PC (auto_choice): the
-/// game's on Minimum and Low (4 and 6 GB, where 113 MB is a lot), 2200 on Balanced (8 GB), 3072 from High (12 GB) up
-int menu_shadow_res() {
-    if (opts.shadow_res > 0) return std::min(opts.shadow_res, 3) - 1;
-    const int tier = opts.budget > 0 ? opts.budget : auto_choice.tier;
-    return tier == 1 || tier == 2 ? 0 : tier >= 4 ? 2 : 1;   // (an unknown tier: 2200, the middle)
-}
 int menu_transition_autosave() { return transition_autosave_enabled.load(std::memory_order_relaxed); }
 int menu_damage_taken() { return cheats_on() ? opts.damage_taken : 1; }   // (Normal while the tools are off; the choice is kept)
 int menu_take_cheat_action() { return cheat_action.exchange(0, std::memory_order_relaxed); }
@@ -6567,8 +6555,13 @@ void menu_tick() {
         // (the tabs: LB and RB, Q and E, or Tab; from the Motion page, as from Controls)
         if ((tab_left || tab_right) && cur_tab == TAB_MOTION) cur_tab = TAB_CONTROLS;
         if ((tab_left || tab_right) && cur_tab == TAB_FPS_DEV) cur_tab = TAB_GAMEPLAY;
-        if (tab_left) cur_tab = (cur_tab + TAB_COUNT - 1) % TAB_COUNT, changed = true;
-        else if (tab_right) cur_tab = (cur_tab + 1) % TAB_COUNT, changed = true;
+        if (tab_left) {
+            do cur_tab = (cur_tab + TAB_COUNT - 1) % TAB_COUNT; while (!tab_shown(cur_tab));
+            changed = true;
+        } else if (tab_right) {
+            do cur_tab = (cur_tab + 1) % TAB_COUNT; while (!tab_shown(cur_tab));
+            changed = true;
+        }
         const int tab_count = tab_row_count(cur_tab);
         int& selected = tab_selected[cur_tab];
         if (selected >= tab_count) selected = tab_count - 1;   // (a row gone since: the debug tools turned off, HDR turned off: row_shown)

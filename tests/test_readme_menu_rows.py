@@ -24,7 +24,7 @@ HEADINGS = re.findall(HEADING, MENU)
 ROWS = re.sub(HEADING, "", MENU)
 
 
-def menu_rows(tabs="GRAPHICS|AUDIO|GAMEPLAY|CONTROLS|PAGE"):
+def menu_rows(tabs="DISPLAY|GRAPHICS|AUDIO|GAMEPLAY|CONTROLS|NVIDIA|PAGE"):
     return re.findall(r'\{TAB_(%s),\s*"([^"]+)"' % tabs, ROWS)
 
 
@@ -55,8 +55,8 @@ class ReadmeMenuRowsTests(unittest.TestCase):
 
     def test_the_lines_keep_the_menus_order(self):
         page = {name for _, name in menu_rows("PAGE")}   # (the Controls page's rows: listed with the Controls tab's)
-        tabs = ["GRAPHICS", "AUDIO", "GAMEPLAY", "CONTROLS"]   # (a tab shows its rows in the table's order, wherever they sit)
-        rows = sorted(menu_rows("GRAPHICS|AUDIO|GAMEPLAY|CONTROLS"), key=lambda row: tabs.index(row[0]))
+        tabs = ["DISPLAY", "GRAPHICS", "AUDIO", "GAMEPLAY", "CONTROLS", "NVIDIA"]   # (a tab shows its rows in the table's order, wherever they sit)
+        rows = sorted(menu_rows("DISPLAY|GRAPHICS|AUDIO|GAMEPLAY|CONTROLS|NVIDIA"), key=lambda row: tabs.index(row[0]))
         order = [name for _, name in rows if name not in ACTIONS and name not in page]
         listed = [cells[1] for cells in table_lines() if cells[1] not in page]
         self.assertEqual(listed, order)
