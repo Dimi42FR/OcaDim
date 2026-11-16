@@ -146,6 +146,7 @@ static bool compact_key_held;     // (menu_tick's tune_down: Right Shift, or Rig
 static bool restart_ask() { return false; }
 static int detect_pad_layout() { return 0; }
 static void dlss_probe() {}
+static void dlss_fg_probe() {}
 static void fsr4_probe() {}
 static void xess_probe() {}
 static void refresh_mics() {}

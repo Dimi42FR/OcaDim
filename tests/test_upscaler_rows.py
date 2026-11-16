@@ -84,9 +84,13 @@ def main():
     # the help: a row's own, then a line for the value chosen (Row::hint). The Upscaler's says why DLSS is not offered, and
     # DLSS's values ask for more Sharpness (it looks softer than the game's own)
     upscaler = function(menu, "const char* hn_upscaler(int v, int variant) {")
+    # (DLSS's reasons are dlss_why_text's, which Frame generation by says too: hn_upscaler names them through it)
+    if "dlss_why_text(d)" not in upscaler:
+        raise SystemExit("hn_upscaler: the help no longer says why DLSS is not offered (dlss_why_text)")
+    reasons = function(menu, "const char* dlss_why_text(int why) {") + upscaler
     for why in ("not in this build", "RX_VK_DLSS=0", "NVIDIA RTX GPU", "newer NVIDIA driver", "runtime was not found",
                 "(int)dlss_why()", "RX_VK_FSR4=0", "AMD's files were not found", "no FSR 4 for this GPU", "(int)fsr4_why()"):
-        if why not in upscaler:
+        if why not in reasons:
             raise SystemExit("hn_upscaler: the help no longer says why DLSS or FSR is not offered (%s)" % why)
     if upscaler.count("Sharpness to") < 2:
         raise SystemExit("hn_upscaler: NVIDIA DLSS and DLAA do not say to set Sharpness to around 80%")

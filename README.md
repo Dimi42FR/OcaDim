@@ -438,7 +438,7 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | Render resolution | Auto (the game's own dynamic resolution), 100%, 75%, 67%, 50% (each with its size). With DLSS or FSR 4: Auto, Native (DLAA or FSR 4 Native AA: the 3D at full size), 92%, 83%, 75%, Quality (67%), Balanced (58%), Performance (50%), Ultra Performance (33%). With Intel XeSS the same stops, named by the XeSS mode each runs under: Native (XeSS Native AA), Ultra Quality Plus (92%, 83%), 75%, Ultra Quality (67%), Balanced (58%, 50%), Ultra Performance (33%). With FSR 3.1: Auto, 100% (its native AA), then the same as DLSS from 92%. With Off: Auto, 100%, 75%, 67%, 50%, 33% | Auto; a quality preset sets it |
 | | Sharpness | 0 to 100%, in steps of 10 | 0%; a quality preset sets it |
 | | Frame generation | Off, Auto, 2x to 8x | Off |
-| | Frame generation by | Auto (NVIDIA DLSS Frame Generation where it runs: RTX 40 and newer, with a temporal Upscaler; else the built-in one; with frame generation on, the row shows who makes the frames, as Auto: DLSS FG, and why not DLSS FG when another does), Built-in FG. Changes at once | Auto |
+| | Frame generation by | DLSS FG (NVIDIA DLSS Frame Generation: RTX 40 and newer, with a temporal Upscaler), Built-in FG. DLSS FG is offered only where it runs; elsewhere the row has Built-in FG alone and its line says why (the log has NVIDIA's answer). At DLSS FG, the game's own menus, movies and loading screens show only the game's own frames (they have no Upscaler picture to make frames from): the row's line and the FPS counter say DLSS FG paused. With an Upscaler that is not temporal, the built-in one makes the frames and the line says why. `RX_VK_DLSS_FG=1` fixes the row at DLSS FG for a run. Changes at once | DLSS FG where it runs, else Built-in FG (an options file's Auto from before is this default) |
 | | Frame pacing | Off, On | Off; a quality preset turns it on |
 | | Game frame rate cap | 30, 60 (the console's), 90, 120, 144, 165, 240, Uncapped (changes at once) | 60 |
 | | NVIDIA Reflex | Off, On, On + Boost (shown only on NVIDIA GPUs with `VK_NV_low_latency2`) | Off |
@@ -559,8 +559,9 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
   PC”. They are not counted as changed settings; the report does not invent a default from a run-time list index. The rows
   a preset sets keep their fixed defaults on Custom while Auto (this PC) has never chosen for the options file; with a
   preset, or once Auto has chosen, they depend on this PC.
-  Fixed defaults, including GPU Auto, the system-default microphone and Frame generation by's Auto, still report actual
-  changes; the Aspect ratio's default is the monitor's shape, and the Game language's `language.txt`'s.
+  Fixed defaults, including GPU Auto, the system-default microphone and Frame generation by's DLSS FG, still report actual
+  changes (Frame generation by where DLSS FG cannot run has Built-in FG alone: no change); the Aspect ratio's default is
+  the monitor's shape, and the Game language's `language.txt`'s.
   Your home folder is written `~` (`%USERPROFILE%` on Windows) and your user name `<user>` in the logs' paths. A switch's
   value is written only when it is a number, a size or on/off, and never for a name with `TOKEN`, `KEY`, `ROOM`,
   `SECRET`, `PASS`, `SERVER` or `USER` in it; other values read `(value left out)`. Nothing else goes in (no saves, no

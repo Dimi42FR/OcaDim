@@ -555,7 +555,7 @@ void dlss_probe() {
 // picture and the temporal chain's depth, motion (with the actor motion in it, vk_temporal.cpp) and camera, which are copied
 // at the chain's evaluation (dlss_fg_inputs) and handed to NGX at the present (dlss_fg_frames). The Insert menu's Frame
 // generation row's 2x and up say how many frames are made (its Auto stays the renderer's own), its Frame generation by row
-// whether DLSS-G makes them (Auto, the default) or the renderer's own; RX_VK_DLSS_FG=0 / 1 over it for a run. Frame
+// whether DLSS-G makes them (DLSS FG, the default where it runs) or the renderer's own; RX_VK_DLSS_FG=0 / 1 over it for a run. Frame
 // generation's device extensions are asked of NGX before the device exists whenever DLSS may run, so the row needs no
 // restart. Its runtime, nvngx_dlssg.dll (libnvidia-ngx-dlssg.so), is looked for where DLSS's is (runtime_dirs). Where it
 // does not make a set, the renderer's own methods do, and the log says every 600 presents how many sets DLSS-G made and why
@@ -591,6 +591,8 @@ struct Fg {
     // (read without mu, each present: a feature held (dlss_fg_idle), and NGX's answer a no or its feature given up after
     // three failed creations or kFgRefusalsOff refused sets in a row (dlss_fg_runs))
     std::atomic<bool> held{false}, start_failed{false};
+    // (read without mu, by the menu's thread: NGX has answered, yes or no (fg_start). start_failed is set while it is asked)
+    std::atomic<bool> answered{false};
     // (read without mu, each present: `most` once NGX has answered (fg_start), 0 before. A multiplier that asks for more is
     // the renderer's own to make (dlss_fg_frames), so the swapchain is not made for DLSS-G: dlss_fg_runs)
     std::atomic<unsigned> most_known{0};
@@ -668,6 +670,10 @@ void fg_mul(const float* a, const float* b, float* out) {   // (row major: out =
 bool fg_start(Fg& g) {
     if (g.tried) return g.ok;
     g.tried = true;
+    struct Answered {   // (at every return below: dlss_fg_unavailable reads start_failed from here on)
+        Fg& g;
+        ~Answered() { g.answered.store(true, std::memory_order_release); }
+    } answered{g};
     g.start_failed = true;   // (until NGX says yes, below)
     // (not on a device DLSS does not run on: an AMD or Intel GPU, without NVIDIA's extensions (dlss_device_extensions), does
     // not start NGX at its first present)
@@ -823,6 +829,38 @@ int dlss_fg_skip(unsigned* most) {
 }
 
 bool dlss_fg_wanted() { return fg_asked(); }
+
+int dlss_fg_unavailable() {
+    if (dlss_why() != DLSS_OK) return FG_SKIP_DEVICE;   // (RX_VK_DLSS=0 too: dlss_why's DLSS_ENV_OFF)
+    if (!fg_possible()) return FG_SKIP_OFF;
+    const Fg& g = fgs();
+    if (!g.answered.load(std::memory_order_acquire) || !g.start_failed.load(std::memory_order_relaxed)) return FG_SKIP_NONE;
+    // (most_known is set only by NGX's yes: a no after it is its feature given up, refused sets or failed creations)
+    return g.most_known.load(std::memory_order_relaxed) ? FG_SKIP_REFUSED : FG_SKIP_START;
+}
+
+bool dlss_fg_forced() {
+    static const bool forced = env_switch("RX_VK_DLSS_FG") > 0;   // (as fg_asked)
+    return forced && fg_possible();
+}
+
+bool dlss_fg_holds() {
+    // (fg_skip is this set's reason: dlss_fg_frames sets it at each set it does not make, but one with nothing to blend from,
+    // which framegen_record makes no frames for anyway. FG_SKIP_INPUTS comes after NGX's yes and the runtime's most. Only
+    // where the game draws no 3D scene (temporal_scene_now): an Upscaler that gives no inputs in play (failed, refused, not
+    // this frame) leaves those sets to the built-in one, as before)
+    return fg_asked() && temporal_wanted() && !temporal_scene_now() &&
+           fg_skip.load(std::memory_order_relaxed) == FG_SKIP_INPUTS;
+}
+
+void dlss_fg_probe() {
+    // (DLSS's own answer first: dlss_probe, on the same thread. Where DLSS does not run, the row knows without NGX)
+    if (!fg_possible() || dlss_why() != DLSS_OK || !dev.device) return;
+    Fg& g = fgs();
+    if (g.answered.load(std::memory_order_acquire)) return;
+    std::lock_guard lk(g.mu);   // (as dlss_fg_frames: then ngx_init's own lock)
+    if (!g.closed) fg_start(g);
+}
 
 bool dlss_fg_runs(int frames) {
     if (!fg_asked() || dlss_why() != DLSS_OK) return false;
@@ -1121,7 +1159,9 @@ void dlss_fg_idle() {
 }
 
 void dlss_fg_close() {
-    if (!fg_asked()) return;
+    // (not only where it is asked for now: dlss_fg_probe asks NGX at the start-up screen at Built-in FG too, and closed stops
+    // a probe still running at the exit)
+    if (!fg_possible()) return;
     Fg& g = fgs();
     std::lock_guard lk(g.mu);
     if (g.closed) return;
@@ -1155,6 +1195,10 @@ int dlss_fg_skip(unsigned* most) {
     if (most) *most = 0;
     return FG_SKIP_NOT_BUILT;
 }
+int dlss_fg_unavailable() { return FG_SKIP_NOT_BUILT; }
+void dlss_fg_probe() {}
+bool dlss_fg_forced() { return false; }
+bool dlss_fg_holds() { return false; }
 bool dlss_fg_runs(int) { return false; }
 void dlss_fg_device_extensions(std::vector<const char*>&, const std::vector<VkExtensionProperties>&) {}
 void dlss_fg_inputs(VkCommandBuffer, const TemporalFrame&, const float*, const float*, const float*, bool) {}

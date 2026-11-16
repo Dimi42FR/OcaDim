@@ -233,6 +233,19 @@ const char* tx_upscaler(int) {
     // (by engine: DLAA and FSR 4's and XeSS's native AA are the Render resolution row's Native, upscaler_rows.h engine)
     return t[std::clamp(ur::engine(upscaler()), 0, ur::kUpscalers - 1)];
 }
+/// Why DLSS and DLAA do not run here (vk_dlss.h DlssWhy), for the Upscaler row and Frame generation by; nullptr for DLSS_OK
+const char* dlss_why_text(int why) {
+    static const char* const t[DLSS_WHY_COUNT] = {
+        nullptr,
+        "DLSS and DLAA: not in this build (built without NVIDIA's DLSS SDK, see the readme).",
+        "DLSS and DLAA: off for this run (RX_VK_DLSS=0).",
+        "DLSS and DLAA: need an NVIDIA RTX GPU.",
+        "DLSS and DLAA: need a newer NVIDIA driver.",
+        "DLSS and DLAA: DLSS's runtime was not found (the game folder's ngx folder, see the readme).",
+        "DLSS and DLAA: NVIDIA's NGX on Linux loads DLSS's runtime only from a folder named in ASCII (see the readme).",
+    };
+    return why > 0 && why < DLSS_WHY_COUNT ? t[why] : nullptr;
+}
 /// The Upscaler: the one shown (what runs, upscaler()), and with the game's own, why DLSS, FSR and XeSS are not offered.
 /// Variants (every one): each value, then the game's own with each of DLSS's reasons, then with each of FSR's, then XeSS's
 const char* hn_upscaler(int v, int variant) {
@@ -252,15 +265,6 @@ const char* hn_upscaler(int v, int variant) {
         "Intel's machine-learned upscaler, from a smaller 3D, with Intel's libxess.dll beside the game. Things that move by "
         "themselves can trail for now.",
         "Intel's machine-learned upscaler, the 3D at full size with its edges smoothed; the slowest.",
-    };
-    static const char* const dlss_no[DLSS_WHY_COUNT] = {
-        nullptr,
-        "DLSS and DLAA: not in this build (built without NVIDIA's DLSS SDK, see the readme).",
-        "DLSS and DLAA: off for this run (RX_VK_DLSS=0).",
-        "DLSS and DLAA: need an NVIDIA RTX GPU.",
-        "DLSS and DLAA: need a newer NVIDIA driver.",
-        "DLSS and DLAA: DLSS's runtime was not found (the game folder's ngx folder, see the readme).",
-        "DLSS and DLAA: NVIDIA's NGX on Linux loads DLSS's runtime only from a folder named in ASCII (see the readme).",
     };
     static const char* const fsr_no[FSR_WHY_COUNT] = {
         nullptr,
@@ -292,7 +296,7 @@ const char* hn_upscaler(int v, int variant) {
     v = std::clamp(v, 0, ur::kUpscalers - 1);
     // (the reasons are said only where the engine is in the build: one without FSR does not tell an NVIDIA user why, and a
     // Linux build does not tell anyone that XeSS is Windows only)
-    const char* dn = dlss_built() || variant >= 0 ? dlss_no[d] : nullptr;
+    const char* dn = dlss_built() || variant >= 0 ? dlss_why_text(d) : nullptr;
     const char* fn = fsr4_built() || variant >= 0 ? fsr_no[f] : nullptr;
     const char* xn = xess_built() || variant >= 0 ? xess_no[x] : nullptr;
     if (v != ur::GAME || (!dn && !fn && !xn)) return t[v];
@@ -731,11 +735,18 @@ const char* hn_resolution(int v, int variant) {
     if (p == 100) return "The 3D at the output's full size: the sharpest, and the slowest.";
     return "A steady size: lower is faster, and softer.";
 }
+/// (longshot) Whether the Frame generation by row offers DLSS FG: where DLSS-G can run in this process as far as is known
+/// (vk_dlss.cpp dlss_fg_unavailable). Where it cannot, the row has Built-in FG alone (row_fixed) and its line says why
+bool framegen_by_dlss_offered() { return dlss_fg_unavailable() == FG_SKIP_NONE; }
+/// Frame generation by with nothing to choose: DLSS FG cannot run (Built-in FG alone), or RX_VK_DLSS_FG=1 chooses DLSS FG
+/// for the run (vk_dlss.cpp dlss_fg_forced)
+bool framegen_by_fixed() { return !framegen_by_dlss_offered() || dlss_fg_forced(); }
 /// A row with nothing else to choose here: shown without its arrows, Left and Right leave it (and the saved value) alone
 bool row_fixed(const int* value) {
     return (value == &opts.dlss && ur::upscaler_fixed(upscalers_available())) ||
            (value == &opts.resolution && ur::render_fixed(upscaler())) || (value == &opts.upscale && !filter_needed()) ||
            (value == &opts.dlss_model && ur::model_fixed(upscaler(), dlss_preset_env() != nullptr)) ||
+           (value == &opts.framegen_by && framegen_by_fixed()) ||   // (its line says why)
            (value == &opts.astc_rgba8 && getenv("RX_VK_ASTC_RGBA8")) ||   // (set for the run: vk_texture.cpp reads it first)
            (value == &opts.intel_compiles && getenv("RX_VK_NO_INTEL_SERIAL"));
 }
@@ -1066,23 +1077,24 @@ const char* hn_framegen(int v, int variant) {
 }
 MENU_HINTS(hn_pace, 0, "As soon as it is ready.", "At an even interval: less stutter, at up to one frame of delay.")
 /// (longshot) Who made the made frames lately (vk_framegen.cpp framegen_maker), with Frame generation on; nullptr: none made.
-/// One name each, "<engine> FG", on the Frame generation by row and the FPS counter alike
+/// One name each, "<engine> FG", on the Frame generation by row and the FPS counter alike; "DLSS FG paused" where DLSS FG
+/// showed the game's frames alone (the game's own menus: vk_dlss.cpp dlss_fg_holds)
 const char* framegen_maker_name() {
     if (opts.framegen < 1) return nullptr;
     switch (framegen_maker()) {
     case FgMaker::Dlss: return "DLSS FG";
     case FgMaker::Fsr3: return "FSR 3.1 FG";
     case FgMaker::BuiltIn: return "Built-in FG";
+    case FgMaker::DlssPaused: return "DLSS FG paused";
     default: return nullptr;
     }
 }
-/// Frame generation by: at Auto, who makes the frames now, so a player sees whether DLSS Frame Generation runs
+/// Frame generation by: the choice, DLSS FG (0) or Built-in FG (1); Built-in FG whatever is saved where DLSS FG cannot run,
+/// DLSS FG with RX_VK_DLSS_FG=1.
+/// Who makes the frames now (the game's own menus give DLSS-G nothing to make them from) is the row's line and the FPS
+/// counter's (framegen_maker_name), not the choice's name
 const char* tx_framegen_by(int v) {
-    const char* who = v ? nullptr : framegen_maker_name();
-    if (!who) return v ? "Built-in FG" : "Auto";
-    static char b[40];
-    snprintf(b, sizeof b, "Auto: %s", who);
-    return b;
+    return framegen_by_dlss_offered() && (v == 0 || dlss_fg_forced()) ? "DLSS FG" : "Built-in FG";
 }
 /// Why DLSS-G does not make the frames now (vk_dlss.h FgSkip, and the Auto multiplier's FG_SKIP_COUNT), the row's line after
 /// "Not DLSS FG now: ". most: its runtime's most made frames, for FG_SKIP_TOO_MANY
@@ -1108,31 +1120,71 @@ const char* framegen_skip_text(int why, unsigned most) {
     default: return nullptr;
     }
 }
-/// Its line: at Auto with another than DLSS-G making the frames, why ("Not DLSS FG now: " and framegen_skip_text). Variants
-/// (every one): Auto's, Built-in's, then "Not DLSS FG now: " with each reason
+/// Its line: the choice's. Where DLSS FG cannot run in this run, why, whatever is saved ("DLSS FG cannot run: " and
+/// framegen_skip_text, or for DLSS itself dlss_why_text: the log has NGX's own answer); with RX_VK_DLSS_FG=1, that it chooses.
+/// At DLSS FG with the game's frames alone now (its own menus, movies and loading screens draw no 3D to make frames from:
+/// vk_dlss.cpp dlss_fg_holds), that it is paused; with another making the frames now, why ("Not DLSS FG now: "). Variants
+/// (every one): the choice's; at DLSS FG "Not DLSS FG now: " with each reason, and the paused line; the switch's line; then
+/// "DLSS FG cannot run: " with each of its reasons
 const char* hn_framegen_by(int v, int variant) {
     static const char* const t[] = {
-        "NVIDIA DLSS Frame Generation where it runs (RTX 40 and newer, with the Upscaler's depth and motion), else the "
-        "built-in one.",
+        "NVIDIA DLSS Frame Generation (RTX 40 and newer), made from the Upscaler's depth and motion.",
         "The renderer's own: made from the finished picture alone.",
     };
-    if (v != 0) return variant <= 0 ? t[1] : nullptr;
-    static char b[FG_SKIP_COUNT + 2][400];
-    int why = FG_SKIP_NONE;
+    static const char* const paused = "DLSS FG paused: the game's own menus, movies and loading screens draw no 3D to make "
+                                      "frames from, so only the game's own frames show.";
+    // (dlss_fg_unavailable's reasons, each for the whole run; FG_SKIP_DEVICE with each of DLSS's own, dlss_why)
+    struct Cannot { int why, dlss; };
+    static const Cannot cannot[] = {{FG_SKIP_OFF, 0},
+                                    {FG_SKIP_DEVICE, DLSS_ENV_OFF},
+                                    {FG_SKIP_DEVICE, DLSS_NEEDS_RTX},
+                                    {FG_SKIP_DEVICE, DLSS_NEEDS_DRIVER},
+                                    {FG_SKIP_DEVICE, DLSS_NO_RUNTIME},
+                                    {FG_SKIP_DEVICE, DLSS_RUNTIME_NOT_ASCII},
+                                    {FG_SKIP_START, 0},
+                                    {FG_SKIP_REFUSED, 0},
+                                    {FG_SKIP_NOT_BUILT, 0}};
+    constexpr int kCannot = (int)(sizeof cannot / sizeof cannot[0]);
+    // (at DLSS FG: 1 .. FG_SKIP_COUNT each reason, FG_SKIP_COUNT the Auto multiplier's; then the paused line)
+    const int nows = v == 0 ? (int)FG_SKIP_COUNT + 1 : 0;
+    const int forced_at = nows + 1;   // (the switch's line; the reasons it cannot run after it)
+    static char b[FG_SKIP_COUNT + kCannot + 4][400];
+    int why = FG_SKIP_NONE, dlss = (int)DLSS_OK;
     unsigned most = 0;
+    bool off = false;      // (DLSS FG cannot run: not offered)
+    bool forced = false;   // (RX_VK_DLSS_FG=1 chooses)
     if (variant >= 0) {
-        if (variant == 0) return t[0];
-        why = variant;   // (1 .. FG_SKIP_COUNT: each reason, FG_SKIP_COUNT the Auto multiplier's)
-        if (why > FG_SKIP_COUNT) return nullptr;
+        if (variant == 0) return t[v == 0 ? 0 : 1];
+        if (variant < nows) why = variant;
+        else if (variant == nows) return paused;
+        else if (variant > forced_at && variant - forced_at <= kCannot) {
+            const Cannot& c = cannot[variant - forced_at - 1];
+            why = c.why, dlss = c.dlss, off = true;
+        } else if (variant == forced_at) {
+            forced = true;
+        } else {
+            return nullptr;
+        }
+    } else if ((why = dlss_fg_unavailable()) != FG_SKIP_NONE) {
+        off = true, dlss = (int)dlss_why();
+    } else if (dlss_fg_forced()) {
+        forced = true;
     } else {
+        if (v != 0) return t[1];
         const FgMaker m = opts.framegen >= 1 ? framegen_maker() : FgMaker::None;
+        if (m == FgMaker::DlssPaused) return paused;
         if (m != FgMaker::BuiltIn && m != FgMaker::Fsr3) return t[0];
         why = opts.framegen == 1 ? (int)FG_SKIP_COUNT : dlss_fg_skip(&most);
     }
-    const char* text = framegen_skip_text(why, most);
-    if (!text) return t[0];
-    char* out = b[variant >= 0 ? variant : FG_SKIP_COUNT + 1];
-    snprintf(out, sizeof b[0], "Not DLSS FG now: %s", text);
+    char* out = b[variant >= 0 ? variant : FG_SKIP_COUNT + kCannot + 3];
+    if (forced) {   // (as the V-Sync row's switches)
+        snprintf(out, sizeof b[0], "%s is set: it chooses for this run.", "RX_VK_DLSS_FG=1");
+        return out;
+    }
+    const char* text = off && why == FG_SKIP_DEVICE && dlss_why_text(dlss) ? dlss_why_text(dlss)
+                                                                          : framegen_skip_text(why, most);
+    if (!text) return t[v == 0 && !off ? 0 : 1];
+    snprintf(out, sizeof b[0], off ? "DLSS FG cannot run: %s" : "Not DLSS FG now: %s", text);
     return out;
 }
 const char* tx_vsync(int v) {
@@ -3544,15 +3596,13 @@ bool report_default_depends_on_pc(const Row& r) {
 // The report's default for row r: the default options' value (fixed), or the one the
 // menu knows better. The Aspect ratio's is the monitor's shape, as outputs_sync makes
 // it from the default Output resolution and ultrawide=1; the Game language's is
-// language.txt's, else the first (README). *named: the default as the row names it,
-// where the row's own text shows the live state (Frame generation by at Auto: who
-// makes the frames now), else nullptr.
-int report_default(const Row& r, int fixed, const char** named) {
+// language.txt's, else the first (README). Frame generation by with nothing to
+// choose (framegen_by_fixed) is the run's, whatever is saved: no change of the player's.
+int report_default(const Row& r, int fixed) {
     static const Options defaults{};
-    *named = nullptr;
     if (r.value == &opts.ultrawide) return aspect_of_choice(defaults.output_res, defaults.ultrawide);
     if (r.value == &opts.game_lang) return i18n::game_lang_index();
-    if (r.value == &opts.framegen_by) *named = "Auto";
+    if (r.value == &opts.framegen_by && framegen_by_fixed()) return *r.value;
     return fixed;
 }
 // (longshot) the Gameplay tab's Bug report: the rows not at their defaults, as the menu shows them, for its "Changes from the
@@ -3564,8 +3614,7 @@ std::string changed_rows_text(std::string& pc_options) {
     for (const Row& r : rows) {
         const char* at = (const char*)r.value;
         if (!r.value || !r.text || r.heading || at < (const char*)&opts || at >= (const char*)(&opts + 1)) continue;
-        const char* named = nullptr;
-        const int was = report_default(r, *(const int*)((const char*)&defaults + (at - (const char*)&opts)), &named);
+        const int was = report_default(r, *(const int*)((const char*)&defaults + (at - (const char*)&opts)));
         const bool depends = report_default_depends_on_pc(r);
         if (!depends && *r.value == was) continue;
         std::string& to = depends ? pc_options : out;
@@ -3574,7 +3623,7 @@ std::string changed_rows_text(std::string& pc_options) {
         // (a microphone chosen by its name, not the name: a device's name can be a person's)
         to += r.value == &opts.mic && *r.value >= 2 ? "a microphone by its name" : r.text(*r.value);
         to += depends ? " (default depends on this PC" : " (default: ";
-        if (!depends) to += named ? named : r.text(was);
+        if (!depends) to += r.text(was);
         if (restart_changed(r)) to += "; takes effect after a restart";
         to += ")\n";
     }
@@ -4932,6 +4981,7 @@ static void probe_upscalers_soon() {
         std::thread([] {
             const auto t0 = std::chrono::steady_clock::now();
             dlss_probe();
+            dlss_fg_probe();   // (after DLSS's own answer: whether the Frame generation by row offers DLSS FG)
             fsr4_probe();
             xess_probe();
             (void)fsr3::supported();
@@ -5909,7 +5959,8 @@ void menu_tick() {
         // (the layout row shows the controls as they are: host/nn_hid.c keeps them, the ini's pad_ lines, and a saved
         // layout is not applied over them at start)
         if (open_now.load()) opts.pad_layout = detect_pad_layout();
-        if (open_now.load()) dlss_probe(), fsr4_probe(), xess_probe();   // (whether the Upscaler row can offer DLSS, FSR and XeSS: asked once)
+        // (whether the Upscaler row can offer DLSS, FSR and XeSS here, and Frame generation by DLSS FG: asked once)
+        if (open_now.load()) dlss_probe(), dlss_fg_probe(), fsr4_probe(), xess_probe();
         if (open_now.load()) refresh_mics();   // (the microphones as they are now)
         if (open_now.load()) refresh_outputs();
     }
@@ -6276,7 +6327,7 @@ void menu_tick() {
         if (fps_take(now, shown_frames.load(), game_frames.load(), &next, &last_shown, &last_game, &shown, &game)) {
             snprintf(fps_text, sizeof fps_text, "%.0f", shown);
             fps_rate_now = opts.framegen >= 1 ? game : shown;   // (the game's own against its cap, with frame generation too)
-            // (the game's own rate, "Base", and who makes the frames: DLSS FG, FSR 3.1 FG or Built-in FG)
+            // (the game's own rate, "Base", and who makes the frames: DLSS FG, FSR 3.1 FG or Built-in FG, or DLSS FG paused)
             const char* who = framegen_maker_name();
             if (opts.framegen >= 1 && who) snprintf(fps_sub, sizeof fps_sub, "Base %.0f, %s", game, who);
             else if (opts.framegen >= 1) snprintf(fps_sub, sizeof fps_sub, "Base %.0f", game);
