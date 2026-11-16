@@ -772,7 +772,10 @@ uint32_t bc_layers() {
 bool bc7_enabled() {
     static const bool on = [] {
         const char* e = getenv("RX_VK_ASTC_BC7");
-        return e && atoi(e) != 0;
+        // (OcaDim: on by default. BC3's alpha and gradients were losing the sky's and the banners' transparency on an
+        // RX 9070 XT: a translucent band across the sky and the flags. BC7 is 8 bits a texel too, mode 6 keeps them;
+        // RX_VK_ASTC_BC7=0 returns to BC3.)
+        return !e || atoi(e) != 0;
     }();
     return on && bc7_ok;
 }
