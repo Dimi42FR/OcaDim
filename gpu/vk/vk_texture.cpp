@@ -3181,7 +3181,7 @@ Texture* texture_touch(Texture* tex, bool for_sampling) {
         tex->gpu_wrote_seen = seen_before;
         if (from_memory_taken) {   // (still one that came from memory: the next try has to find it so again)
             std::lock_guard lk(from_memory_mu);
-            evicted_from_memory[evicted_key(tex->gpu, tex->width, tex->height, tex->nvn_format)] = tex->guest_size;
+            evicted_from_memory[evicted_key(tex->gpu, tex->width, tex->height, tex->nvn_format)] = {tex->guest_size, frame_no};
         }
         static std::atomic<int> told{0};
         if (told++ < 40) {

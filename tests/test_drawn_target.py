@@ -30,6 +30,7 @@ ENV_ON_H = ROOT / "gpu" / "vk" / "compat" / "longshot_env.h"
 SWITCH = "RX_VK_NO_DRAWN_OVER_BUFFER_WRITE"
 
 FIXTURE = r'''#include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -75,6 +76,18 @@ bool texture_resident(Texture*, uint32_t, uint32_t) { return true; }
 std::mutex gpu_wrote_mu;
 std::map<uint64_t, std::pair<uint64_t, uint64_t>> gpu_wrote;
 std::map<uint64_t, std::pair<uint64_t, uint32_t>> gpu_owned;
+namespace wrote_regions {   // (OcaDim: the quick "did any GPU write reach here" table, gpu/vk/wrote_regions.h)
+inline bool any(uint64_t, uint64_t) { return true; }
+inline void mark(uint64_t, uint64_t) {}
+}
+struct GpuWroteSeen {   // (OcaDim: does this texture's last "the GPU wrote it" answer still stand)
+    uint64_t lo = 0, hi = 0, value = 0, changes = 0;
+};
+thread_local GpuWroteSeen gpu_wrote_seen[64];
+std::atomic<uint64_t> gpu_wrote_changes{0};
+bool gpu_wrote_seen_hit(const GpuWroteSeen& s, uint64_t lo, uint64_t hi, uint64_t value, uint64_t changes) {
+    return s.hi && s.lo == lo && s.hi == hi && s.value == value && s.changes == changes;
+}
 
 // (the host's GPU mappings: each 64 KB virtual page's guest address. `walks` counts the lookups, a page walk's)
 std::map<uint64_t, uint64_t> vpages;

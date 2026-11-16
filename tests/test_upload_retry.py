@@ -56,7 +56,7 @@ def main():
             raise SystemExit("FAIL: a texture whose upload failed is marked done (%s): left empty or stale" % gone)
     for need in ("tex->retry_frame = frame_no + 30;", "tex->gpu_wrote_seen = seen_before;", "told++ < 40",
                  "its upload failed: tried again in 30 frames", "if (from_memory_taken) {",
-                 "evicted_from_memory[evicted_key(tex->gpu, tex->width, tex->height, tex->nvn_format)] = tex->guest_size;"):
+                 "evicted_from_memory[evicted_key(tex->gpu, tex->width, tex->height, tex->nvn_format)] = {tex->guest_size, frame_no};"):
         if need not in failed:
             raise SystemExit("FAIL: the failed upload's branch has no: " + need)
     epoch = touch.index("    tex->checked_epoch = epoch;\n    // (longshot) an image whose last upload failed")
