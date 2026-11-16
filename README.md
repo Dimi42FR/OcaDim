@@ -186,6 +186,8 @@ and later versions reuse the ones that didn't change; the launcher downloads the
 `udmabuf` device. Without access to it, it falls back to host-pointer imports, which can be much slower on AMD (RADV),
 and warns about it on stderr and in `longshot_log.txt`. On NVIDIA's own driver you can ignore that warning: NVIDIA refuses
 these imports, and host-pointer imports are not slow there (the check runs at start, before the game knows its GPU).
+Inside a container that shows `/dev/udmabuf` but hides `/sys/module` (Flatpak Steam, for one), the game can't read
+udmabuf's size limit; it takes the module's default, 64 MB, and says so in the log (`its default, 64 MB, assumed`).
 
 Check with `ls -l /dev/udmabuf` and `id`. If the device is missing, load the module first (`sudo modprobe udmabuf`).
 Then give the game's user access, in one of these ways:
