@@ -1,3 +1,166 @@
+<!-- OCADIM : la présentation du fork. Le manuel de Longshot (amont), en anglais, suit après le trait. -->
+
+<p align="center">
+  <img src="assets/branding/ocadim-discord.png" alt="OcaDim" width="200">
+</p>
+
+<h1 align="center">OcaDim</h1>
+
+<h4 align="center">La récompilation native d'<b>Ocarina of Time</b> sur PC, depuis <b>ta propre copie du jeu</b> — par <b>Dimi42FR</b></h4>
+
+<p align="center">
+  <b>Fork de <a href="https://longshot.magicbean.dev/">Longshot</a></b> ·
+  Windows x64 (Linux hérité de l'amont) ·
+  <a href="CREDITS.md">Crédits et licences</a> ·
+  <a href="docs/OCADIM.md">La carte technique</a> ·
+  GPL-3.0
+</p>
+
+**OcaDim** est un fork personnel de [Longshot](https://longshot.magicbean.dev/) — lui-même un fork de
+[Hookshot](https://github.com/NotRexed/Hookshot). Il repart du meilleur état de l'amont et y ajoute ce qui est décrit
+ci-dessous : la génération d'images d'AMD dans le jeu, des réparations pour jouer au-delà de 60 fps, des leviers CPU
+mesurés, et un Setup qui compile le jeu chez le joueur.
+
+Le jeu **n'est pas** dans ce dépôt et n'y sera jamais. Rien n'est distribué : tout se compile sur ta machine, à partir de
+ton `.nup`.
+
+> [!IMPORTANT]
+> **La règle, sans exception** : le `.nup` et le jeu compilé ne se partagent pas. Chacun compile depuis SA copie.
+> Ce qui se partage : ces sources, ce compilateur.
+
+---
+
+## Ce qu'OcaDim ajoute à la base
+
+### 1. La génération d'images d'AMD, dans le jeu
+
+La **frame generation du SDK FidelityFX d'AMD** (celle de FSR : 4.x sur RDNA 4, 3.1.x sur les autres GPU AMD) tourne
+dans le renderer, alimentée par les vraies données de la scène, et se choisit dans le menu du jeu.
+
+Comment c'est branché, en quatre morceaux :
+
+| Morceau | Ce qu'il fait |
+|---|---|
+| **La swapchain du SDK** | `ffxCreateContextDescFrameGenerationSwapChainVK` prend la place de celle de la fenêtre : `vkGetSwapchainImagesKHR`, `vkAcquireNextImageKHR` et `vkQueuePresentKHR` passent par les pointeurs que le SDK rend. Le SDK exige **trois queues distinctes** de la famille graphique (jeu, présentation, acquisition) : le device les crée. |
+| **Les frames générées** | À chaque frame, `ffxConfigureDescFrameGeneration` + `ffxDispatchDescFrameGenerationPrepareV2` reçoivent la **profondeur (R32F)**, les **vecteurs de mouvement (RG16F)**, le **jitter** et la **caméra** que la chaîne temporelle du renderer calcule déjà pour ses upscalers. La frame generation maison est **coupée** pendant ce temps, pour ne pas empiler deux interpolations. |
+| **Le choix dans le menu** | La ligne *Frame generation by* propose **Auto / Built-in FG / AMD FSR FG**, s'applique immédiatement, et le compteur de FPS dit qui fabrique les frames. Traduite dans les 12 langues du menu. |
+| **Les changements de résolution** | La taille maximale du contexte suit l'image du jeu (`maxRenderSize`) et le contexte est refait s'il grandit ; une bascule vers AMD **retire d'abord** la swapchain simple, donc une seule par surface. |
+
+C'est **opt-in** : sans la ligne du menu (ou sans `RX_VK_FG_AMD=1`), les pointeurs Vulkan réels restent en place et le
+présent est exactement celui d'avant. Si la bibliothèque d'AMD manque, si le device refuse, ou si le SDK ne donne pas son
+accord, le log dit **pourquoi** et le chemin simple reste.
+
+**Mesuré en jeu** (RX 9070 XT, pilote 26.10.2, sauvegarde dans la Place du Château) :
+
+| Ce qui a été mesuré | Résultat |
+|---|---|
+| FSR 4 en 2134x1200 → 2560x1440, 2765 draws | **44,1 fps réels**, 36 000 présents, **42 130 affichées**, **6 148 générées**, aucun *device lost* |
+| Activé **par le menu seul** (aucune variable) | contexte 4.0.2 en **118 ms**, 10 800 présents, 15 729 affichées, **4 931 générées**, swapchain refaite en place à 2560x1373 et contexte refait en **86 ms**, aucun refus, aucun écran noir |
+
+**Limite connue** : le HUD et les éléments 2D bougent avec les frames générées — c'est la limite de la FG sur un HUD
+dessiné en 2D. Une capture « sans HUD » a été tentée (copie compute, parce qu'`amdvlk` plantait sur `vkCmdCopyImage` et
+`vkCmdBlitImage` de cette cible) : elle tournait sans planter et le SDK générait bien, mais le rendu composé n'a pas été
+jugé bon et a été retiré. Le code n'est pas dans ce dépôt ; la voie reste ouverte.
+
+### 2. Jouer au-delà de 60 fps : on répare le jeu, pas seulement le renderer
+
+Le jeu d'origine suppose 60 fps à plusieurs endroits. L'amont le documente et laisse le joueur à 60 s'il veut être
+tranquille. OcaDim ajoute une ligne **Above-60 fixes** qui répare deux de ces endroits : **les sols qui portent un
+personnage** (le seuil des 100,0 du jeu) et **les pas fixes des height-fields**. Les deux ensembles de correctifs sont
+désactivables pour retrouver exactement le comportement d'avant.
+
+### 3. Les leviers CPU, mesurés
+
+| Ligne du menu | Ce qu'elle fait | Le chiffre |
+|---|---|---|
+| **Batched submits** | Garde les soumissions d'une frame et les envoie en une seule au prochain *wait*, *readback* ou *present* | sur RADV, Kokiri Forest passe de **33-41 à 46-61 fps** |
+| **Descriptor prefetch** | Un thread helper pré-résout les descripteurs des command buffers pendant le replay (tables *seqlock*, cache négatif, *asks* apprises) | 357-682 overlays servis par fenêtre, **~215 000 scans sautés**, zéro artefact |
+| **CPU affinity (CCX)** | Garde les workers du replay sur les CPU logiques du haut (le second CCD d'un Ryzen) pour que le thread du jeu garde son cache | Auto à partir de 12 processeurs logiques |
+| **Replay workers** / **Replay segments** | Le nombre de threads du replay et la taille des tranches (32 / 64 / 160) | Auto selon les processeurs disponibles |
+| **Draw order barriers** | Une passe de draw après une autre n'attend que dans ses étages de fragment ; un compute après un compute ne prend pas de barrière | Auto sur NVIDIA, où c'est mesuré |
+| **Le profil PGO de jeu** | Le renderer est compilé avec le profil du jeu, committé dans le dépôt | **3-5 % de frame time** |
+
+Chaque ligne dit *Auto / On / Off*, ce que fait *Auto*, et si elle demande un redémarrage.
+
+### 4. Le Setup : le jeu se compile chez le joueur
+
+`OcaDimSetup.exe` (WinForms, .NET 8 *self-contained*) prend **ton** `.nup`, récupère les outils, compile le jeu, et
+lance. Le paquet ne contient **aucune donnée de jeu** : le programme du Setup (164 Mo) et **19,4 Mo de sources**. Le
+reste — les outils, ~250 Mo — se télécharge au premier lancement, **chaque fichier vérifié par son SHA-256** (`tools.lock`).
+
+- Le `.nup` est **vérifié avant tout** : programme `0400486024DEC000`, build `e0f3ccfa`. Une autre version est refusée
+  avec un message clair, et rien n'est créé.
+- **Un seul build à la fois** (un `.lock`), comme côté jeu, sinon les dossiers de travail se marchent dessus.
+- **Annuler** laisse le dossier **reprenable** ; « Mettre à jour » recompile dans le même dossier en réutilisant les
+  outils ; « Désinstaller » retire le jeu et les raccourcis.
+- La **préparation des shaders n'est jamais tuée** : son cache vaut une demi-heure.
+- **Rien ne sort de la machine** : aucune télémétrie, aucun serveur, aucune mise à jour en ligne.
+- Il faut : ta copie du jeu, **~60 Go** libres, Windows 10/11 x64. Compte **~40 minutes** la première fois.
+
+### 5. L'identité et le confort
+
+- Le jeu s'appelle **OcaDim 0.0.1** partout : fenêtre, titre, sauvegardes (`%LOCALAPPDATA%\OcaDim`), statut Discord
+  (« Playing OcaDim », avec son propre artwork et le temps joué).
+- Un **backdrop** et un blason dessinés pour le projet, en fond du menu et sur les raccourcis.
+- Le menu est traduit en **12 langues**, lignes ajoutées comprises.
+
+---
+
+## Ce que nous n'avons pas vu ailleurs
+
+À notre connaissance — et dit comme tel, pas comme un titre de propriété :
+
+1. **La frame generation du SDK d'AMD dans un renderer de récompilation, alimentée par la vraie scène.** L'amont a sa
+   propre interpolation et la FG de NVIDIA (DLSS FG sur RTX 40+) ; celle d'AMD, avec la profondeur, les vecteurs de
+   mouvement, le jitter et la caméra réels du jeu, pilotée par la swapchain du SDK puis choisissable en jeu, n'y est pas.
+   La difficulté n'est pas d'appeler le SDK : c'est de lui donner des entrées justes et de garder un présent intact quand
+   il refuse.
+2. **Des correctifs de logique de jeu au-dessus de 60 fps.** L'amont prévient que certaines cinématiques et certains
+   boss comptent les frames ; OcaDim répare deux de ces mécanismes au lieu de contourner le problème.
+3. **Un Setup qui vérifie l'identité du `.nup` avant tout, ne contient aucune donnée de jeu, et reprend après un
+   abandon.**
+4. **Un prefetch de descripteurs mesuré et documenté** (design *seqlock* + cache négatif), livré avec ses chiffres et son
+   interrupteur.
+
+Si l'un de ces points existe déjà ailleurs, dis-le : on corrigera la formulation et on créditera.
+
+---
+
+## Compiler, installer
+
+### Avec le Setup (recommandé)
+
+Lance **`OcaDimSetup.exe`**, choisis ton `.nup`, attends. Aux lancements suivants, le même exe propose
+**Jouer / Mettre à jour / Désinstaller**.
+
+### À la main, depuis les sources
+
+Double-clic sur **`OcaDim - COMPILER.bat`**, ou glisse-dépose ton `.nup` dessus. La première compilation prend de
+10 minutes à plus d'une heure : les outils se téléchargent seuls, le jeu se traduit, se compile, puis prépare ses shaders
+en s'ouvrant tout seul. **Ne le ferme jamais pendant cette préparation.**
+
+Les variables d'environnement utiles (`longshot_env.txt`, dans le dossier du jeu) sont listées dans le manuel plus bas ;
+celles d'OcaDim : `RX_VK_FG_AMD`, `RX_VK_DESC_PREFETCH`, `RX_VK_DEVICE`, `RX_VK_FSR_FG`.
+
+---
+
+## Licence et crédits
+
+**GPL-3.0** ([LICENSE](LICENSE)) — la même que le socle. Le détail complet est dans **[CREDITS.md](CREDITS.md)** :
+la généalogie (Hookshot → Longshot → OcaDim), ce que nous avons écrit fichier par fichier, la liste des composants tiers
+avec leur licence (a64-kit, suyu, Eden, EvilOOT, Lichii, llvm-mingw, AMD FidelityFX, NVIDIA DLSS, Intel XeSS, zbic, Opus,
+SDL, zstd, Dear ImGui, Kenney, Libertinus, les shaders CRT, et les paquets d'outils), et les marques.
+
+OcaDim n'est ni affilié à Nintendo ni approuvé par Nintendo. Le jeu, ses clés et ses données ne sont pas ici.
+
+---
+
+> **La suite de ce document est le manuel de Longshot (l'amont), en anglais.** Il reste la référence pour toutes les
+> options du menu, le build depuis les sources, le dépannage et le rapport de bug — et pour les crédits détaillés de la
+> communauté qui a construit le socle.
+
+---
+
 <h1 align="center">
   <br>
   <a>
@@ -430,7 +593,7 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | Render resolution | Auto (the game's own dynamic resolution), 100%, 75%, 67%, 50% (each with its size). With DLSS or FSR 4: Auto, Native (DLAA or FSR 4 Native AA: the 3D at full size), 92%, 83%, 75%, Quality (67%), Balanced (58%), Performance (50%), Ultra Performance (33%). With FSR 3.1: Auto, 100% (its native AA), then the same as DLSS from 92%. With Off: Auto, 100%, 75%, 67%, 50%, 33% | Auto; a quality preset sets it |
 | | Sharpness | 0 to 100%, in steps of 10 | 0%; a quality preset sets it |
 | | Frame generation | Off, Auto, 2x to 8x | Off |
-| | Frame generation by | Auto (NVIDIA DLSS Frame Generation where it runs: RTX 40 and newer, with a temporal Upscaler; else the built-in one; with frame generation on, the row shows who makes the frames, as Auto: DLSS FG, and why not DLSS FG when another does), Built-in FG. Changes at once | Auto |
+| | Frame generation by | Auto (NVIDIA DLSS Frame Generation where it runs: RTX 40 and newer, with a temporal Upscaler; else the built-in one; with frame generation on, the row shows who makes the frames, as Auto: DLSS FG, and why not DLSS FG when another does), Built-in FG, AMD FSR FG (OcaDim: AMD's FidelityFX frame generation, 4.x on RDNA 4 and 3.1.x on the other AMD GPUs, Windows only, with AMD's runtime beside the game). Changes at once | Auto |
 | | Frame pacing | Off, On | Off; a quality preset turns it on |
 | | Game frame rate cap | 60 (the console's), 90, 120, 144, 165, 240, Uncapped (changes at once) | 60 |
 | | NVIDIA Reflex | Off, On, On + Boost (shown only on NVIDIA GPUs with `VK_NV_low_latency2`) | Off |
@@ -438,6 +601,8 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | Fullscreen | Off, On (the same as <kbd>F11</kbd>) | Off |
 | | V-Sync | Auto, On, Off | Auto |
 | | Window scaling filter | Off, Catmull-Rom, Lanczos (shows "Not needed (window = output)" while the window is the Output resolution's size) | Off; a quality preset sets it |
+| | CRT filter | Off, Lottes aperture grille, Lottes consumer TV, Hyllian Fast, zfast CRT (the finished SDR picture, the game's HUD included; the menu and overlays stay clean) | Off |
+| | CRT lines | 240, 480, 720 (the virtual raster: at most half the destination's height) | 240 |
 | | Ultrawide menus | Full width; Centred, blurred sides; Centred, black bars (with the Aspect ratio at the monitor's shape) | Centred, blurred sides |
 | | HDR | Off, Expanded, Native (the game's) | Off |
 | | HDR paper white | 80 to 400 nits, in steps of 10 (while HDR is on) | 200 nits |
@@ -448,7 +613,13 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | Anisotropic filtering | Game's, 2x, 4x, 8x, 16x | 16x |
 | | GPU device | Auto, or each graphics card by name (after a restart) | Auto |
 | | Threaded rendering | Auto, On, Off (after a restart). Auto is On with 12 or more processor threads for the game | Auto |
-| | VRAM budget | Auto, 3.6, 4.8, 6, 7.5, 9, 11 GB (2.2 GB only from the Minimum (4GB) preset); a quality preset sets it | Auto |
+| | Replay workers | Auto, 1, 2, 3, 4 (the replay's threads; Auto is one for every four the game may use, at most four, none under six) | Auto |
+| | Descriptor prefetch | Auto, On, Off (descriptors read ahead on a helper thread; Auto is on where the processor has threads to spare) | Auto |
+| | Replay segments | 32, 64, 160 (the draws and dispatches a replay worker takes at a time) | 32 |
+| | Above-60 fixes | Off, On (the floors that carry a character and the height-field surfaces' fixed steps, mended above 60 fps) | On |
+| | CPU affinity (CCX) | Auto, On, Off (the replay's workers on the upper half of the logical CPUs, so the game's own thread keeps its cache; Auto from 12) | Auto |
+| | Draw order barriers | Auto, On, Off (a draw pass after another waits in its fragment stages only; Auto on NVIDIA, where it was measured) | Auto |
+| | Batched submits | Auto, On, Off (a frame's submissions sent as one; Auto on Mesa's RADV, where it was measured) | Auto |
 | Audio | Volume | 0 to 100%, in steps of 5 | 100% |
 | | Mute in background | Off, On | Off |
 | | Audio output | Auto, Stereo, 5.1, Mono (layout changes after a restart; Mono/Stereo live on stereo output) | Auto |
@@ -521,7 +692,12 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
   over the menu.
 - **Frame generation** makes extra frames between the game's own. It adds a little input delay, and fast motion can
   show artifacts. The renderer's own interpolation makes the frames; at 2x, AMD FSR 3.1's frame interpolation can make
-  it instead with `RX_VK_FSR_FG=1` (below: it moves the HUD with the scene, so it is not the default). **Frame pacing** shows frames at an even interval: less stutter, up to one frame of delay. It paces
+  it instead with `RX_VK_FSR_FG=1` (below: it moves the HUD with the scene, so it is not the default).
+  **Frame generation by: AMD FSR FG** (OcaDim) makes them with AMD's FidelityFX SDK instead: one frame between each two of
+  the game's, from the scene's own depth, motion vectors, jitter and camera, 4.x on RDNA 4 and 3.1.x on the other AMD GPUs,
+  Windows and AMD GPUs only, with AMD's runtime beside the game; it needs a temporal Upscaler and the built-in frames are
+  cut off while it runs. The row applies at once, and `RX_VK_FG_AMD=1` asks for it for one run. Its frames move the HUD
+  with the scene, as FSR 3.1's do. **Frame pacing** shows frames at an even interval: less stutter, up to one frame of delay. It paces
   the frames that frame generation shows, so it has no effect while Frame generation is Off.
 - **Game frame rate cap** limits the frames the game renders. With a cap of 60 and Frame generation at 2x, the output
   can reach 120 FPS. Choose **Auto** in Frame generation to target the display's refresh rate instead of a fixed multiplier.
@@ -627,6 +803,9 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
   in `longshot_env.txt` uses the compute path on every GPU (try it if your card crashes or leaves objects out; usually a
   little slower), and `RX_VK_MESH_SHADERS=native` the GPU's own for every draw. A `mesh_shaders=` line left in
   `longshot_options.ini` is no longer read.
+- **CRT filter** draws the finished picture through a CRT shader (Lottes' aperture grille or consumer TV, Hyllian Fast,
+  zfast CRT), the game's HUD included; the menu and the overlays stay clean. **CRT lines** picks the virtual raster
+  (240, 480 or 720 lines, at most half the destination's height).
 - **Ultrawide menus:** with the Aspect ratio at the monitor's shape, the pause, item and map menus stay in the middle
   16:9, with what the game draws beside them out of focus, or black; Full width stretches them over the whole screen,
   as before. Loading screens and pre-rendered movies get the same sides. It changes at once.
@@ -640,6 +819,19 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
   (On with 12 or more threads for the game, Off with fewer, and Off wherever the mode is not safe). It applies after
   a restart. `RX_VK_ASYNC` and `RX_VK_RECORDER`, when set, choose for
   one run.
+- **Replay workers**, **Replay segments**, **Descriptor prefetch**, **CPU affinity (CCX)**, **Draw order barriers** and
+  **Batched submits** (OcaDim) are the replay's own levers: how many threads record the picture's command buffers, how
+  many draws and dispatches each takes at a time (32 suits this game's buffers; 64 and 160 are for longer ones), whether
+  a helper thread reads each buffer's descriptors ahead of the replay, whether the workers stay on the upper half of the
+  processor's logical CPUs (the second CCD of a Ryzen, so the game's own thread keeps its cache), whether a draw pass
+  right after another waits only in its fragment stages, and whether a frame's submissions go out as one. Each row says
+  Auto, On or Off, what Auto does and where it was measured, and applies after a restart. Measured on this project:
+  Batched submits took Kokiri Forest from 33-41 to 46-61 fps on RADV, and Descriptor prefetch served 357-682 overlays per
+  window with about 215,000 list scans skipped, with no artifact. `RX_VK_PARALLEL`, `RX_VK_PARALLEL_SEG` and
+  `RX_VK_DESC_PREFETCH` choose for one run.
+- **Above-60 fixes** (OcaDim) mends the two places in the game that assume whole 60 fps frames: the floors that carry a
+  character (the game's own 100.0 cut) and the height-field surfaces' fixed steps. Off keeps the game's behaviour, as it
+  was before the fixes. It applies after a restart.
 - **Robust buffers** (Debug tab, Developer): a read past a buffer's end is dropped instead of stopping the GPU. Auto is
   on, on every card; Off can be faster on some NVIDIA cards.
 - **ASTC as RGBA8** (Debug tab, Developer): the AMD texture workaround below.
@@ -650,7 +842,8 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
   down to 15 fps.
 - **FPS counter** shows in a corner (**FPS counter position**; at the top right while the menu is open), at one of
   five levels. **FPS** is the number alone (an options file's old On); with frame generation on, it also shows the
-  game's own rate and who makes the frames: `Base 60, DLSS FG` (NVIDIA DLSS Frame Generation), `FSR 3.1 FG` or `Built-in FG`. **Frame time** adds the game's frame time and its 1% low (the rate of the slowest 1% of frames over
+  game's own rate and who makes the frames: `Base 60, DLSS FG` (NVIDIA DLSS Frame Generation), `FSR 3.1 FG`, `AMD FSR FG`
+  (OcaDim: AMD's FidelityFX frame generation) or `Built-in FG`. **Frame time** adds the game's frame time and its 1% low (the rate of the slowest 1% of frames over
   the last 10 seconds). From this level on, the number and the frame time are green at the Game frame rate cap's rate,
   amber under it and red under two thirds of it. (The cap's rate is the display's refresh instead with V-Sync On when
   that is slower; with Uncapped and V-Sync not On there is no line, and the colours are against 60.) **Graph** adds
