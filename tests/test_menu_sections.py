@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 DISPLAY = [
     ("Picture", ["Aspect ratio", "Output resolution", "Custom output size"]),
-    ("Frame rate", ["Frame pacing", "Game frame rate cap"]),
+    ("Frame rate", ["Game frame rate cap"]),
     ("Screen", ["Fullscreen", "V-Sync", "Window scaling filter", "CRT filter", "CRT lines", "Ultrawide menus"]),
     ("HDR", ["HDR", "HDR paper white", "HDR peak brightness", "HDR contrast", "HDR tone mapper"]),
 ]
@@ -24,7 +24,7 @@ GRAPHICS = [
     ("Resolution and upscaling", ["Profile", "Upscaler", "Render resolution", "Sharpness"]),
     ("Frame generation and latency", ["Frame generation", "Frame generation by", "AMD Anti-Lag 2"]),
     ("Detail", ["Texture detail", "Anisotropic filtering"]),
-    ("GPU and memory", ["GPU device", "Threaded rendering"]),
+    ("GPU and memory", ["GPU device"]),
 ]
 
 

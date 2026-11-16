@@ -30,6 +30,8 @@ def main():
     header = (ROOT / "gpu/vk/vk_menu.h").read_text(encoding="utf-8")
     table = block(menu, "Row rows[] = {")
     entries = re.findall(r'\{TAB_DEBUG,[^{}]*\}', table)
+    # (Frame pacing and Threaded rendering are Debug's for testing: test_threaded_rendering covers them)
+    entries = [e for e in entries if "Frame pacing" not in e and "Threaded rendering" not in e]
     assert len(entries) >= 18
     assert '{TAB_GAMEPLAY, "Damage taken"' not in table
     assert sum('"Damage taken"' in entry for entry in entries) == 1

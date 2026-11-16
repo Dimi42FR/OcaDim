@@ -3047,6 +3047,12 @@ const uint8_t* replay_handle(VkCommandBuffer& cmd, const uint8_t* h, bool may_st
 // is held at the frame's start); the replay's CPU time each time, logged. The same frame every time: what a change to
 // the replay costs or saves, without the title scenes' differences. ----
 std::vector<std::vector<uint64_t>> frame_submits;   // (this frame's submits' handles)
+/// (OcaDim) RX_VK_BENCH's frame, when the benchmark asks for one: without it, no submit is copied (a heap block and its
+/// copy per submit, every frame, for a log line no run prints)
+bool bench_frame_on() {
+    static const bool v = getenv("RX_VK_BENCH") != nullptr;
+    return v;
+}
 uint64_t frame_first_value = 0;
 std::atomic<uint64_t> replayed_hold{0};             // (0: none)
 
@@ -3432,8 +3438,10 @@ bool run_submit(const uint64_t* handles, int n, uint64_t value, uint64_t queue, 
     SlowWatch slow("submit");
     PROF(PROF_SUBMIT);
     if (memory_work) {
-        if (frame_submits.empty()) frame_first_value = value;
-        frame_submits.emplace_back(handles, handles + std::max(n, 0));
+        if (bench_frame_on()) {
+            if (frame_submits.empty()) frame_first_value = value;
+            frame_submits.emplace_back(handles, handles + std::max(n, 0));
+        }
         submit_memory_work(value);
     }
     if (burst_open && rec_cur) {   // (the burst's recording goes on: what the piece before did, done first)
@@ -3709,8 +3717,10 @@ void submit_job(std::vector<uint64_t>& handles, uint64_t value, uint64_t queue) 
     auto it = qruns.find(queue);
     if (it != qruns.end() && it->second.blocked()) {   // (its memory work now, in the order of the submits)
         std::lock_guard lk(replay_mu);
-        if (frame_submits.empty()) frame_first_value = value;
-        frame_submits.emplace_back(handles);
+        if (bench_frame_on()) {
+            if (frame_submits.empty()) frame_first_value = value;
+            frame_submits.emplace_back(handles);
+        }
         submit_memory_work(value);
         occ_visible_ahead(handles.data(), (int)handles.size(), 0, nullptr);   // (longshot: as run_submit's stop)
         it->second.ahead_upto = std::max(it->second.ahead_upto, value);

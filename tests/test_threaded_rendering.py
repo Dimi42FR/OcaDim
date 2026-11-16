@@ -101,7 +101,7 @@ def main():
     # (the row: Auto by default, read once so it takes a restart, no preset sets it)
     if "    int threaded_rendering = 0;" not in header:
         raise SystemExit("vk_menu.h: the Threaded rendering option is not Auto (0) out of the box")
-    row = re.search(r'\{TAB_GRAPHICS, "Threaded rendering", &opts\.threaded_rendering, 0, 2, 1, tx_vsync,[^{}]*\}', menu)
+    row = re.search(r'\{TAB_DEBUG, "Threaded rendering", &opts\.threaded_rendering, 0, 2, 1, tx_vsync,[^{}]*\}', menu)
     if not row or not row.group(0).endswith("hn_threaded, true, true}"):
         raise SystemExit("vk_menu.cpp: no Threaded rendering row (Auto, On, Off), or it no longer takes a restart")
     if "after a restart" not in row.group(0).replace('"\n     "', ""):
