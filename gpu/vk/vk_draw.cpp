@@ -3371,6 +3371,12 @@ thread_local uint64_t grid_patch_at = UINT64_MAX;
 thread_local VkBuffer grid_patch_buf = VK_NULL_HANDLE;   // (the stream c0 went to: PR 585's streams can move on)
 
 int desc_reuse_level();   // (below: RX_VK_DESC_REUSE and the Descriptor reuse row)
+/// (longshot) Whether a uniform buffer is copied into the stream as submitted rather than bound where the game keeps it
+/// (RX_VK_UB_SNAPSHOT; the reason in uniform_range). On by default on Intel, its iGPUs and its discrete Arc cards alike
+bool ub_snapshot_wanted() {
+    if (const char* e = getenv("RX_VK_UB_SNAPSHOT")) return !env_value_off(e);
+    return dev.props.vendorID == 0x8086;
+}
 VkDescriptorBufferInfo uniform_range(const NvnState& s, const Stage& st, uint32_t index) {
     VkDescriptorBufferInfo bi{VK_NULL_HANDLE, 0, VK_WHOLE_SIZE};
     const uint64_t align = std::max<uint64_t>(dev.props.limits.minUniformBufferOffsetAlignment, 16);
@@ -3465,28 +3471,43 @@ VkDescriptorBufferInfo uniform_range(const NvnState& s, const Stage& st, uint32_
                 return {cur->stream, at, n};
             }
         // (RX_VK_UB_SNAPSHOT=1: the contents as they are now, in the stream, not the pool the GPU reads later)
-        // (on by default on Intel when the pools have no VRAM mirror (vk_memory.cpp mirror_on() off): the GPU then reads the
-        // game's memory itself when it runs the frame, and by then the game has written the next frame's uniforms over the ones
-        // submitted (the per-object matrices are in memory it reuses frame after frame). The depth prepass drew the Kokiri ground
-        // with other objects' matrices, out of sight: the depth there stayed far, and the fog pass painted sky over the ground
-        // (the white forest on Intel Core Ultra iGPUs, still there after the split-submission fence fix #2419). A mirror is made
-        // at the submission and does not see the rewrite. Other GPUs with no mirror (AMD APUs, GCN since #2343, RX_VK_MIRROR=0)
-        // keep the default off until it is measured there. RX_VK_UB_SNAPSHOT=0: off)
-        static const bool snapshot = [] {
-            const char *e = getenv("RX_VK_UB_SNAPSHOT");
-            return e ? env_on("RX_VK_UB_SNAPSHOT") : dev.props.vendorID == 0x8086 && !pools_mirrored();
-        }();
-        BufferRef b = snapshot ? BufferRef{} : gpu_buffer_bind(u.addr, n, false);
+        // (on by default on Intel: when the GPU reads the game's memory itself as it runs the frame, the game has by then
+        // written the next frame's uniforms over the ones submitted (the per-object matrices are in memory it reuses frame
+        // after frame). The depth prepass drew the Kokiri ground with other objects' matrices, out of sight: the depth there
+        // stayed far, and the fog pass painted sky over the ground (the white forest on Intel Core Ultra iGPUs, still there
+        // after the split-submission fence fix #2419). An Arc B580 (101.9154), whose pools have VRAM mirrors, showed the same
+        // (the forest floor and the treehouses gone to sky, white glowing blocks and pots that came and went) for another reason:
+        // bind_descriptors' delta push. There a push that carries some of a draw's uniform buffer writes and leaves others out
+        // as unchanged draws with wrong data; the snapshot's copies are new at every draw, so every one of them is pushed (with
+        // the snapshot off, RX_VK_PUSH_ALL=1 draws it right too: PR 446, ub_snapshot_wanted). Other GPUs
+        // with no mirror (AMD APUs, GCN since #2343, RX_VK_MIRROR=0) keep the default off until it is measured there.
+        // RX_VK_UB_SNAPSHOT=0: off)
+        static const bool snapshot = ub_snapshot_wanted();
+        // (but a range the GPU writes earlier in this submission, in any of its parts, or in an earlier submission the GPU
+        // has not done yet, is bound in place, where the GPU reads it after that write: guest memory and the captures, which
+        // the copy is made from, do not have the GPU's bytes yet. Not asked while a parallel replay records segments
+        // (RX_VK_PARALLEL), whose writes are not noted: memory_gpu_written)
+        const int gpu_written = snapshot && memory_gpu_writes_any() && !par_active.load(std::memory_order_relaxed)
+                                    ? memory_gpu_written(u.addr < (1ull << 40) ? u.addr : host->gpu_guest(u.addr), n) : 0;
+        BufferRef b = snapshot && !gpu_written ? BufferRef{} : gpu_buffer_bind(u.addr, n, false);
+        // (the guard's: after a write in this submission, then in an earlier one; bound in place, copied all the same)
+        static std::atomic<int64_t> after_gpu[2][2];
+        if (gpu_written) after_gpu[gpu_written - 1][b && b.offset % align == 0 ? 0 : 1].fetch_add(1, std::memory_order_relaxed);
         if (b && b.offset % align == 0) return {b.buffer, b.offset, n};
         const uint64_t at = stream_alloc(n, align);   // (unaligned or outside the pools: copied into the stream)
         if (at == UINT64_MAX) return bi;
         FINE_N(FC_UBO_STREAM, 1);
-        // (as the submission had it, not as the game has rewritten it since: the captures' pages)
+        // (as the submission had it, not as the game has rewritten it since: the captures' pages. A range the GPU wrote that
+        // can't be bound in place, unaligned or outside the pools, is copied all the same, without that write, as before)
         memory_read_as_submitted(u.addr, cur->mapped + at, n);
         static int64_t copied;
         if (++copied % 5000 == 1)
-            logf("vk: uniform buffer %#llx +%#llx copied into the stream (%s; %lld so)", (unsigned long long)u.addr,
-                 (unsigned long long)n, b ? "unaligned" : "outside the pools", (long long)copied);
+            logf("vk: uniform buffer %#llx +%#llx copied into the stream (%s; %lld so; after a GPU write in the submission: "
+                 "%lld bound in place, %lld copied all the same; after one in a submission still on the GPU: %lld bound in "
+                 "place, %lld copied all the same)", (unsigned long long)u.addr, (unsigned long long)n,
+                 b ? "unaligned" : snapshot && !gpu_written ? "a snapshot" : "outside the pools", (long long)copied,
+                 (long long)after_gpu[0][0].load(std::memory_order_relaxed), (long long)after_gpu[0][1].load(std::memory_order_relaxed),
+                 (long long)after_gpu[1][0].load(std::memory_order_relaxed), (long long)after_gpu[1][1].load(std::memory_order_relaxed));
         return {cur->stream, at, n};
     }
     return bi;
@@ -4196,6 +4217,10 @@ struct Pushed {
 TLS_OBJECT(pushed, std::array<Pushed, 2>)   // [graphics, compute]
 } // namespace
 std::string state_list_snapshot(bool* present) { return state_list_bytes(present); }   // (vk_draw.h: the menu's)
+bool uniform_snapshot_on() {   // (vk_internal.h: ub_snapshot_wanted's answer for vk_memory.cpp's guard and vk_replay.cpp's parallel replay)
+    static const bool on = ub_snapshot_wanted();
+    return on;
+}
 /// (longshot) A compute pipeline of the back end's own, made elsewhere (vk_fsr3.cpp), through the pipeline cache the game's are kept
 /// in across runs (longshot_vk_pipelines.bin), as theirs are: in play through the play caches (create_cached), so that it does not grow
 /// the start's cache; before the cache is loaded, with none. (Outside the unnamed namespace: vk_fsr3.cpp links to it)

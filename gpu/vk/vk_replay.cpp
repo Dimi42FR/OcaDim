@@ -2074,7 +2074,7 @@ void split_part(VkCommandBuffer& cmd) {
     submit_recording(*rec_cur, false);
     if (part_flush) ub_first_of_recording = ub_updates.size();
     Recording& r = begin_recording(rec_cur_value);
-    memory_begin_submission();
+    memory_begin_submission();   // (not memory_gpu_writes_begin: the submission's GPU writes so far stay noted, vk_memory.cpp)
     full_barrier(r.cmd, "barrier (recording start)");
     rec_cur = &r;
     cmd = r.cmd;
@@ -2202,9 +2202,25 @@ int64_t stream_work(const uint8_t* p, int64_t most) {
     }
 }
 
+/// (longshot) RX_VK_PARALLEL with the uniform snapshot on (RX_VK_UB_SNAPSHOT: every Intel GPU by default): each command
+/// buffer recorded on the replay thread, as with RX_VK_PARALLEL off (logged once). A segment is recorded on its thread
+/// while those before it still are, so the snapshot's guard there (uniform_range: a uniform range the GPU writes earlier
+/// in the submission is bound in place, vk_memory.cpp's memory_gpu_written) could not know their GPU writes, nor the ones
+/// before the segments, and the segment's uniform copy would not have the GPU's bytes
+static bool par_snapshot_serial(int threads) {
+    static const bool on = [threads] {
+        if (threads < 2 || !uniform_snapshot_on()) return false;
+        logf("vk: parallel replay (RX_VK_PARALLEL=%d): command buffers recorded on the replay thread, the uniform snapshot "
+             "is on (RX_VK_UB_SNAPSHOT): a segment's uniform copies could not see the GPU writes before them",
+             threads);
+        return true;
+    }();
+    return on;
+}
+
 /// A command buffer of the submission from h (its start, or where it stopped at a wait): on the replay thread alone
-/// (RX_VK_PARALLEL off, one too short for two segments, dumps and profiles), or its dry pass there and its segments on
-/// the threads. may_stop: up to a wait not met, which it returns (null: the command buffer done)
+/// (RX_VK_PARALLEL off, one too short for two segments, dumps and profiles, the uniform snapshot on), or its dry pass
+/// there and its segments on the threads. may_stop: up to a wait not met, which it returns (null: the command buffer done)
 const uint8_t* replay_handle(VkCommandBuffer& cmd, const uint8_t* h, bool may_stop = false) {
     const int threads = par_threads();
     NvnState& state = *cur_state;
@@ -2217,7 +2233,7 @@ const uint8_t* replay_handle(VkCommandBuffer& cmd, const uint8_t* h, bool may_st
         const NvnState& s;
         ~OccEnd() { occ_end_buffer(s); }
     } occ_end{state};
-    if (threads < 2 || !rec_cur || dump_on() || gprof_on() || probe_serial()) {
+    if (threads < 2 || !rec_cur || dump_on() || gprof_on() || probe_serial() || par_snapshot_serial(threads)) {
         suspend_ok = may_stop;
         replay(cmd, state, h);
         suspend_ok = false;
@@ -2451,6 +2467,7 @@ void bench_replay(const std::vector<uint64_t>& handles) {
     ub_first_of_recording = ub_updates.size();
     Recording& first = begin_recording(value);
     memory_begin_submission();
+    memory_gpu_writes_begin();   // (RX_VK_UB_SNAPSHOT's guard: a submission's start, not a part's: split_part)
     full_barrier(first.cmd);
     rec_cur = &first, rec_cur_value = value, rec_parts = 0, part_work = 0, part_end_wanted = false;
     rec_open(value);
@@ -2839,6 +2856,7 @@ bool run_submit(const uint64_t* handles, int n, uint64_t value, uint64_t queue, 
         ub_first_of_recording = ub_updates.size();
         Recording& first = begin_recording(tag);
         memory_begin_submission();
+        memory_gpu_writes_begin();   // (RX_VK_UB_SNAPSHOT's guard: a submission's start, not a part's: split_part)
         full_barrier(first.cmd, "barrier (recording start)");
         rec_cur = &first, rec_cur_value = tag, rec_parts = 0, part_work = 0, part_end_wanted = false;
         rec_open(tag);
@@ -4989,6 +5007,7 @@ void do_present(const nvn_tex* t, const int crop[4]) {
         ub_first_of_recording = ub_updates.size();
         Recording& r = begin_recording(value);
         memory_begin_submission();
+        memory_gpu_writes_begin();   // (RX_VK_UB_SNAPSHOT's guard: a submission's start, not a part's: split_part)
         Texture* tex = t ? texture_for_present(t) : nullptr;
         static int logged_p;
         if (logged_p++ < 4)

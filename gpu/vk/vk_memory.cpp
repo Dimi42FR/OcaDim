@@ -836,8 +836,70 @@ bool gpu_pages_on() {
     static const bool v = env_on("RX_VK_GPU_PAGES");
     return v;
 }
+// (longshot, RX_VK_UB_SNAPSHOT's guard) The GPU writes this thread's recordings have noted that guest memory may not have
+// yet: memory_stamp_gpu's (storage buffers a draw or a dispatch writes, buffer copies and fills, texture-to-buffer copies)
+// and memory_note_gpu_write's (bare and wide storage ranges). A uniform range among them is bound in place, where the GPU
+// reads it after that write in the queue's order, and not copied from guest memory and the captures, which do not have
+// the GPU's bytes (uniform_range). The submission being recorded keeps its own in all its parts: split_part runs
+// memory_begin_submission at every part, and a part's GPU work has not necessarily run when the next part is recorded; a
+// burst's next submit goes on in the same recording. At a submission's start (memory_gpu_writes_begin: run_submit's new
+// recording, the present's, bench_replay's) the last one's take its timeline value, and each is let go once the GPU has
+// done its submission (mem_completed, as of the part being recorded): its bytes are in guest memory by then, copied back
+// from the mirrors at each part's end or written there in place. Not covered: a range memory_note_gpu_write noted where
+// the GPU writes past what is copied back (its pool keeps its mirror: gpu_only), once its submission is done. Kept for good,
+// such a range would bind in place memory the game fills again itself, the rewritten uniforms the snapshot is for. Noted
+// only with the snapshot on (uniform_snapshot_on: nothing else asks). A parallel replay is not made then (RX_VK_PARALLEL,
+// off by default: par_snapshot_serial in vk_replay.cpp records each command buffer on the replay thread); a segment's
+// thread notes nothing all the same, and the guard is not asked while segments record
+struct GpuWrite { uint64_t lo, hi, value; };   // ([lo, hi) in guest memory; its submission's timeline value: UINT64_MAX while it is the one recorded)
+thread_local std::vector<GpuWrite> gpu_writes;   // (by lo, apart: merged where they meet, under the later submission's value)
+thread_local uint64_t gpu_writes_lo = UINT64_MAX, gpu_writes_hi = 0;   // (all of them within: most uniforms are elsewhere)
+thread_local uint64_t gpu_writes_value = 0;   // (the timeline value the notes of the submission being recorded saw)
+void memory_gpu_writes_begin() {
+    uint64_t lo = UINT64_MAX, hi = 0;
+    size_t kept = 0;
+    for (GpuWrite w : gpu_writes) {
+        if (w.value == UINT64_MAX) w.value = gpu_writes_value;   // (the last submission's own)
+        if (w.value <= mem_completed) continue;                  // (done on the GPU: guest memory has the bytes)
+        lo = std::min(lo, w.lo), hi = std::max(hi, w.hi);
+        gpu_writes[kept++] = w;
+    }
+    gpu_writes.resize(kept);
+    gpu_writes_lo = lo, gpu_writes_hi = hi, gpu_writes_value = 0;
+}
+void memory_gpu_writes_note(uint64_t guest, uint64_t size) {
+    static const bool on = uniform_snapshot_on();
+    if (!on || !guest || !size || par_active.load(std::memory_order_relaxed)) return;
+    uint64_t lo = guest, hi = guest + size;
+    gpu_writes_lo = std::min(gpu_writes_lo, lo), gpu_writes_hi = std::max(gpu_writes_hi, hi);
+    gpu_writes_value = std::max(gpu_writes_value, mem_rec_value);
+    // (the first that reaches lo, and those after it that begin by hi: one range with it, the submission being recorded's)
+    const auto it = std::lower_bound(gpu_writes.begin(), gpu_writes.end(), lo, [](const GpuWrite& w, uint64_t at) { return w.hi < at; });
+    auto end = it;
+    for (; end != gpu_writes.end() && end->lo <= hi; ++end) lo = std::min(lo, end->lo), hi = std::max(hi, end->hi);
+    if (it == end) {
+        gpu_writes.insert(it, {lo, hi, UINT64_MAX});
+    } else {
+        *it = {lo, hi, UINT64_MAX};
+        gpu_writes.erase(it + 1, end);
+    }
+}
+/// 0: no GPU write guest memory may not have; 1: one in the submission being recorded; 2: one in an earlier submission the
+/// GPU has not done yet
+int memory_gpu_written(uint64_t guest, uint64_t size) {
+    if (!guest || !size || guest >= gpu_writes_hi || guest + size <= gpu_writes_lo) return 0;
+    int got = 0;   // (the first that ends past guest, and those after it that begin before the range's end)
+    for (auto it = std::upper_bound(gpu_writes.begin(), gpu_writes.end(), guest, [](uint64_t at, const GpuWrite& w) { return at < w.hi; });
+         it != gpu_writes.end() && it->lo < guest + size; ++it) {
+        if (it->value == UINT64_MAX) return 1;
+        if (it->value > mem_completed) got = 2;
+    }
+    return got;
+}
+bool memory_gpu_writes_any() { return !gpu_writes.empty(); }
 void memory_stamp_gpu(uint64_t guest, uint64_t size) {
     if (!size) return;
+    memory_gpu_writes_note(guest, size);
     memory_stamp(guest, size);
     if (!gpu_pages_on()) return;
     std::lock_guard lk(gpu_pages_mu);
@@ -4169,6 +4231,7 @@ void memory_note_gpu_write(uint64_t gpu, uint64_t size) {
         if (!host->gpu_ptr(gpu, &avail) || avail < size) return;
         guest = host->gpu_guest(gpu);
     }
+    memory_gpu_writes_note(guest, size);   // (RX_VK_UB_SNAPSHOT's guard: a uniform range among them is bound in place)
     std::lock_guard lk(pools_mu);
     rb_hazard_locked(guest, guest + size);
     // and RX_VK_READBACK_EARLY's writers: a bare storage pointer's guessed range or a wide binding is written in

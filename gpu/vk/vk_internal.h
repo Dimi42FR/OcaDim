@@ -360,6 +360,15 @@ void memory_rb_recording_begun();   // (longshot) at a recording's start, on its
 void memory_rb_segments_begin(uint64_t base, uint64_t n);   // (and a parallel replay's segments: their order, base on)
 /// (longshot) a range a program may write in the mirror that is not bound as written (not copied back): memory_rb_refresh
 void memory_note_gpu_write(uint64_t gpu, uint64_t size);
+/// (longshot, RX_VK_UB_SNAPSHOT's guard, vk_memory.cpp) the GPU writes this thread's recordings have noted that guest memory
+/// may not have yet: the submission being recorded's, in all its parts, and earlier submissions' until the GPU has done them.
+/// Begun at a submission's start (not at a part's); asked by uniform_range for a uniform range (0 none, 1 in the submission
+/// being recorded, 2 in an earlier one the GPU has not done)
+void memory_gpu_writes_begin();
+int memory_gpu_written(uint64_t guest, uint64_t size);
+bool memory_gpu_writes_any();
+/// (vk_draw.cpp) whether uniform buffers are copied into the stream as submitted (RX_VK_UB_SNAPSHOT; every Intel GPU)
+bool uniform_snapshot_on();
 /// (vk_replay.cpp) The GPU's progress on the recordings' timeline, and a wait for it to reach v
 uint64_t vk_timeline_completed();
 /// A future submission completion covering images retired during replay; zero: no safe value.

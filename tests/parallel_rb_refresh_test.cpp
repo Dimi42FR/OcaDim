@@ -65,6 +65,7 @@ std::atomic<bool> par_active{false};
 void memory_table_begin() {}
 bool memory_table_flush() { return false; }
 void memory_protect_gpu(uint64_t, uint64_t) {}
+void memory_gpu_writes_note(uint64_t, uint64_t) {}   // (the uniform snapshot's guard: tests/test_ub_snapshot_gpu_writes.py)
 bool slow_desc_timing() { return false; }
 uint64_t texture_segment();
 void memory_rb_recording_begun();
