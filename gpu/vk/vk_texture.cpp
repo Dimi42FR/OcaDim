@@ -299,7 +299,7 @@ struct Pooled {
 std::mutex pool_mu;
 std::unordered_map<uint64_t, std::vector<Pooled>> target_pool;   // by pool_key_of
 uint64_t pool_bytes, pool_n, st_pool_reused, st_pool_made, st_pool_destroyed;
-bool pool_pressed;   // (VRAM near what the driver allows: texture_frame's budget)
+uint8_t pool_pressure = 0;   // (OcaDim, #1035: 0 normal, 1 over 90% of what the driver allows (the pool halved), 2 over 97% (given back))
 bool compact_on() {   // (longshot: the textures in a pool of their own, compacted: compact_step. On unless RX_VK_COMPACT=0)
     static const bool v = vram_compact::enabled(getenv("RX_VK_COMPACT"));
     return v;
@@ -421,8 +421,9 @@ void pool_put(Dead& d) {
 /// presents: destroyed, at most 16 a present (64 while VRAM is short). Returns how many
 size_t pool_trim() {
     std::lock_guard lk(pool_mu);
-    const uint64_t cap = pool_pressed ? 0 : pool_cap();
-    const size_t most = pool_pressed ? 64 : 16;
+    const uint64_t full_cap = pool_cap();
+    const uint64_t cap = pool_pressure >= 2 ? 0 : pool_pressure == 1 ? full_cap / 2 : full_cap;
+    const size_t most = pool_pressure > 0 ? 64 : 16;
     size_t n = 0;
     for (auto it = target_pool.begin(); it != target_pool.end() && n < most;) {
         auto& v = it->second;
@@ -4619,7 +4620,7 @@ void texture_frame(uint64_t completed) {
             // (not while VRAM is near what the driver allows, pool_pressed as the frame before left it: on a card of 6.5 GB or
             // less the arenas are VRAM behind the BAR, and the 192 MB more would come off what the load's textures need)
             static const int64_t burst_s = getenv("RX_VK_STAGING_BURST_S") ? atoll(getenv("RX_VK_STAGING_BURST_S")) : 2;
-            const bool recent = burst_s && !pool_pressed && std::chrono::steady_clock::now() - it->used_at < std::chrono::seconds(burst_s);
+            const bool recent = burst_s && pool_pressure == 0 && std::chrono::steady_clock::now() - it->used_at < std::chrono::seconds(burst_s);
             const uint64_t allowed = recent ? std::max<uint64_t>(keep, 256ull << 20) : keep;
             if (idle && (it->size > kArena || kept + it->size > allowed || stale || linux_entered_pressure)) {
                 destroy_buffer(it->buffer, it->allocation);
@@ -4822,7 +4823,10 @@ void texture_frame(uint64_t completed) {
         kept_only = vram_compact::kept_only(pool_blocks, pool_kept);
     }
     const uint64_t pressure = by_blocks ? used : used - std::min(used, reclaim);
-    pool_pressed = known && pressure > allowed / 10 * 9;   // (the target pool given back meanwhile)
+    pool_pressure = !known ? 0
+                    : pressure > allowed / 100 * 97 ? 2
+                    : pressure > allowed / 10 * 9 ? 1
+                    : 0;   // (OcaDim, #1035: the target pool halved at >90%, given back at >97%)
     compact.pressed = known && vram_compact::pressed(used, allowed);   // (longshot, RX_VK_COMPACT: by the driver's own count)
     const uint64_t size_budget = budget;   // (the budget as a size, before the rules that take an excess off it: rule_target)
     if (known && pressure > allowed / 10 * 9) {
@@ -4952,7 +4956,7 @@ void texture_frame(uint64_t completed) {
                     if (igpu) {
                         budget = std::min(budget, held);
                         rule_budget = std::min(rule_budget, held);
-                        pool_pressed = true;
+                        pool_pressure = 2;
                         compact.pressed = true;
                         if (compact.next_check > frame_no + vram_compact::rest(true))
                             compact.next_check = frame_no + vram_compact::rest(true);
@@ -4997,7 +5001,7 @@ void texture_frame(uint64_t completed) {
             logf("vk: render target images: %llu reused from the pool, %llu made new, %llu destroyed from it; it holds %llu "
                  "(%llu MB)%s", (unsigned long long)st_pool_reused, (unsigned long long)st_pool_made,
                  (unsigned long long)st_pool_destroyed, (unsigned long long)pool_n, (unsigned long long)(pool_bytes >> 20),
-                 pool_cap() ? (pool_pressed ? ", VRAM short: given back" : "") : " (RX_VK_TARGET_POOL_MB=0)");
+                 pool_cap() ? (pool_pressure >= 2 ? ", VRAM critical: given back" : pool_pressure == 1 ? ", VRAM short: halved" : "") : " (RX_VK_TARGET_POOL_MB=0)");
         }
         logf("vk: VRAM: %llu MB used of %llu MB allowed (%llu MB of it free in the blocks); textures %llu MB (budget %llu "
              "MB), %zu textures%s", (unsigned long long)(used >> 20), (unsigned long long)(allowed >> 20),
