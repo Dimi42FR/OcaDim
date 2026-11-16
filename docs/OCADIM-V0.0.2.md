@@ -130,3 +130,16 @@ RX_VK_STATE_KEYS=1 (avec RX_VK_DRAW_RUNS=1, qui calcule les hachages) compte les
 Mesure refaite proprement (la premiere avait plante : mon unordered_set n etait pas protege contre les threads de replay ; mutex ajoute). Scene lourde confirmee (2 797 draws max, 42,9 fps) : **1,21-1,28 draw par cle**. Un cache d etat eviterait donc au mieux ~20 % de la preparation par draw, soit ~0,5 ms (~2 %) : faible, garde pour plus tard.
 
 Conclusion : ce stream est **unique par draw**, ce qui explique que batching, fusion de runs et cache d etat echouent tous. Le seul levier restant qui attaque la frame normale ET le chargement est **l enregistrement parallele / async** (le projet a le rendu threade ; voir docs/MINAGE-NX2NAVI.txt, PR #543 et son gate d ordre des evenements).
+
+## Threaded rendering (async), mesure : pas de gain, et un cout deplace
+
+Session en ville, async **On** contre la session d hier (Off), meme machine :
+
+| Session | pire frame | submit | draw | programs | nouveaux pipelines |
+|---|---|---|---|---|---|
+| Off | 6512 ms | 908 | 1469 | 54 | 60 |
+| On | **9804 ms** | **9415** | 2995 | **1581** | 265 |
+
+Aucun flash (bonne nouvelle pour la stabilite du chemin), mais **le cout n est pas enleve : il est deplace dans submit** (9,4 s d attente), et la frame de chargement est pire. Les frames suivantes sont plus legeres (draw 20-200 ms).
+
+Ce que la mesure designe : **programs 1581 ms** et 265 nouveaux pipelines sur cette frame -> c est la **traduction / compilation de programmes** au chargement, pas l enregistrement. Piste suivante : pre-traduire a partir du pipeline tour / des etats prepares, pas l async.
