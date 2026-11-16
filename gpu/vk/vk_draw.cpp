@@ -50,6 +50,10 @@
 #include "upscaler_rows.h"
 #include "linux_pressure.h"
 #include "pcache_stamp.h"
+#include "pcache_load.h"     // (longshot, issue 388: whether the pipeline cache file is read)
+#ifndef _WIN32
+#include <unistd.h>          // (sysconf: the RAM, pcache_load_off)
+#endif
 #include "vk_reactive.h"   // (the upscalers' reactive mask: the scene copied before its transparent draws)
 #include "vk_dump.h"
 #include "vk_gprof.h"
@@ -866,9 +870,14 @@ size_t play_file_write(VkPipelineCache cache, const std::string& path, int wait_
     }
     return data.publish(n) ? n : 0;
 }
+extern bool pcache_no_save;   // (pcache_init, below: the file not read, RX_VK_PCACHE_LOAD or pcache_load.h)
 /// (pcache_init, before any other thread has pcache) the play files the last starts wrote, merged into pcache; at kPlayFilesKept
 /// of them pcache is written into its file and they are removed. A file of another driver is of no use: removed. The number merged
 size_t play_files_merge() {
+    // (longshot, issue 388) The file not read: nothing merged into the cache, which started empty, and above all that cache never
+    // written over the file at kPlayFilesKept (a session without it wrote its 38 MB over a 1.2 GB file a start loading programs
+    // before the title then lacked). The play files stay for a start that reads the file
+    if (pcache_no_save) return 0;
     std::vector<std::string> merged;
     size_t merged_kb = 0;
     std::error_code ec;
@@ -918,7 +927,11 @@ PlayCache* play_cache_make() {
 /// (the start-up done, vk_main's start) play begins: what is made from now on goes into the play generations
 void play_cache_begin() {
     static const bool off = getenv("RX_VK_PLAY_CACHE") && atoi(getenv("RX_VK_PLAY_CACHE")) == 0;
-    if (pcache_no_save || off || !pcache || !dev.vk13.pipelineCreationCacheControl || play_cache.load()) return;
+    // (#415) RX_VK_PCACHE_LOAD=0 is the A/B of the cache with nothing kept: no play generations either. (issue 388) The file
+    // left unread by the automatic rule (pcache_load.h) keeps them: what play makes goes into them and play_cache_save lets
+    // each go at a save, not written
+    static const bool switched_off = [] { const char* e = getenv("RX_VK_PCACHE_LOAD"); return e && *e && env_value_off(e); }();
+    if ((pcache_no_save && switched_off) || off || !pcache || !dev.vk13.pipelineCreationCacheControl || play_cache.load()) return;
     if (PlayCache* g = play_cache_make()) {
         play_cache.store(g);
         logf("vk: pipeline cache: what play makes goes into play files (RX_VK_PLAY_CACHE=0: into the one cache)");
@@ -952,6 +965,17 @@ void play_cache_save(int wait_ms = -1, bool queue = true) {
             static std::atomic<int> told{0};
             if (told++ < 4) logf("vk: pipeline cache: a play file not written yet: a pipeline was still being built in it");
             ++it;
+            continue;
+        }
+        if (pcache_no_save) {   // (longshot, issue 388: the file not read, nor saved: what play made is in the driver's own cache)
+            static std::atomic<int> told{0};
+            if (const int n = ++told; n <= 4 || n % 16 == 0)
+                logf("vk: pipeline cache: play's generation %d let go, not written (the file not read): %lld pipelines, %lld from the "
+                     "driver's cache, %lld compiled", n, (long long)old->built.load(), (long long)old->from_driver.load(),
+                     (long long)old->compiled.load());
+            vkDestroyPipelineCache(dev.device, old->cache, nullptr);
+            old->cache = VK_NULL_HANDLE;
+            it = unsaved.erase(it);
             continue;
         }
         if (const size_t wrote = play_file_write(old->cache, play_path(play_seq + 1), wait_ms, queue)) {
@@ -1039,20 +1063,62 @@ bool play_cache_in_use() { return play_cache.load() != nullptr; }
 // ---- (end of the play caches) ----
 
 // (RX_VK_PCACHE_LOAD=0, an A/B of what the file costs in memory: its 2.5 GB read whole and held by the driver. The cache
-// starts empty and is not saved; the driver's own shader cache is all there is)
+// starts empty and is not saved; the driver's own shader cache is all there is.) (longshot, issue 388) Unset, the file is
+// not read either on a Linux PC with NVIDIA's own driver, 20 GB of RAM or less and programs loaded at their create calls,
+// where NVIDIA's own shader cache is on and not nearly empty: the driver's copy of the file was most of a gigabyte of a 16 GB
+// PC's swap (pcache_load.h). RX_VK_PCACHE_LOAD=1 reads it there too. One log line gives the answer and why, on every PC
 bool pcache_load_off() {
-    static const bool off = [] { const char* e = getenv("RX_VK_PCACHE_LOAD"); return e && env_value_off(e); }();   // (longshot_env.h: 0/off/false/no)
+    static const bool off = [] {
+        const char* e = getenv("RX_VK_PCACHE_LOAD");
+        const int sw = e && *e ? (env_value_off(e) ? 0 : 1) : -1;   // (longshot_env.h: 0/off/false/no)
+        const bool preparing = env_on("LONGSHOT_PREPARE_ONLY"), at_create = programs_load_at_create();
+#ifdef _WIN32
+        const bool linux_nvidia = false;
+        const uint32_t ram_mb = 0;
+#else
+        const bool linux_nvidia = dev.driver_id == VK_DRIVER_ID_NVIDIA_PROPRIETARY;   // (not NVK: Mesa's, with Mesa's cache)
+        const long pages = sysconf(_SC_PHYS_PAGES), page = sysconf(_SC_PAGE_SIZE);
+        const uint32_t ram_mb = pages > 0 && page > 0 ? (uint32_t)(((uint64_t)pages * (uint64_t)page) >> 20) : 0;
+#endif
+        // (NVIDIA's folder walked only where everything else says not to read the file; its size alone counts, not Mesa's)
+        pcache_load::Measured cache{pcache_load::Cache::kUnknown, 0};
+        std::string dir;
+        const bool looked = pcache_load::needs_cache(sw, preparing, at_create, linux_nvidia, ram_mb);
+        if (looked) {
+            const char* c = getenv("__GL_SHADER_DISK_CACHE");
+            cache = pcache_load::nvidia_cache(c && *c && env_value_off(c), getenv("__GL_SHADER_DISK_CACHE_PATH"),
+                                              getenv("XDG_CACHE_HOME"), getenv("HOME"), &dir);
+        }
+        const pcache_load::Choice choice =
+            pcache_load::choose(sw, preparing, at_create, linux_nvidia, ram_mb, cache.cache, cache.bytes >> 20);
+        std::string seen;   // (what was looked at: the switch, or the RAM and NVIDIA's cache where they were)
+        if (sw >= 0) seen = std::string("RX_VK_PCACHE_LOAD=") + e;
+        else if (choice.why == pcache_load::Why::kRam || looked)
+            seen = std::to_string(ram_mb) + " MB of RAM";
+        if (looked) {
+            seen += ", NVIDIA's own shader cache ";
+            seen += cache.cache == pcache_load::Cache::kOff       ? std::string("off (__GL_SHADER_DISK_CACHE, or no folder for it)")
+                    : cache.cache == pcache_load::Cache::kUnknown ? "not measured: " + dir + " could not be walked through"
+                                                                  : std::to_string(cache.bytes >> 20) + " MB in " + dir;
+        }
+        if (!choice.load && sw < 0) seen += "; RX_VK_PCACHE_LOAD=1 reads it";
+        logf("vk: pipeline cache file %s: %s%s%s%s", choice.load ? "read" : "not read", pcache_load::why_text(choice.why),
+             seen.empty() ? "" : " (", seen.c_str(), seen.empty() ? "" : ")");
+        return !choice.load;
+    }();
     return off;
 }
 /// (longshot) The pipeline cache's files go when they were made for another translator than this one (program_cache_stamp,
 /// which the program cache and the prepare record start over by): their pipelines can no longer be hit, and the file only grew,
 /// read whole at every start and held by the driver (pcache_stamp.h). Once a run, before the first of pcache_init and
 /// prepare_run: whether files went, so that prepare_run makes the stage libraries the warm pass kept in them again
-/// (prepared_for.warmed), whatever its record says. RX_VK_PCACHE_STAMP=0: kept whatever made them, as before
+/// (prepared_for.warmed), whatever its record says. RX_VK_PCACHE_STAMP=0: kept whatever made them, as before. (longshot, issue
+/// 388) With the file not read (pcache_load_off) they go too: a start that reads it would drop them, and kept they were 1.2 GB
+/// of disk after every update that changed the translator
 bool pcache_drop_stale() {
     static const bool dropped = [] {
         static const bool by_stamp = [] { const char* e = getenv("RX_VK_PCACHE_STAMP"); return !e || !env_value_off(e); }();
-        if (pcache_load_off() || !by_stamp) return false;
+        if (!by_stamp) return false;
         const std::string dir = cache_path("");   // (where pcache_init keeps them: the game folder's cache/, vk_paths.h)
         const pcache_stamp::Dropped gone = pcache_stamp::check(dir, program_cache_stamp());
         if (gone.files)
@@ -11031,10 +11097,13 @@ void pipeline_cache_between_builds() {
 void pipeline_cache_save(bool force) {
     using Outcome = precompile_save::Outcome;
     pcache_save_outcome = {};
+    // (longshot, issue 388) The file not read (pcache_no_save): the cache's own part is skipped, never written, but play's
+    // generations are still taken away and freed at each save (play_cache_save writes none then), as they are written and freed
+    // where the file is read. Returning here, what play made would pile up in one generation, in memory, until the close
     const bool between = pcache_save_between;
     if (!pcache) pcache_save_outcome.what = Outcome::kNoCache;
     else if (pcache_no_save) pcache_save_outcome.what = Outcome::kOff;
-    if (!pcache || pcache_no_save || (!force && !between && pcache_built_since_save < 32)) return;
+    if (!pcache || (!force && !between && pcache_built_since_save < 32)) return;
     const int64_t built = pcache_built_since_save.exchange(0);
     // (on a thread of its own unless forced, at exit: ~100 MB fetched and written took the replay thread 100+ ms at
     // each scene change; the cache is internally synchronized, pipelines go on being built meanwhile)
@@ -11064,7 +11133,7 @@ void pipeline_cache_save(bool force) {
             had = lock.held();
             return had && vkGetPipelineCacheData(dev.device, pcache, n, data) == VK_SUCCESS;
         };
-        try {
+        if (!pcache_no_save) try {
             size_t n = 0;
             // (the size last read or written: nothing new, not fetched nor written again; see pcache_saved_size)
             // (in play only once it has grown by a good deal: what play makes is in the play files, and the little pcache still
