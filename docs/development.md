@@ -899,7 +899,7 @@ your own it costs nothing. `scripts/dev_build.py` builds through it.
 ```
 python -I scripts/dev_build.py base                 # the base where this checkout left main: one per commit, shared
 python -I scripts/dev_build.py pack                 # this checkout as a pack over it
-python -I scripts/dev_build.py rt                   # build-linux/rt-<checkout>/, a game folder to run
+python -I scripts/dev_build.py rt                   # build-linux/rt-<checkout>/ (build-windows\ on Windows), a game folder to run
 python -I scripts/dev_build.py rt --empty           # build-linux/rt-base/: the base alone, the other half of an A/B
 python -I scripts/job_queue.py run shots --mode shared -- <your run in that folder>
 python -I scripts/job_queue.py run fps --mode timing -- <your measurement>
@@ -932,6 +932,16 @@ The rules worth knowing (the script's notes have all of them):
   installed once under `~/.cache/longshot-dev/builder/`), the object and translation stores `dev_packs.py` uses, and one base
   per commit of main (`~/.cache/longshot-dev/bases/`), so the second checkout to build anything compiles only what differs.
   A checkout's own build files (`build`, `vk`, runtimes) stay in its `build-linux/`, and go when the checkout does.
+- **On Windows too.** The same commands, with Windows' folders: `LONGSHOT_DEV_HOME` is `%LOCALAPPDATA%\Longshot\dev`, the
+  stores are `dev_packs.py`'s (`%LOCALAPPDATA%\Longshot\objects` and `lifts`), the settings file is
+  `%APPDATA%\Longshot\dev_build.json` (beside `job_queue.json`) and a checkout's own files go in its `build-windows\`. The
+  build tools are tools.lock's `windows-x64` lines, installed by `scripts/tools.py install` and set as the Windows builder
+  has them (its `llvm-mingw` as `LONGSHOT_MINGW`, `EMSDK`, `RX_CPM`); its Python, which has the build's packages, runs the
+  build, and the tree a build reads gets the builder's prebuilt `SDL2.dll` and `SDL3.dll` in `third_party\sdl2` (git
+  ignores them). `env` prints PowerShell's `$env:` lines; `vk` builds `longshot_vk.dll` and checks it exports `mkwvk_init`
+  (an undefined symbol already fails the link there). The game's files are found in `~\Games` and `~\Games\Longshot` (the
+  launcher's builds), else name them (`LONGSHOT_DEV_ROMFS`, `LONGSHOT_DEV_EXEFS`). A drive with little room: point
+  `LONGSHOT_DEV_HOME` and the two stores at one folder on a bigger drive, so the objects stay hard links.
 
 ### Build times
 
