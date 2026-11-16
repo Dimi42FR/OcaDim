@@ -3225,11 +3225,15 @@ bool import_in_background(uint64_t guest, uint64_t size) {
 }
 } // namespace
 bool pools_mirrored() { return mirror_on(); }
+uint64_t test_vram_bytes(uint64_t heap) {
+    static const uint64_t cap = getenv("RX_VK_TEST_VRAM_MB") ? (uint64_t)std::max(0, atoi(getenv("RX_VK_TEST_VRAM_MB"))) << 20 : 0;
+    return cap && heap > cap ? cap : heap;
+}
 uint64_t device_vram_bytes() {
     uint64_t vram = 0;
     for (uint32_t h = 0; h < dev.memory.memoryHeapCount; h++)
         if (dev.memory.memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) vram = std::max(vram, (uint64_t)dev.memory.memoryHeaps[h].size);
-    return vram;
+    return test_vram_bytes(vram);
 }
 namespace {
 uint64_t mirror_budget() {
