@@ -66,8 +66,10 @@ struct Options {
                               // gpu/vk/vk_texture.cpp texture_detail_dims; read as each texture is made)
     int anisotropy = 4;   // (longshot) Anisotropic filtering: 0 the game's own (1x or 2x), 1 2x, 2 4x, 3 8x, 4 16x (the
                           // device's limit at most; gpu/vk/vk_draw.cpp aniso_override, RX_VK_ANISO over it)
-    int shadow_res = 0;   // (longshot) Shadow resolution, the sun's cascades: 0 Auto (the size for the card's memory,
+    int shadow_res = 1;   // (longshot) Shadow resolution, the sun's cascades: 0 Auto (the size for the card's memory,
                           // menu_shadow_res), 1 the game's (1600), 2 2200, 3 3072 (host/oot_shadow.c: HOS_OPT_SHADOW_RES, 56).
+                          // (OcaDim: 1 by default, the game's own size, as 0.0.1 drew them; Auto picked 3072 on a 16 GB card
+                          // and cost the town 6-7 fps)
                           // The Quality presets set it back to Auto (apply_preset)
     int realtime = 1;     // game time follows the clock (host/nn_vi.c); 0: per frame (slower frames, slower game)
     int handheld = 0;     // the game's handheld profile: ~4 fps, softer; read once, at the start (host/nn_applet.c)

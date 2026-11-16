@@ -6423,7 +6423,9 @@ void replay_thread_main() {
         if (const uint64_t m = host->reserved_cpus()) {
             uint64_t use = m;
 #ifdef _WIN32
-            static const bool strict = env_on("RX_VK_RT_STRICT_PIN");
+            const char* pin_env = getenv("RX_VK_RT_STRICT_PIN");
+            static const bool strict = !pin_env || pin_env[0] != '0';   // (OcaDim: strict by default, as before the merge;
+                                                                        // RX_VK_RT_STRICT_PIN=0 lets it move again)
             if (!strict) {
                 DWORD_PTR proc = 0, sys = 0;
                 if (!GetProcessAffinityMask(GetCurrentProcess(), &proc, &sys)) proc = 0;
