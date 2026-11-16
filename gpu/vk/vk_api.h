@@ -77,6 +77,11 @@ enum { HOS_OPT_TRANSITION_AUTOSAVE = 59 };
    as the right stick) read it by its number, as they read 8. The existing option callback: no new member. 59 is the
    transition autosave's and 60 stays the item wheel's.) */
 enum { HOS_OPT_MOUSE_INVERT_X = 61 };
+/* (HOS_OPT_HUD_LAYOUT, 71: Graphics' HUD layout, host/hos_wide_ui.c reads it at each present by its number: on a screen
+   that is not 16:9, 0 the HUD's corners at the screen's edges, 1 the HUD in the middle 16:9 as before #95 (on a narrower
+   screen fitted to its width, as the menus). HOS_WIDE_UI, when set, stands over it. The existing option callback: no new
+   member. 62 to 70, 80, 88 and 90 are taken by open pull requests.) */
+enum { HOS_OPT_HUD_LAYOUT = 71 };
 
 /* (longshot) the controls' names (host/nn_hid.c, host/pad_sdl.c, the pad_ and key_ lines of longshot_options.ini):
    the Switch's buttons in nn::hid's bit order, and a gamepad's inputs by position (the bottom face button first:

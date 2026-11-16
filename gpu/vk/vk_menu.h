@@ -56,6 +56,7 @@ struct Options {
                           // options_version 6: host/hos_wide_size.h hos_aspect_on). In the menu, from menu_init on: a place in
                           // vk_menu.cpp's output_shapes, the shapes of the sizes offered, the monitor's own marked; another shape than
                           // 16:9 and the monitor's is output_res's own (outputs_sync, save)
+    int hud_layout = 0;   // the HUD on a screen not 16:9: 0 its corners at the screen's edges, 1 in the middle 16:9 (HOS_OPT_HUD_LAYOUT)
     int wide_menus = 1;   // ultrawide: the pause, item and map menus 0 at full width (stretched), 1 in the middle 16:9 with the sides
                           // blurred, 2 with black bars (nx2/oot_wide.py, vk_framegen.cpp)
     int show_fps = 0;     // (longshot) the FPS counter: 0 Off, 1 FPS, 2 Frame time, 3 Graph, 4 Breakdown (fps_stats.h; saved as fps_counter=, an old On is 1)

@@ -6996,6 +6996,7 @@ void fill_replay_table(MkwVkRenderer& t) {
         if (id == HOS_OPT_FPS_CAP) return opts.fps_cap;
         if (id == HOS_OPT_HOLD_TOGGLE) return opts.hold_toggle;
         if (id == HOS_OPT_MOUSE_INVERT_X) return opts.mouse_invert_x;
+        if (id == HOS_OPT_HUD_LAYOUT) return opts.hud_layout;
         if (id == HOS_OPT_SKIP_TITLE) return opts.skip_title != 0;
         if (id == HOS_OPT_RENDER_THREAD) return async_on();   // (host/nvn_native.c: the present poll answered at once)
         return id == 0 ? opts.realtime : id == 1 ? menu_is_open() : id == 2 ? resolution_auto() && !temporal_full_scale() : id == 3 ? (temporal_full_scale() ? 10000 : resolution_scale()) : id == 4 ? opts.pad_background : id == 5 ? opts.text_speed : id == 6 ? opts.mouse_native :

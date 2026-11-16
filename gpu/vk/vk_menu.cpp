@@ -760,6 +760,7 @@ bool row_fixed(const int* value) {
            (value == &opts.dlss_model && ur::model_fixed(upscaler(), dlss_preset_env() != nullptr)) ||
            (value == &opts.framegen_by && framegen_by_fixed()) ||   // (its line says why)
            (value == &opts.astc_rgba8 && getenv("RX_VK_ASTC_RGBA8")) ||   // (set for the run: vk_texture.cpp reads it first)
+           (value == &opts.hud_layout && getenv("HOS_WIDE_UI") && *getenv("HOS_WIDE_UI")) ||   // (host/hos_wide_ui.c's, first)
            (value == &opts.intel_compiles && getenv("RX_VK_NO_INTEL_SERIAL"));
 }
 const char* tx_output_res(int v) {
@@ -1304,6 +1305,16 @@ const char* tx_wide_menus(int v) {
 MENU_HINTS(hn_wide_menus, 0, "The menus stretched over the whole screen, as before.",
            "The menus in the middle 16:9; beside them, what the game draws there, out of focus.",
            "The menus in the middle 16:9; black beside them.")
+/// (the HUD layout row, HOS_OPT_HUD_LAYOUT: host/hos_wide_ui.c places the HUD by it at each present, #1133)
+const char* tx_hud_layout(int v) { return v ? "Middle 16:9" : "Screen's edges"; }
+const char* hn_hud_layout(int v, int variant) {
+    static const char* const t[] = {"The hearts, the buttons and the minimap at the screen's own edges and corners.",
+                                    "The HUD where it is at 16:9, in the middle (fitted to the width on a narrower screen)."};
+    static const char* const held = "Set by HOS_WIDE_UI (longshot_env.txt or the environment): remove that line to choose here.";
+    const char* env = getenv("HOS_WIDE_UI");
+    if (variant < 0) return env && *env ? held : t[v ? 1 : 0];
+    return variant == 0 ? t[v ? 1 : 0] : variant == 1 && env && *env ? held : nullptr;
+}
 /// (the ASTC as RGBA8 row's line while RX_VK_ASTC_RGBA8 holds it: the old readme's way, still in some longshot_env.txt files)
 const char* hn_astc_rgba8(int, int variant) {
     return variant <= 0 && getenv("RX_VK_ASTC_RGBA8") ? "Set by RX_VK_ASTC_RGBA8 (longshot_env.txt or the environment): remove that line to choose here."
@@ -1498,6 +1509,9 @@ Row rows[] = {
     {TAB_GRAPHICS, "Ultrawide menus", &opts.wide_menus, 0, 2, 1, tx_wide_menus,
      "With the Aspect ratio at the monitor's shape: the pause, item and map menus, and what shows beside them. Loading "
      "screens and pre-rendered movies, which draw no world either, get the same sides. Changes at once.", hn_wide_menus, false, true},
+    {TAB_GRAPHICS, "HUD layout", &opts.hud_layout, 0, 1, 1, tx_hud_layout,
+     "On a screen that is not 16:9: where the hearts, buttons and minimap sit. Ultrawide menus places the menus; this, the "
+     "HUD in play. At 16:9 both are the same. Changes at once.", hn_hud_layout, false, true},
     {TAB_GRAPHICS, "HDR", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, false, true, -1, true},
     {TAB_GRAPHICS, "HDR", &opts.hdr, 0, 2, 1, tx_hdr,
      "HDR10 out on an HDR display (Windows: Use HDR on in the display settings). Expanded: the game's SDR picture, its white at "

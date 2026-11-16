@@ -54,7 +54,7 @@ what does not yet. Open problems are collected in tracking issues, linked below.
 | Stutter when entering new areas | ⚠️ Still happens the first time you visit a place. The next visits are smooth |
 | Performance | ⚠️ Depends on the PC: some reach a steady 60 fps, others stay below it, more so in Hyrule Field |
 | Hyrule Field, Castle Town, Kakariko and the dungeons | ⚠️ Players got there, with open bugs: lighting and shadows ([#1004](https://github.com/NotRexed/Hookshot/issues/1004)), crashes and freezes ([#2507](https://github.com/NotRexed/Hookshot/issues/2507)) |
-| Ultrawide and 4:3 | ✅ Works. The Aspect ratio row's default, Monitor's shape, widens the 3D to the screen and keeps the HUD and movies in the middle 16:9 ([#2119](https://github.com/NotRexed/Hookshot/pull/2119)) |
+| Ultrawide and 4:3 | ✅ Works. The Aspect ratio row's default, Monitor's shape, widens the 3D to the screen ([#2119](https://github.com/NotRexed/Hookshot/pull/2119)); the HUD keeps its 16:9 size with its corners at the screen's edges, or in the middle 16:9 with the HUD layout row; movies stay in the middle 16:9 |
 | NVIDIA cards | ✅ Works. The most tested |
 | AMD cards | ⚠️ Tested on several Radeon cards. Compatibility and performance vary by card, driver and operating system. Longshot automatically uses rendering workarounds on affected Windows cards and AMD GPUs on Linux (see [technical details](docs/development.md#switches-for-testing-and-debugging)). Crashes and severe slowdowns remain reported on some configurations ([RX 6600](https://git.magicbean.dev/MagicBeanDev/Longshot/issues/933), [Radeon 860M](https://git.magicbean.dev/MagicBeanDev/Longshot/issues/1040)). |
 | Intel cards | ❓ Few reports, many of them black screens or crashes ([#999](https://github.com/NotRexed/Hookshot/issues/999)). On Windows, Intel's shader compiler is entered by one thread, and a shader it faults on is left out instead of closing the game, on later starts too ([#252](https://git.magicbean.dev/MagicBeanDev/Longshot/pulls/252)). Made for an Intel UHD laptop with 4 threads and 16 GB that crashed in `igvk64.dll` (see [Intel laptops](#intel-laptops)): not yet tested on an Intel GPU |
@@ -448,6 +448,7 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | CRT filter | Off, Lottes aperture grille, Lottes consumer TV, Hyllian Fast, zfast CRT (changes at once; Native HDR bypasses it) | Off |
 | | CRT lines | 240, 480, 720 virtual lines (shown with a CRT filter on; changes at once; capped at half the destination height) | 240 |
 | | Ultrawide menus | Full width; Centred, blurred sides; Centred, black bars (with the Aspect ratio at the monitor's shape) | Centred, blurred sides |
+| | HUD layout | Screen's edges; Middle 16:9 (on a screen that is not 16:9; `HOS_WIDE_UI`, when set, decides) | Screen's edges |
 | | HDR | Off, Expanded, Native (the game's) | Off |
 | | HDR paper white | 80 to 400 nits, in steps of 10 (while HDR is on) | 200 nits |
 | | HDR peak brightness | 400 to 4000 nits, in steps of 100 (while HDR is on) | 1000 nits |
@@ -593,7 +594,8 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
   follow it: moved to another monitor, or the desktop's resolution changed while playing, the menu adds that screen's
   sizes. On Linux the screen's size comes from SDL (the primary display). A portrait screen has no shape the game can
   draw, so the row shows Monitor's shape as a value of its own there. Docked only. A shape other than 16:9 widens the cameras (21:9, 32:9) or narrows the
-  picture (16:10, 4:3, 5:4) and keeps the HUD and movies in the middle 16:9. At 16:9 on a 5120x1440 (32:9) monitor, the
+  picture (16:10, 4:3, 5:4); the HUD keeps its 16:9 size with its corners at the screen's edges (**HUD layout**: or in
+  the middle 16:9, as before), and movies stay in the middle 16:9. At 16:9 on a 5120x1440 (32:9) monitor, the
   game's 16:9 picture is stretched across the 32:9 output, sharp but wide. Options saved by an older version at 16:9,
   the default then, move to Monitor's shape on a screen narrower than 16:9 (16:10 such as the Steam Deck's, or 4:3),
   where 16:9 only adds bars above and below; an ultrawide keeps its 16:9. The output's rows below show the sizes for the
