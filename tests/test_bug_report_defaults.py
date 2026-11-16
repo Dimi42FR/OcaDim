@@ -99,6 +99,8 @@ bool screen_size(uint32_t* w, uint32_t* h) {
 bool host_screen_size(uint32_t* w, uint32_t* h) { return screen_size(w, h); }
 std::vector<display_modes::Size> screen_modes() { return {}; }
 int upscaler() { return opts.dlss; } // authored available engine; no backend/GPU call
+uint64_t vram; // the card's video memory, as device_vram_bytes gives it (0: not known)
+uint64_t device_vram_bytes() { return vram; }
 std::vector<std::string> gpu_device_names{"Authored GPU"};
 int mic_calls;
 struct Host { const char* (*mic_name)(int); };
@@ -185,6 +187,8 @@ int main(int argc, char** argv) {
         opts.gpu_device = 1; opts.mic = 2; opts.fov = 110;
     } else if (which == "model-env" || which == "model-fixed") {
         opts.dlss_model = 1;
+    } else if (which == "model-small-card") {
+        vram = 6ull << 30; // (the K row draws CNN preset E under 7 GB: upscaler_rows.h cnn_for_vram)
     } else return 2;
     const Options before = opts;
     std::string pc;
@@ -226,6 +230,11 @@ int main(int argc, char** argv) {
         CHECK(changed.find("DLSS model: ") == std::string::npos && pc.find("DLSS model: Preset M") != std::string::npos,
               "environment-dependent model default invented");
     }
+    if (which == "model-small-card") {
+        CHECK(changed.find("DLSS model: ") == std::string::npos &&
+              pc.find("DLSS model: CNN (E) (default depends on this PC") != std::string::npos,
+              "a card under 7 GB: the report does not name the CNN preset E that draws");
+    }
     if (which == "model-fixed") {
         CHECK(changed.find("DLSS model: Transformer 2 (M) (default: Transformer (K))") != std::string::npos,
               "fixed model default not retained without override");
@@ -245,7 +254,7 @@ def main():
     args = parser.parse_args()
     cases = ("aspect-default", "reordered-shapes", "aspect-changed", "aspect-changed-wide", "output-context", "render-context",
              "upscaler-context", "auto-profile", "custom-never-auto", "custom-after-auto", "framegen-by", "framegen-by-no-dlss",
-             "lang-saved", "lang-changed", "stable-sentinels", "model-env", "model-fixed")
+             "lang-saved", "lang-changed", "stable-sentinels", "model-env", "model-fixed", "model-small-card")
     failed = []
     with tempfile.TemporaryDirectory(prefix="report-defaults-") as tmp:
         cpp = Path(tmp) / "defaults.cpp"
