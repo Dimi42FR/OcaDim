@@ -44,6 +44,13 @@ environnement). Ce qui est spécifique à cette machine :
 4. Mesurer **avant et après sur la même fenêtre** (120 s, même scène) : mémoire privée et working set au pic, et les fps
    du log. Sinon on compare des scènes différentes et « les mêmes perf » ne veut rien dire.
 
+**État de `F:\test` après l'update du 16/11 16:12** (DLL 17 031 168) : l'installation est repassée en **`create`** —
+la préparation a supprimé `longshot_load_start.txt` (c'est sa règle : un préparé n'a plus besoin du mode `start`), donc
+plus de préparation de 5 min au démarrage et les programmes se chargent à leur création, cache chaud. Vérifié : la
+préparation a traduit 11 041 programmes sans un « not translated » (le seed mappé se lit), et le log porte les nouvelles
+lignes (`frame generation asked: on (2x), by AMD FSR FG`, `Threaded rendering: Auto: on`).
+
+
 
 
 ## 1. Les trois dossiers, et à quoi ils servent
