@@ -1858,6 +1858,11 @@ Row rows[] = {
     {TAB_PERF, "Pipelines", &perf_value, 0, 0, 1, perf_pipelines,
      "Shaders built while playing since the counter's window began, and draws left out because their pipeline was not ready "
      "yet. Read-only."},
+    // (OcaDim) the budget governor: the Breakdown, read into one sentence. It applies nothing by itself (the levers that
+    // matter here need a restart), and it costs one press.
+    {TAB_PERF, "Budget governor", nullptr, 0, 0, 0, nullptr,
+     "Reads the FPS counter's Breakdown and names the one setting that would help most in this scene. It changes nothing by "
+     "itself: the levers that matter (replay workers, segments, CPU affinity) apply after a restart."},
     // (longshot) the Gameplay tab's Bug report (vk_bug_report.h): A or Enter writes the report's folder; the help says what is in it
     {TAB_GAMEPLAY, "Bug report", nullptr, 0, 0, 0, nullptr,
      "Saves what an issue needs in a new folder, bug-reports in the game folder: report.txt with the issue form's answers (this "
@@ -2560,6 +2565,43 @@ void share_finish() {
                  " the zip to a comment, then paste the report and say where you played.";
     share_busy.store(false);
     menu_refresh = true;
+}
+// (OcaDim) The budget governor: the Breakdown, read into one sentence and one lever. It applies none by itself: the rows
+// that matter here (replay workers, segments, CPU affinity) need a restart, so naming them is the honest part.
+bool is_governor_row(const Row& r) {
+    return !r.value && r.tab == TAB_PERF && !strcmp(r.name, "Budget governor");
+}
+std::string governor_said;
+const char* governor_hint() {
+    return governor_said.empty() ? "Reads the FPS counter's Breakdown and names the one setting that would help most."
+                                 : governor_said.c_str();
+}
+void governor_apply() {
+    const fps_stats::Summary s = fps_summary(fps_clock(), fps_stats::kSecond / 2, fps_stats::kLowWindow);
+    const int rate = fps_stats::cap_rate(opts.fps_cap);
+    char b[320];
+    if (!s.frames) {
+        governor_said = "No frame measured yet: play a moment, then press again.";
+    } else if (rate > 0 && s.avg_ms <= 1000.0 / rate) {
+        snprintf(b, sizeof b, "At the target (%.1f ms for %d fps; measured %.1f ms): nothing to change here.",
+                 1000.0 / rate, rate, s.avg_ms);
+        governor_said = b;
+    } else {
+        const int parts[4] = {fps_stats::kRender, fps_stats::kGpuWait, fps_stats::kPace, fps_stats::kGame};
+        const char* levers[4] = {
+            "lower Render resolution one step, or Texture detail (the renderer's own work)",
+            "lower Render resolution one step, or Shadow resolution (waiting on the GPU)",
+            "try Frame pacing off, or a higher Game frame rate cap (the cap or V-Sync)",
+            "raise Threaded rendering (restart) - the game itself is the limit",
+        };
+        int best = 0;
+        for (int i = 1; i < 4; i++)
+            if (s.part[parts[i]] > s.part[parts[best]]) best = i;
+        snprintf(b, sizeof b, "%.1f ms a frame (target %.1f): %.1f ms in the biggest part -> %s.", s.avg_ms,
+                 rate > 0 ? 1000.0 / rate : 0.0, s.part[parts[best]], levers[best]);
+        governor_said = b;
+    }
+    logf("menu: Budget governor: %s", governor_said.c_str());
 }
 bool is_share_row(const Row& r) { return !r.value && r.tab == TAB_DEBUG && !strcmp(r.name, "Save my pipeline list"); }
 // (longshot) Set up for a weak laptop (the Debug tab, integrated graphics: row_shown): Minimum's rows and mip trimming, then
@@ -3903,7 +3945,8 @@ void draw_options(ui::Ctx& c) {
     const Row& selr = rows[tab_row_to_global(cur_tab, sel)];
     const FieldRow* field = field_row(selr);   // (longshot: a text field: why Enter did not take it, while it is edited)
     const char* hint = selr.value && selr.hint ? selr.hint(*selr.value, -1) : field && editing == field->field ? edit_why : nullptr;
-    if (is_share_row(selr) && !share_said.empty()) hint = share_said.c_str();   // (what the last save did)
+    if (is_share_row(selr) && !share_said.empty()) hint = share_said.c_str();
+    if (is_governor_row(selr) && !governor_said.empty()) hint = governor_said.c_str();   // (what the last save did)
     if (&selr == &rows[kBugReportRow]) hint = bug_report_hint();   // (the Bug report: where it was saved, or why not)
     const std::string pending_line = (cur_tab == TAB_GRAPHICS || cur_tab == TAB_DEBUG) && restart_pending() ? restart_line(c, 16 * s, hx1 - hx0 - 66 * s) : "";
     static float help_tall = 0, help_tall_w = 0;
@@ -6548,6 +6591,7 @@ void menu_tick() {
         else if (press[7] && is_fps_dev_row(r)) cur_tab = TAB_FPS_DEV, tab_selected[TAB_FPS_DEV] = 0, press[7] = false, changed = true;
         else if (press[7] && is_share_row(r)) share_pipeline_list(), press[7] = false, changed = true;
         else if (press[7] && is_laptop_row(r)) weak_laptop_apply(), press[7] = false, changed = true;
+        else if (press[7] && is_governor_row(r)) governor_apply(), press[7] = false, changed = true;
         else if (press[7] && &r == &rows[kBugReportRow]) bug_report_save(), press[7] = false, changed = true;
         else if (const FieldRow* f = press[7] ? field_row(r) : nullptr) edit_start(*f->field, f->apply), changed = true;   // (longshot)
         else if (press[7] && !r.value && can_bind()) page = 1, csel = 0, ccol = menu_hit::kCtlPrimary, changed = true;

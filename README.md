@@ -460,10 +460,18 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | HDR peak brightness | 400 to 4000 nits, in steps of 100 (while HDR is on) | 1000 nits |
 | | HDR contrast | 50% to 200% around mid grey, in steps of 5 (while HDR is on) | 100% |
 | | HDR tone mapper | Vanilla (the game's curve), PsychoV35 (RenoDX's; with HDR set to Native). Compatible DLSS/DLAA, FSR 4/native AA and shared-chain FSR 3.1 upscaling run automatically; `RX_VK_PSYCHOV35_DLSS=0` disables that compatibility route. Off and the spatial/FXAA TAAU replacement support PsychoV35 directly. FSR 3.1 FG remains separately opt-in and 2x only; legacy own-input FSR upscaling remains unsupported | Vanilla |
+| | Texture detail | Auto, Full, Medium, Low | Auto; a quality preset sets it |
 | | Anisotropic filtering | Game's, 2x, 4x, 8x, 16x | 16x |
 | | Shadow resolution | Auto (for the card's memory), Game's (1600), High (2200), Highest (3072): the sun's shadow maps, applies at once | Auto |
 | | GPU device | Auto, or each graphics card by name (after a restart) | Auto |
 | | Threaded rendering | Auto, On, Off (after a restart). Auto is On with 12 or more processor threads for the game | Auto |
+| | Batched submits | Auto, On, Off (a frame's submissions sent as one; Auto on Mesa's RADV) | Auto |
+| | Draw order barriers | Auto, On, Off (a draw pass after another waits in its fragment stages only; Auto on NVIDIA) | Auto |
+| | CPU affinity (CCX) | Auto, On, Off (the replay's workers on the upper half of the logical CPUs; Auto from 12) | Auto |
+| | Above-60 fixes | Off, On (the floors that carry a character and the height-field surfaces' fixed steps, mended above 60 fps) | On |
+| | Replay segments | 32, 64, 160 (the draws and dispatches a replay worker takes at a time) | 32 |
+| | Descriptor prefetch | Auto, On, Off (descriptors read ahead on a helper thread; Auto is on where the processor has threads to spare) | Auto |
+| | Replay workers | Auto, 1, 2, 3, 4 (the replay's threads; Auto is one for every four the game may use, at most four, none under six) | Auto |
 | Audio | Volume | 0 to 100%, in steps of 5 | 100% |
 | | Mute in background | Off, On | Off |
 | | Output device | Default or a named Windows playback device; applies live | Default |
@@ -494,6 +502,7 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | Invert camera Y | Off, On | Off |
 | | Camera speed | 50% to 400%, in steps of 25 | 100% |
 | | Stick dead zone | Default (24%), 5%, 10%, 15%, 20%, 30% | Default (24%) |
+| | Auto run | Off, On | Off |
 | | Rumble strength | Off, 25% to 150%, in steps of 25 | 100% |
 | | Layout preset | Nintendo (Def), Xbox / PC, Swap Face; Custom once you bind a button yourself (on the Controls page) | Nintendo (Def) |
 | | Button prompts | Auto, Switch, Xbox, PlayStation 4, PlayStation 5, Steam Deck, Keyboard (on the Controls page; changes at once where the game allows it, else after a restart) | Auto |
