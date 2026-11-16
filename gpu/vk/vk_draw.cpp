@@ -745,6 +745,26 @@ bool layouts_for(const VkDescriptorSetLayoutCreateInfo& li, VkPipelineLayoutCrea
     return true;
 }
 
+// (OcaDim, RX_VK_DRAW_RUNS=1) How many draws in a row share one program: the first bound on what auto-batching could merge
+// (a batch needs the same program and formats; the program alone is the optimistic one). Off: one bool test per draw.
+void draw_runs_note(const void* prog) {
+    static const bool on = env_on("RX_VK_DRAW_RUNS");
+    if (!on) return;
+    static const void* last = nullptr;
+    static uint64_t draws = 0, runs = 0, cur = 0, longest = 0;
+    draws++;
+    if (prog == last) {
+        cur++;
+    } else {
+        if (cur > longest) longest = cur;
+        runs++, cur = 1, last = prog;
+    }
+    if (draws % 3000 == 0)
+        logf("vk: draw runs (RX_VK_DRAW_RUNS=1): %llu draws, %llu runs, average %.2f, longest %llu",
+             (unsigned long long)draws, (unsigned long long)runs, draws / (double)std::max<uint64_t>(runs, 1),
+             (unsigned long long)std::max<uint64_t>(longest, cur));
+}
+
 void ensure_layout(Program& p) {
     if (p.layout) return;
     std::vector<VkDescriptorSetLayoutBinding> bindings;
@@ -8335,7 +8355,7 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
             occ.issue();
             vkCmdDrawIndirect(cmd, fallback_draw_records, 0, 1, sizeof(VkDrawIndirectCommand));   // (its count: the records taken)
             st_mesh++;
-            st_draws++, ps.draws++;
+            st_draws++, ps.draws++, draw_runs_note(&p);
             return;
         }
         {   // (amd-fix, diagnosis) RX_VK_LOG_MESH_PROGS=1: each mesh program's first draw and every 600th, with what its
@@ -8401,7 +8421,7 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
                     vkCmdDrawMeshTasksIndirectEXT(cmd, mesh_conv_buf, mesh_conv_off, conv_n, 12);
                 mesh_conv_buf = VK_NULL_HANDLE;
                 st_mesh++;
-                st_draws++, ps.draws++;
+                st_draws++, ps.draws++, draw_runs_note(&p);
                 return;
             }
             if (d.max < 0 || d.stride < 0) SKIP_HERE();   // (longshot: the game's ints; a negative count was ~4e9 draws)
@@ -8434,7 +8454,7 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
                                   (uint32_t)std::max(d.groups[2], 1));
         }
         st_mesh++;
-        st_draws++, ps.draws++;
+        st_draws++, ps.draws++, draw_runs_note(&p);
         return;
     }
     // vertex streams (from their pools, strides dynamic) and the zero stream
@@ -8532,7 +8552,7 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
         occ.issue();
         vkCmdDrawIndexed(cmd, quads * 6, (uint32_t)std::max(1, d.instances), 0, d.indexed ? d.base_vertex : 0,
                          (uint32_t)d.base_instance);
-        st_draws++, ps.draws++;
+        st_draws++, ps.draws++, draw_runs_note(&p);
         return;
     }
     if (d.indirect) {
@@ -8576,7 +8596,7 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
         occ.issue();
         vkCmdDraw(cmd, (uint32_t)d.count, (uint32_t)std::max(1, d.instances), (uint32_t)d.first, (uint32_t)d.base_instance);
     }
-    st_draws++, ps.draws++;
+    st_draws++, ps.draws++, draw_runs_note(&p);
 }
 
 /// A dispatch over 2 ms is logged, 60 times, and only while RX_VK_SLOW_DISPATCH is set. Off, the clock is not read.

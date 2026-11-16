@@ -66,9 +66,8 @@ liste de pages écrites par pool, au lieu de reparcourir les régions.
 
 Coût quand la sonde est éteinte : un `bool` par sync.
 
-### Mesuré (16/11, RX 9070 XT, scène chargée : 2 820 draws, 49,9 fps)
-
-```
+### Mesuré : le dirty census (16/11, scène chargée, 2 820 draws, 49,9 fps)
+`
 512 syncs, 350 720 pages scanned (2 718 dirty), 4 us a sync, 5-6 ns a page
 ```
 
@@ -79,3 +78,23 @@ comptant un iGPU trois fois plus lent sur ce code : ~0,07 ms.
 d'import), pas de cette passe. La sonde reste dans le code (éteinte par défaut) pour re-vérifier après un gros changement
 de mémoire.
 
+### Mesuré : la sonde de runs (`RX_VK_DRAW_RUNS=1`)
+
+`draw_runs_note()` (`gpu/vk/vk_draw.cpp`) compte les draws consécutifs qui partagent un programme — le majorant de ce
+qu'un auto-batching pourrait fusionner. Run de 90 s, scène chargée (2 360 draws par frame, 39,7 fps) :
+
+```
+6 553 000 draws, 4 680 000 runs → moyenne 1,40 draw par run, plus long 406
+```
+
+**Un programme change toutes les 1,4 draws.** Le plafond de fusion est donc de 1,87 M de draws sur 6,55 M, soit **28,6 %**
+— et c'est avec la clé la plus optimiste (le programme seul ; un vrai batch demande aussi les mêmes formats et layouts).
+Sur les 4,3 ms de binds + draw : **1,2 ms au mieux, ~5 %**.
+
+**Verdict : l'auto-batching ne vaut pas son chantier.** Il reste la version opportuniste (fusionner seulement les runs
+longs, ≥ 8) si un jour le besoin se représente, mais elle ne peut pas dépasser ce plafond.
+
+Prochaines pistes, dans l'ordre : **le gouverneur de budget** (une page de menu, zéro risque), puis **le lookahead** (les
+hoquets de 6,6 et 13,2 fps mesurés), puis **bindless** si on veut vraiment dépasser +10 %.
+
+``
