@@ -153,6 +153,33 @@ Le marqueur est donc justifié sur ce PC, et `start` reste. Une session en `crea
 d'abord le plantage du driver sur les grosses traductions.
 
 
+## Les textures blanches au loin : le placeholder des uploads reportés (16/11, session 3)
+
+Les uploads ASTC ont un budget par frame (`RX_VK_UPLOAD_BUDGET_MS`, 40 ms de temps CPU d'upload). Passé ce budget, une
+texture ASTC nouvellement rencontrée n'est pas uploadée dans la frame : `texture_touch` rend `nullptr` et le draw
+échantillonne le **placeholder** — d'où des textures blanches, visibles au loin, dans les premières frames après un
+chargement de zone. Les logs le chiffrent : « 1774 new ASTC textures left for a later frame » en une frame sur
+l'installation, 1 303 sur un run de dev.
+
+Correctif : pendant une frame longue (aucun présent depuis 100 ms, `programs_in_load`), le budget est multiplié par 4.
+Mesuré, même sauvegarde :
+
+| | avant | après |
+|---|---|---|
+| textures reportées sur le run | 1 303 | **571** |
+| frame d'uploads la plus lourde | 115 ms | 256 ms |
+| fps en jeu | 62,2 | 61,0-61,8 |
+
+Le travail change de frame, il ne s'ajoute pas : la frame de chargement (déjà à 2,8 s) absorbe ce que les frames de jeu
+n'ont plus à faire.
+
+**Piège mesuré** : un seuil à 400 ms est **pire** (1 688 reportées) — un écran de chargement *présente* ses frames, donc
+« aucun présent depuis X ms » ne voit pas un chargement qui a lieu pendant un écran animé. Le signal est la frame longue,
+pas l'absence de présent. Et `RX_VK_UPLOAD_BUDGET_MS=0` supprime tout report (aucun blanc, un hoquet de chargement plus
+long).
+
+
+
 ## Ce que les fps ne disent pas
 
 Les comparaisons de fps entre deux runs ne valent rien ici : la sauvegarde et la zone ont changé plusieurs fois pendant
