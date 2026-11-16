@@ -354,6 +354,13 @@ const char* hn_menu_lang(int v, int variant) {
     if (variant > 0) return nullptr;
     return v <= 0 ? "Follows the game's language (language.txt in the game folder)." : "The language of this menu.";
 }
+bool mic_testing = false; // session only, never saved or restored
+int mic_levels[2] = {}, mic_test_state = 0;
+constexpr const char* kMicLevelHelp =
+    "Shows microphone signal strength, not note recognition.\n\n"
+    "- First percentage: incoming peak before gain.\n"
+    "- Second percentage: peak after Microphone gain, also shown by the bar.\n\n"
+    "At 100% gain they match. Increasing gain also raises noise and can clip the signal.";
 const char* tx_percent(int v) {
     static char b[8];
     snprintf(b, sizeof b, "%d%%", v);
@@ -1543,6 +1550,12 @@ Row rows[] = {
     {TAB_AUDIO, "Microphone", &opts.mic, 0, 2 + kMaxMics, 1, tx_mic,
      "What the ocarina hears when the game's microphone option is on (playing an instrument, or humming).", hn_mic, false,
      true},
+    {TAB_AUDIO, "Microphone gain", &opts.microphone_gain, 0, 400, 10, tx_percent,
+     "Adjust capture for Longshot only; system volume is unchanged. Use the microphone test to see live levels while adjusting gain. "
+     "Changes apply to new samples.", nullptr, false, true},
+    {TAB_AUDIO, "Test microphone", nullptr, 0, 0, 0, nullptr,
+     "Start or stop microphone capture. No playback or audio files. You can adjust Microphone gain while testing. "
+     "Leaving Audio, closing the menu or selecting Off stops the test; the game can still use the mic."},
 
     // Gameplay
     {TAB_GAMEPLAY, "FPS counter", &opts.show_fps, 0, fps_stats::kLevels - 1, 1, tx_fps_level,
@@ -2063,9 +2076,9 @@ constexpr int64_t kMarqueeStep = 150000000LL, kMarqueeRest = 1200000000LL;   // 
 int hover_tab = -1;
 int drag_row = -1;
 bool mouse_read = false;   // (the menu has read the mouse since it opened)
-bool is_slider(const Row& r) { return r.value == &opts.sharpness || r.value == &opts.mouse_sens || r.value == &opts.gyro_sens_x || r.value == &opts.gyro_sens_y || r.value == &opts.volume || r.value == &opts.camera_speed || r.value == &opts.fov; }
+bool is_slider(const Row& r) { return !strcmp(r.name, "Microphone gain") || r.value == &opts.sharpness || r.value == &opts.mouse_sens || r.value == &opts.gyro_sens_x || r.value == &opts.gyro_sens_y || r.value == &opts.volume || r.value == &opts.camera_speed || r.value == &opts.fov; }
 /// (a scale: the arrows and a click stop at its ends; Rumble strength would go from Off to its strongest)
-bool stops_at_ends(const Row& r) { return r.value == &opts.ultrawide || r.value == &opts.mouse_sens || r.value == &opts.rumble || r.value == &opts.gyro_sens_x || r.value == &opts.gyro_sens_y || r.value == &opts.volume || r.value == &opts.camera_speed || r.value == &opts.fov; }
+bool stops_at_ends(const Row& r) { return !strcmp(r.name, "Microphone gain") || r.value == &opts.ultrawide || r.value == &opts.mouse_sens || r.value == &opts.rumble || r.value == &opts.gyro_sens_x || r.value == &opts.gyro_sens_y || r.value == &opts.volume || r.value == &opts.camera_speed || r.value == &opts.fov; }
 /// (the ini's Rumble strength on the menu's steps: 0 to 150, the nearest 25)
 int rumble_step(int v) { return (std::min(std::max(v, 0), 150) + 12) / 25 * 25; }
 // (longshot) A run's environment over a saved row (RX_VK_PACE=1, HOS_OUTPUT_RES=...): for that run only. save() writes the
@@ -3175,6 +3188,33 @@ float banner_h(const ui::Ctx& c) { return std::max(58 * c.s, c.safe + 40 * c.s);
 
 /// (the Bug report's line under its help once saved, below: measure_help makes room for the longest)
 std::string bug_report_saved_text(const std::string& folder);
+bool mic_help_row(const Row& r) {
+    return r.tab == TAB_AUDIO && (!strcmp(r.name, "Test microphone") || !strcmp(r.name, "Microphone gain"));
+}
+std::string mic_help_text(const char* help) {
+    // Whole-string lookup: translate each complete paragraph before joining the shared explanation.
+    return std::string(help ? i18n::tr(help) : "") + "\n\n" + i18n::tr(kMicLevelHelp);
+}
+std::string mic_meter_label(int state, int incoming, int adjusted) {
+    if (!(state & 1)) return i18n::tr("Test stopped");
+    char text[64];
+    snprintf(text, sizeof text, "Testing: %d%% -> %d%%", std::clamp(incoming, 0, 1000) / 10, std::clamp(adjusted, 0, 1000) / 10);
+    return i18n::tr(text);
+}
+std::string mic_meter_status(int state) {
+    if (!(state & 1)) return i18n::tr("Test stopped");
+    std::string text = i18n::tr(!(state & 2) ? "Microphone unavailable" : !(state & 8) ? "Waiting for samples" :
+                              (state & 16) ? "Clipping" : "");
+    if (state & 4) text += i18n::tr(text.empty() ? "Default fallback" : " (Default fallback)");
+    return text;
+}
+float mic_meter_height(ui::Ctx& c, float width) {
+    float status = 0;
+    for (int state : {0, 1, 5, 3, 7, 11, 15, 27, 31})
+        status = std::max(status, ui::para(c, c.f.body, 16 * c.s, ImVec2(), 0, mic_meter_status(state).c_str(), width, false));
+    return 42 * c.s + 8 * c.s + status + 14 * c.s;
+}
+void mic_help_meter(ui::Ctx& c, ImVec2 a, ImVec2 b);
 /// The tallest help a row of the options can have, in pixels at width: its help and the tallest line any of its values can
 /// have: the help box keeps that height whichever row is selected and whatever its value
 float measure_help(ui::Ctx& c, float width) {
@@ -3190,7 +3230,12 @@ float measure_help(ui::Ctx& c, float width) {
         if (&r == &rows[kBugReportRow])   // (the Bug report's line once saved, with the longest folder name it can have)
             hint = ui::para(c, c.f.body, 16 * c.s, ImVec2(), 0, bug_report_saved_text("bug-reports/2026-12-31_23-59-59-99").c_str(),
                             width - 18 * c.s, false);
-        if (r.help) most = std::max(most, ui::para(c, c.f.body, 18 * c.s, ImVec2(), 0, r.help, width, false) + (hint ? 14 * c.s + hint : 0));
+        if (r.help) {
+            const bool mic = mic_help_row(r);
+            const std::string explanation = mic ? mic_help_text(r.help) : r.help;
+            most = std::max(most, ui::para(c, c.f.body, 18 * c.s, ImVec2(), 0, explanation.c_str(), width, false) +
+                                  (hint ? 14 * c.s + hint : 0) + (mic ? mic_meter_height(c, width) : 0));
+        }
     }
     return most;
 }
@@ -3265,17 +3310,28 @@ float title_banner(ui::Ctx& c, const char* title, const char* right) {
     if (right) ui::text_mid_right(c, c.f.body, 17 * s, c.w - c.safe, hh * 0.5f + s, ui::kBannerInk, right);
     return hh;
 }
+/// Keep translated microphone explanations readable in the available help area. Other help keeps its normal size.
+float mic_help_font_size(ui::Ctx& c, const char* help, float width, float height) {
+    for (float px = 18; px > 14; px -= 0.5f)
+        if (!help || ui::para(c, c.f.body, px * c.s, ImVec2(), 0, help, width, false) <= height) return px * c.s;
+    return 14 * c.s;
+}
 /// The help box from (x0, y0) to x1: a title, the help, a line set off by a bar, a gold line at its foot. min_h: its height at
 /// least (the tallest help the page can have, so it does not jump)
 void help_box(ui::Ctx& c, float x0, float x1, float y0, const char* title, const char* help, const char* hint, const char* gold_line,
-              float min_h = 0, bool after_restart = false, float y_min = 0, float y_max = FLT_MAX) {
+              float min_h = 0, bool after_restart = false, float y_min = 0, float y_max = FLT_MAX, bool microphone = false) {
     // (y_max: the box ends above it, the prompt strip's top: moved up as far as y_min (under the banner) when it is taller than
     // the room below y0, its reserved height (min_h) given up first, its text cut at its foot only if it still does not fit)
     const float s = c.s, w = x1 - x0 - 48 * s;
-    const float th = help ? ui::para(c, c.f.body, 18 * s, ImVec2(), 0, help, w, false) : 0,
-                hh = hint ? ui::para(c, c.f.body, 16 * s, ImVec2(), 0, hint, w - 18 * s, false) : 0;
-    const float text_h = th + (hint ? 14 * s + hh : 0), note = after_restart ? 30 * s : 0;
+    const std::string explanation = microphone ? mic_help_text(help) : "";
+    if (microphone) help = explanation.c_str();
+    const float meter_h = microphone ? mic_meter_height(c, w) : 0;
+    const float hh = hint ? ui::para(c, c.f.body, 16 * s, ImVec2(), 0, hint, w - 18 * s, false) : 0;
+    const float note = after_restart ? 30 * s : 0;
     const float fixed = 22 * s + (title ? 32 * s : 0) + note + (gold_line ? 52 * s : 0) + 22 * s;
+    const float help_px = microphone ? mic_help_font_size(c, help, w, y_max - y_min - fixed - meter_h - (hint ? 14 * s + hh : 0)) : 18 * s;
+    const float th = help ? ui::para(c, c.f.body, help_px, ImVec2(), 0, help, w, false) : 0;
+    const float text_h = th + (hint ? 14 * s + hh : 0) + meter_h;
     float body = std::max(min_h, text_h);
     if (y0 + fixed + body > y_max) y0 = std::max(y_min, y_max - fixed - body);
     if (y0 + fixed + body > y_max) body = std::max(text_h, y_max - y0 - fixed);
@@ -3289,14 +3345,18 @@ void help_box(ui::Ctx& c, float x0, float x1, float y0, const char* title, const
         ui::text_mid(c, c.f.strong, 16 * s, x0 + 42 * s, y + 10 * s, ui::kGoldHi, "Takes effect after a restart");
         y += note;
     }
-    if (help) ui::para(c, c.f.body, 18 * s, ImVec2(x0 + 24 * s, y), ui::kInk, help, w);
+    if (microphone && mic_testing) {
+        mic_help_meter(c, ImVec2(x0 + 24 * s, y), ImVec2(x1 - 24 * s, y + 42 * s));
+        y += meter_h;
+    }
+    if (help) ui::para(c, c.f.body, help_px, ImVec2(x0 + 24 * s, y), ui::kInk, help, w);
     if (hint) {
         const float hy = y + th + 14 * s;
         c.d->AddRectFilled(ImVec2(x0 + 24 * s, hy + 2 * s), ImVec2(x0 + 26.5f * s, hy + hh - 2 * s), ui::kAccent, s);
         ui::para(c, c.f.body, 16 * s, ImVec2(x0 + 40 * s, hy), ui::kSoft, hint, w - 18 * s);
     }
     if (gold_line) {
-        y += body + 20 * s;
+        y = y0 + 22 * s + (title ? 32 * s : 0) + note + body + 20 * s;
         c.d->AddLine(ImVec2(x0 + 24 * s, y), ImVec2(x1 - 24 * s, y), ui::alpha(ui::kEdge, 0.8f), std::max(1.0f, s));
         ui::diamond(c, ImVec2(x0 + 29 * s, y + 20 * s), 4 * s, ui::kGoldHi);
         ui::text_mid(c, c.f.strong, 16 * s, x0 + 42 * s, y + 20 * s, ui::kGoldHi, gold_line);
@@ -3363,8 +3423,8 @@ void halves_cell(ui::Ctx& c, ImVec2 a, ImVec2 b, const char* lo, const char* hi,
     ui::text_mid_centre(c, high ? c.f.strong : c.f.body, px, (xm + b.x) * 0.5f, mid, high ? on : ui::kDim, hi);
     if (sel) ui::glow(c, a, b);
 }
-/// A slider's value cell: the value, a track with its knob along the cell's foot; *t0, *t1 the track (for the mouse)
-void slider_cell(ui::Ctx& c, ImVec2 a, ImVec2 b, const char* value, int permille, bool sel, float* t0, float* t1) {
+/// A slider's value cell; a display-only meter omits adjustment arrows and mouse track bounds.
+void slider_cell(ui::Ctx& c, ImVec2 a, ImVec2 b, const char* value, int permille, bool sel, float* t0, float* t1, bool adjustable = true) {
     const float s = c.s, mid = (a.y + b.y) * 0.5f, in = 4 * s, px = 18 * s;
     c.d->AddRectFilled(a, b, ui::kCellDark);
     c.d->AddRect(a, b, ui::kEdge, 0, std::max(1.0f, s));
@@ -3375,10 +3435,20 @@ void slider_cell(ui::Ctx& c, ImVec2 a, ImVec2 b, const char* value, int permille
     c.d->AddRectFilled(ImVec2(x0, ty - 1.5f * s), ImVec2(xv, ty + 1.5f * s), done, 1.5f * s);
     ui::diamond(c, ImVec2(xv, ty), 4.5f * s, done);
     ui::text_mid_centre(c, c.f.strong, px, (a.x + b.x) * 0.5f, mid - 3 * s, sel ? ui::kGoldInk : ui::kInk, value);
-    const ImU32 arrow = sel ? ui::kGoldInk : ui::kDim;
-    ui::triangle(c, ImVec2(a.x + in + 11 * s, mid), 9 * s, 0, arrow), ui::triangle(c, ImVec2(b.x - in - 11 * s, mid), 9 * s, 1, arrow);
+    if (adjustable) {
+        const ImU32 arrow = sel ? ui::kGoldInk : ui::kDim;
+        ui::triangle(c, ImVec2(a.x + in + 11 * s, mid), 9 * s, 0, arrow), ui::triangle(c, ImVec2(b.x - in - 11 * s, mid), 9 * s, 1, arrow);
+    }
     if (sel) ui::glow(c, a, b);
-    *t0 = x0, *t1 = x1;
+    *t0 = adjustable ? x0 : 0, *t1 = adjustable ? x1 : 0;
+}
+/// Read-only live meter in help, with no mouse-hit registration or adjustment arrows.
+void mic_help_meter(ui::Ctx& c, ImVec2 a, ImVec2 b) {
+    const std::string label = mic_meter_label(mic_test_state, mic_levels[0], mic_levels[1]);
+    const std::string status = mic_meter_status(mic_test_state);
+    float unused0 = 0, unused1 = 0;
+    slider_cell(c, a, b, label.c_str(), std::clamp(mic_levels[1], 0, 1000), false, &unused0, &unused1, false);
+    if (!status.empty()) ui::para(c, c.f.body, 16 * c.s, ImVec2(a.x, b.y + 8 * c.s), ui::kSoft, status.c_str(), b.x - a.x);
 }
 /// (longshot) A text field's value cell: its text from the left (cut with "..." when too long); empty, the placeholder, dim.
 /// While it has the keyboard (typing): light text on the dark cell inside a gold frame, a steady caret at its place, the text slid
@@ -3703,7 +3773,9 @@ void row_value_cell(ui::Ctx& c, const Row& r, ImVec2 va, ImVec2 vb, bool selecte
     } else if (const FieldRow* f = field_row(r)) {
         text_cell(c, va, vb, *f->field, selected, editing == f->field, "None");
     } else if (!r.value) {
-        if (pending == &r) choice_cell(c, va, vb, "Press again to confirm", selected, false, false);
+        if (!strcmp(r.name, "Test microphone"))
+            choice_cell(c, va, vb, !host || !host->mic_test ? "Unavailable" : opts.mic == 0 ? "Microphone Off" : mic_testing ? "Stop test" : "Start test", selected, false, false);
+        else if (pending == &r) choice_cell(c, va, vb, "Press again to confirm", selected, false, false);
         else if (is_share_row(r)) choice_cell(c, va, vb, share_value.empty() ? "Save" : share_value, selected, false, false);   // (an action, not a page)
         else if (&r == &rows[kBugReportRow]) choice_cell(c, va, vb, bug_report_cell(), selected, false, false);   // (how the last report went)
         else {
@@ -3777,6 +3849,7 @@ void draw_options(ui::Ctx& c) {
     column(c, cx0, cx1, hh);
     const int count = tab_row_count(cur_tab), sel = tab_selected[cur_tab];
     const Row& selr = rows[tab_row_to_global(cur_tab, sel)];
+    const bool mic_help = mic_help_row(selr);
     const FieldRow* field = field_row(selr);   // (longshot: a text field: why Enter did not take it, while it is edited)
     const char* hint = selr.value && selr.hint ? selr.hint(*selr.value, -1) : field && editing == field->field ? edit_why : nullptr;
     if (is_share_row(selr) && !share_said.empty()) hint = share_said.c_str();   // (what the last save did)
@@ -3822,15 +3895,15 @@ void draw_options(ui::Ctx& c) {
     const float bar_top = ui::prompt_bar_top(c);   // (the strip itself drawn last, over all: below)
     float bottom = std::min(c.h - c.safe, bar_top) - 10 * s;   // (the rows end above the prompts)
     const bool after = restart_changed(selr);
-    if (narrow) {   // (the help over the column's foot, the rows above it: at most half the room, the rows get the rest)
+    if (narrow) {   // (help over the column's foot: normally half the room, up to 65% for the mic meter and its explanation)
         const float help_h = std::min(22 * s + 32 * s + help_tall + (after ? 30 * s : 0) + (pending_line.empty() ? 0 : 52 * s) + 22 * s,
-                                      (bottom - hh) * 0.5f);
+                                      (bottom - hh) * (mic_help ? 0.65f : 0.5f));
         bottom = std::min(bar_top, c.h - c.safe) - help_h - 16 * s;
         help_box(c, hx0, hx1, bottom + 8 * s, selr.name, selr.help, hint, pending_line.empty() ? nullptr : pending_line.c_str(), help_tall,
-                 after, bottom + 8 * s, bar_top - 10 * s);
+                 after, bottom + 8 * s, bar_top - 10 * s, mic_help);
     } else {
         help_box(c, hx0, hx1, std::max(hh + 26 * s, c.h * 0.30f), selr.name, selr.help, hint,
-                 pending_line.empty() ? nullptr : pending_line.c_str(), help_tall, after, hh + 18 * s, bar_top - 12 * s);
+                 pending_line.empty() ? nullptr : pending_line.c_str(), help_tall, after, hh + 18 * s, bar_top - 12 * s, mic_help);
     }
     const float rh = 40 * s, pitch = 48 * s, top = hh + 24 * s, rx0 = cx0 + 44 * s, rx1 = cx1 - 44 * s, split = rx0 + (rx1 - rx0) * 0.55f;
     if (cur_tab == TAB_DEBUG) {   // (the Debug tab: its own layout of the same rows)
@@ -5760,6 +5833,13 @@ void outputs_follow_screen() {
          dm::ratio_name({sw, sh}).c_str(), added);
 }
 
+/* Called at tick exit, after every navigation/close path. Only an explicit button enables capture. */
+void mic_test_tick(bool focused) {
+    if (!focused || !open_now.load() || cur_tab != TAB_AUDIO || page != 0 || opts.mic == 0) mic_testing = false;
+    mic_levels[0] = mic_levels[1] = 0;
+    mic_test_state = host && host->mic_test ? host->mic_test(mic_testing, opts.microphone_gain, mic_levels) : 0;
+    if (!(mic_test_state & 1)) mic_testing = false;
+}
 void menu_tick() {
     std::lock_guard lk(menu_mu);   // (the control bridge's settings: menu_setting_set)
     share_finish();   // (Save my pipeline list's worker, done)
@@ -5776,6 +5856,7 @@ void menu_tick() {
     DWORD pid = 0;
     if (fg) GetWindowThreadProcessId(fg, &pid);
     const bool mine = pid == GetCurrentProcessId();
+    struct MicTick { bool focused; ~MicTick() { mic_test_tick(focused); } } mic_tick{mine};
     bool press[K_N] = {};
     for (int i = 0; i < K_N; i++) {
         const bool down = mine && (GetAsyncKeyState(keys[i]) & 0x8000) != 0;
@@ -6288,6 +6369,10 @@ void menu_tick() {
                 }
             }
         } else if (r.cheat >= 0) cheat_press(r.cheat, press, changed);   // (a debug tool: on the Debug tab itself)
+        else if (press[7] && !strcmp(r.name, "Test microphone")) {
+            if (opts.mic != 0 && host && host->mic_test) mic_testing = !mic_testing;
+            press[7] = false, changed = true;
+        }
         else if (press[7] && is_motion_row(r)) cur_tab = TAB_MOTION, tab_selected[TAB_MOTION] = 0, press[7] = false, changed = true;
         else if (press[7] && is_fps_dev_row(r)) cur_tab = TAB_FPS_DEV, tab_selected[TAB_FPS_DEV] = 0, press[7] = false, changed = true;
         else if (press[7] && is_share_row(r)) share_pipeline_list(), press[7] = false, changed = true;

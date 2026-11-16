@@ -463,6 +463,8 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | Output device | Default or a named Windows playback device; applies live | Default |
 | | Speaker layout | Auto, Stereo, 5.1, Mono (layout changes after a restart; Mono/Stereo live on stereo output) | Auto |
 | | Microphone | Off, Default, or each microphone by name | Default |
+| | Microphone gain | Software input level, 0–400%; applies to new samples without changing system volume | 100% |
+| | Test microphone | Start/stop capture; live levels appear in the help box for Test microphone and Microphone gain | Stopped |
 | Gameplay | FPS counter | Off, FPS, Frame time, Graph, Breakdown, Dev | Off |
 | | FPS counter position | Top right, Top left, Bottom right, Bottom left | Top right |
 | | FPS counter size | Auto, Small, Medium, Large | Auto |
@@ -732,6 +734,16 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
   are not listed. A chosen microphone that is unplugged stays chosen (shown as not connected): Default stands in until it is
   back. On Linux (SDL2) two microphones with the same name cannot be told apart: the first is used. Windows must allow desktop apps to use the microphone
   (Settings, Privacy & security, Microphone). `HOS_MIC_LOG=1` logs what the game reads, a line a second.
+- **Microphone gain** changes captured samples for Longshot only, from 0% to 400% (100% unchanged); it does not change
+  the system's input volume. Boosting raises noise too, and excessive levels clip. It applies to newly captured samples;
+  samples already buffered for the game keep their previous gain.
+- **Test microphone** starts/stops capture explicitly. During a test, the help box for Test microphone and Microphone gain
+  shows a read-only bar labeled Testing, with the incoming percentage before gain and adjusted percentage after gain.
+  The same explanation and percentage bullets appear on both rows. The meter reports
+  clipping, a default-device fallback, unavailable capture, or no recent samples. Opening Audio alone never starts a test;
+  Microphone Off prevents one. Leaving Audio, closing the overlay or losing focus stops it at the next menu tick.
+  The test shares the game's 48 kHz mono capture when active; stopping a test leaves capture needed by the game running.
+  No microphone sound is played back or saved. Test-only samples are drained before a first game stream joins.
 - **Game language** is the game's own text, `language.txt` in the game folder: the row writes it once you leave the row,
   and the game reads it at its next start (`HOS_LANGUAGE`, when set, wins over the file, as for the game). Where the
   folder cannot be written the row goes back to the file's language. **Menu language** is this menu's: Auto follows the
