@@ -6299,7 +6299,8 @@ struct {
     std::atomic<int64_t> timeouts, demands, fences;
 } gate_st;
 bool gate_on() {
-    static const bool on = async_on() && !(getenv("RX_VK_FRAME_GATE") && atoi(getenv("RX_VK_FRAME_GATE")) == 0);
+    // (OcaDim, #1121: jobs replayed as they come by default; RX_VK_FRAME_GATE=1 brings whole frames back)
+    static const bool on = async_on() && env_on("RX_VK_FRAME_GATE");
     return on;
 }
 std::chrono::milliseconds gate_ms() {
@@ -6818,7 +6819,7 @@ void present(const nvn_tex* t, const int crop[4]) {
         // (as long as the gate gives a job: a frame the game takes longer over is waited for too, not started half written)
         static const bool after = [] {
             const char* e = getenv("RX_VK_PRESENT_AFTER_SIGNAL");
-            return e ? !env_value_off(e) : gate_on();   // (set: its value; unset: the gate's own â€” env_on's rule)
+            return !e || !env_value_off(e);   // (OcaDim, #1121: unset hands over after the signal; =0 at once)   // (set: its value; unset: the gate's own â€” env_on's rule)
         }();
         // (as long as the gate gives a job: a frame the game takes longer over is waited for too, not started half written)
         static const auto after_ms = std::max(gate_ms(), std::chrono::milliseconds(hold_ms()));
