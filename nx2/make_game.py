@@ -2393,8 +2393,17 @@ def note_installed(out, note, files):
         print("the note of the files copied in was not saved (%s): the next build copies them again" % e, flush=True)
 
 
+def game_copy(path, roots):
+    """Whether the process running path is a copy of the game being updated: longshot.exe directly in one of roots (the
+    folder's launcher, bin\\longshot.exe or its crash-watch helper), each root normcased and ending in a separator. Another
+    program the player keeps in the folder is not: Longshot Launcher's portable exe there was taken for the game, its window
+    named as Longshot still running and the update stopped (LongshotLauncher#139), and a windowless one would have been ended"""
+    path = os.path.normcase(path)
+    return os.path.basename(path) == "longshot.exe" and os.path.dirname(path) + os.sep in roots
+
+
 def end_stale_games(folders):
-    """(Windows) The running processes whose exe is in one of folders (the game being updated): those with no visible window, a
+    """(Windows) The running copies of the game (game_copy) in one of folders, the game being updated: those with no visible window, a
     copy left behind (a shader preparation that hung, a game whose window closed but whose process did not end), are ended and
     waited for, as their file could not be replaced while they ran ("Could not replace bin/longshot.exe", Discord 2026-11-10).
     Returns the process ids of those with a window, which the player is to close: a game in play is never ended."""
@@ -2429,8 +2438,7 @@ def end_stale_games(folders):
                 if h:
                     buf, n = ctypes.create_unicode_buffer(1024), wintypes.DWORD(1024)
                     if k32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(n)):
-                        path = os.path.normcase(buf.value)
-                        if any(path.startswith(r) for r in roots) and os.path.dirname(path) + os.sep in roots:
+                        if game_copy(buf.value, roots):
                             found.append(e.th32ProcessID)
                             parents[e.th32ProcessID] = e.th32ParentProcessID
                     k32.CloseHandle(h)
