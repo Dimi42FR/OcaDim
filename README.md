@@ -24,6 +24,9 @@ mesurés, et un Setup qui compile le jeu chez le joueur.
 Le jeu **n'est pas** dans ce dépôt et n'y sera jamais. Rien n'est distribué : tout se compile sur ta machine, à partir de
 ton `.nup`.
 
+**Tu viens tester ?** Il y a trois choses à essayer ce soir et quatre façons d'aider sans coder, plus bas, dans
+**À tester chez toi**. Un retour qui dit *où ça casse* vaut dix « c'est bien ».
+
 > [!IMPORTANT]
 > **La règle, sans exception** : le `.nup` et le jeu compilé ne se partagent pas. Chacun compile depuis SA copie.
 > Ce qui se partage : ces sources, ce compilateur.
@@ -130,27 +133,45 @@ le preset, l'upscaler et les résolutions) et le dossier `bug-reports`. C'est to
 
 ---
 
-## Ce que nous n'avons pas vu ailleurs
+## À tester chez toi, et comment aider
 
-À notre connaissance — et dit comme tel, pas comme un titre de propriété :
+Pas de palmarès : la liste de ce qu'il y a **en plus** dans cette version, avec son état réel — ce qui est mesuré ici, et
+ce qui a besoin de **ton** PC pour être confirmé. Le but n'est pas qu'on te croie : c'est que tu vérifies.
 
-1. **La frame generation du SDK d'AMD dans un renderer de récompilation, alimentée par la vraie scène.** L'amont a sa
-   propre interpolation et la FG de NVIDIA (DLSS FG sur RTX 40+) ; celle d'AMD, avec la profondeur, les vecteurs de
-   mouvement, le jitter et la caméra réels du jeu, pilotée par la swapchain du SDK puis choisissable en jeu, n'y est pas.
-   La difficulté n'est pas d'appeler le SDK : c'est de lui donner des entrées justes et de garder un présent intact quand
-   il refuse.
-2. **Deux correctifs de logique de jeu au-dessus de 60 fps que l'amont n'a pas.** Les sols qui portent un personnage et
-   les surfaces d'eau à pas fixe. Ils ne sont pas de nous : **NX2navi** les a trouvés et corrigés pour son build
-   (domaine public / MIT) ; nous les avons portés dans ce renderer et exposés par une ligne du menu. L'amont, lui, répare
-   deux autres endroits (le son et le solveur physique) et prévient que le reste peut dérailler.
-3. **Un prefetch de descripteurs mesuré et documenté** (design *seqlock* + cache négatif), livré avec ses chiffres et son
-   interrupteur.
+| Ce qu'il y a en plus | Où le voir | L'état |
+|---|---|---|
+| **La frame generation d'AMD (FSR) dans le jeu** : une image entre deux des tiennes, nourrie par la vraie profondeur, les vrais vecteurs de mouvement, le jitter et la caméra de la scène, et choisie au menu | Graphics → *Frame generation by* → **AMD FSR FG** | mesuré ici sur RX 9070 XT : 44,1 fps en zone chargée, 69-76 en zone normale. **À confirmer** sur RDNA 2 et 3, sur portable |
+| **Deux réparations du jeu au-dessus de 60 fps** : les sols qui portent un personnage, et les surfaces d'eau en pas fixes | Graphics → *Above-60 fixes* | mesuré ici (voir le test de la plateforme, plus bas). **À confirmer** chez toi |
+| **Six leviers CPU mesurés** : batched submits, prefetch des descripteurs, affinité CCX, workers et segments du replay, barrières d'ordre de draw | Graphics, les lignes signées « Added by Dimi42FR » | batched submits : 33-41 → 46-61 fps sur RADV ; prefetch : ~215 000 scans sautés. **À confirmer sur NVIDIA et Intel** |
+| **Un Setup qui compile chez le joueur** : ton `.nup` vérifié avant tout, les outils vérifiés par SHA-256, un seul build à la fois, reprise après un abandon, rien qui sorte de la machine | `OcaDimSetup.exe` | utilisé ici. **À confirmer** : une installation complète sur un PC vierge |
 
-**Ce qui n'est pas dans cette liste : le Setup.** L'amont distribue déjà un builder qui compile chez le joueur depuis ses
-propres fichiers, avec ses outils vérifiés ; le nôtre est une interface et un parcel de plus, pas une nouveauté. Il est
-décrit au §4 pour ce qu'il fait, pas comme une première.
+Rien de tout ça n'est une première mondiale, et on ne le prétend pas : c'est ce qu'on a ajouté, avec ses chiffres et ses
+limites. Deux des correctifs viennent de **NX2navi** (domaine public / MIT) et sont portés ici. Le détail complet, avec
+chaque licence, est dans [CREDITS.md](CREDITS.md).
 
-Si l'un de ces points existe déjà ailleurs, dis-le : on corrigera la formulation et on créditera.
+### Trois choses à essayer ce soir
+
+1. **La frame generation, en deux minutes.** Graphics → *Frame generation by* → **AMD FSR FG**, puis va dans une zone
+   chargée. Le compteur doit afficher `Base xx, AMD FSR FG`. Si ça refuse sur ta carte AMD, le log dit pourquoi : envoie-le,
+   c'est exactement ce qu'on veut savoir.
+2. **Le test qui se voit à l'œil nu : une plateforme qui te porte.** Mets le *Game frame rate cap* à 144, tiens-toi sur une
+   plateforme mobile (un ascenseur, un radeau), puis compare *Above-60 fixes* **Off** et **On**. Off : le personnage
+   **glisse**. On : il **reste dessus**. C'est le symptôme de l'issue 1798 ; il faut dépasser 100 fps pour le voir, ce que le
+   jeu d'origine n'avait jamais prévu.
+3. **Un petit PC ?** Preset Minimum (4GB), et donne-nous tes **4 chiffres** : fps, frame time, 1 % low, et ce que le
+   Breakdown met sur le GPU et le CPU. Le formulaire :
+   [Retour sur un petit PC](https://github.com/Dimi42FR/OcaDim/issues/new?template=retour-petit-pc.yml).
+
+### Comment aider, sans coder
+
+| Le temps que ça prend | Ce que ça change |
+|---|---|
+| **1 minute** | Une issue « ça marche / ça ne marche pas », avec ta carte et ton pilote. Deux lignes suffisent |
+| **5 minutes** | Le formulaire petit PC : c'est lui qui décidera des prochains chantiers |
+| **15 minutes** | La FG sur ta carte, avec le log : c'est ce qui dira si elle tient ailleurs que sur RDNA 4 |
+| **1 heure** | Un avant/après sur ta scène habituelle : le meilleur retour qu'on puisse recevoir |
+
+Ce qui nous aide le plus, ce n'est pas « c'est bien » : c'est **où ça casse**, sur quelle carte, et ce que dit le compteur.
 
 ---
 
