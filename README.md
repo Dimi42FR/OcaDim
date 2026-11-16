@@ -440,7 +440,7 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | Frame generation | Off, Auto, 2x to 8x | Off |
 | | Frame generation by | Auto (NVIDIA DLSS Frame Generation where it runs: RTX 40 and newer, with a temporal Upscaler; else the built-in one; with frame generation on, the row shows who makes the frames, as Auto: DLSS FG, and why not DLSS FG when another does), Built-in FG. Changes at once | Auto |
 | | Frame pacing | Off, On | Off; a quality preset turns it on |
-| | Game frame rate cap | 60 (the console's), 90, 120, 144, 165, 240, Uncapped (changes at once) | 60 |
+| | Game frame rate cap | 30, 60 (the console's), 90, 120, 144, 165, 240, Uncapped (changes at once) | 60 |
 | | NVIDIA Reflex | Off, On, On + Boost (shown only on NVIDIA GPUs with `VK_NV_low_latency2`) | Off |
 | | AMD Anti-Lag 2 | Off, On (shown only on AMD GPUs with `VK_AMD_anti_lag`) | Off |
 | | Fullscreen | Off, On (the same as <kbd>F11</kbd>) | Off |
@@ -545,8 +545,9 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
   Scarecrow's Song keeps the timing of its eight-note recording and playback above 60. Saved songs are not retimed;
   re-record a song after updating if its recorded rhythm was lost.
   **Uncapped** renders as fast as the PC can (the game still keeps real time). A display that waits for its refresh still
-  holds the frames to its refresh rate: V-Sync on, or the driver's FIFO mode. `HOS_FPS_MAX=<61-1000>` sets a cap for one
+  holds the frames to its refresh rate: V-Sync on, or the driver's FIFO mode. `HOS_FPS_MAX=30` or `HOS_FPS_MAX=<61-1000>` sets a cap for one
   run.
+  The 30 FPS cap uses host pacing and real-time stepping, including when Game speed is Per frame. It is saved as `frame_rate_cap=-1`; existing cap values 0–6 keep their meanings.
 - **Bug report** writes a folder `bug-reports/<date>_<time>` in the game folder with what an issue needs: `report.txt`,
   which answers the [game problem form](https://github.com/NotRexed/Hookshot/issues/new?template=1-game-problem.yml)'s
   questions under its own headings (the version, the map you are in, your graphics card and driver, CPU, RAM and
