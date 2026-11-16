@@ -7174,7 +7174,7 @@ static void dlss_trace_draw(const NvnState& s, const Program& p, const DrawArgs&
 static void skin_check(const NvnState& s, const Program& p, const DrawArgs& d, const Targets& at) {
     if (d.mesh || !d.indexed || d.indirect || d.instances != 1 || !at.n || !at.color[0] || !at.depth ||
         !temporal_scene_size(at.width, at.height) || !temporal_scene_format(at.color_format[0]) || s.nvattr < 7 ||
-        !temporal_wanted())
+        (!temporal_wanted() && !temporal_fg_inputs()))   // (longshot: and for frame generation's inputs alone)
         return;
     const auto attr = [&](int i) { return *reinterpret_cast<const nvn_va_st*>(&s.vattr[i]); };
     const nvn_va_st pos = attr(0);
@@ -8655,7 +8655,8 @@ bool temporal_stand_in(VkCommandBuffer cmd, const NvnState& s, const Program& p)
     // share of the Render resolution row (67%: 6676619641320ba7, 58% f10782f9e58b6a7c, 50% 72ba090c70fe2614, 33%
     // 0775215f8da720e6 at 2048x1152), by their shape: a network sampling one texture into one image. temporal_upscale takes those
     // only when the texture is this frame's scene, in the gameplay networks' input format, and the image the picture)
-    if ((!temporal_wanted() && !temporal_off()) || p.stages.empty()) return false;   // (Off: the network's stretch)
+    // (Off: the network's stretch; with no engine, frame generation's inputs alone: temporal_fg_inputs, the network runs)
+    if ((!temporal_wanted() && !temporal_off() && !temporal_fg_inputs()) || p.stages.empty()) return false;
     const Stage& st = p.stages[0];
     if (!gameplay_network(p.key) && !(st.info.uses_cooperative_matrix && st.info.texture_descriptors.size() == 1 &&
                                       st.info.image_descriptors.size() == 1))
@@ -8709,7 +8710,8 @@ static bool temporal_rejected_network(VkCommandBuffer cmd, uint64_t key, Texture
     // another upscaler draws. Without it, on a card that leaves these networks out, FSR 3.1's own Render resolution steps
     // were a plain stretch: issue #1829)
     const bool fsr3 = fsr3_upscale(cmd, key, false, src, in_view, dst, out_view, 0);
-    const bool done = fsr3 || ((temporal_wanted() || temporal_off()) && temporal_upscale(cmd, key, false, src, in_view, dst, out_view, 0));
+    const bool done = fsr3 || ((temporal_wanted() || temporal_off() || temporal_fg_inputs()) &&
+                               temporal_upscale(cmd, key, false, src, in_view, dst, out_view, 0));
     last_dyn_valid = false, last_desc_valid = false, last_vb_valid = false, last_pipeline = VK_NULL_HANDLE;
     vertex_set.on = false, last_ib.on = false;
     if (!done) return false;

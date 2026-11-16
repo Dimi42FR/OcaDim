@@ -748,11 +748,11 @@ const char* hn_resolution(int v, int variant) {
     return "A steady size: lower is faster, and softer.";
 }
 /// (longshot) Whether the Frame generation by row offers DLSS FG: where DLSS-G can run in this process as far as is known
-/// (vk_dlss.cpp dlss_fg_unavailable). Where it cannot, the row has Built-in FG alone (row_fixed) and its line says why
+/// (vk_dlss.cpp dlss_fg_unavailable). Where it cannot, the row has FSR 3.1 FG (0, the default, and 2 the same) and Built-in
+/// FG, and its line at FSR 3.1 FG says why not DLSS FG
 bool framegen_by_dlss_offered() { return dlss_fg_unavailable() == FG_SKIP_NONE; }
-/// Frame generation by with nothing to choose: DLSS FG cannot run (Built-in FG alone), or RX_VK_DLSS_FG=1 chooses DLSS FG
-/// for the run (vk_dlss.cpp dlss_fg_forced)
-bool framegen_by_fixed() { return !framegen_by_dlss_offered() || dlss_fg_forced(); }
+/// Frame generation by with nothing to choose: RX_VK_DLSS_FG=1 chooses DLSS FG for the run (vk_dlss.cpp dlss_fg_forced)
+bool framegen_by_fixed() { return dlss_fg_forced(); }
 /// A row with nothing else to choose here: shown without its arrows, Left and Right leave it (and the saved value) alone
 bool row_fixed(const int* value) {
     return (value == &opts.dlss && ur::upscaler_fixed(upscalers_available())) ||
@@ -1102,12 +1102,13 @@ const char* framegen_maker_name() {
     default: return nullptr;
     }
 }
-/// Frame generation by: the choice, DLSS FG (0) or Built-in FG (1); Built-in FG whatever is saved where DLSS FG cannot run,
-/// DLSS FG with RX_VK_DLSS_FG=1.
+/// Frame generation by: the choice, DLSS FG (0), Built-in FG (1) or FSR 3.1 FG (2); where DLSS FG cannot run, 0 is FSR 3.1
+/// FG (AMD FSR 3.1's frame interpolation, vk_fsr3fi.cpp asked); DLSS FG with RX_VK_DLSS_FG=1.
 /// Who makes the frames now (the game's own menus give DLSS-G nothing to make them from) is the row's line and the FPS
 /// counter's (framegen_maker_name), not the choice's name
 const char* tx_framegen_by(int v) {
-    return framegen_by_dlss_offered() && (v == 0 || dlss_fg_forced()) ? "DLSS FG" : "Built-in FG";
+    if (framegen_by_dlss_offered() && (v == 0 || dlss_fg_forced())) return "DLSS FG";
+    return v == 1 ? "Built-in FG" : "FSR 3.1 FG";
 }
 /// Why DLSS-G does not make the frames now (vk_dlss.h FgSkip, and the Auto multiplier's FG_SKIP_COUNT), the row's line after
 /// "Not DLSS FG now: ". most: its runtime's most made frames, for FG_SKIP_TOO_MANY
@@ -1143,6 +1144,7 @@ const char* hn_framegen_by(int v, int variant) {
     static const char* const t[] = {
         "NVIDIA DLSS Frame Generation (RTX 40 and newer), made from the Upscaler's depth and motion.",
         "The renderer's own: made from the finished picture alone.",
+        "AMD FSR 3.1 frame interpolation, made from the scene's depth and motion: any GPU.",
     };
     static const char* const paused = "DLSS FG paused: the game's own menus, movies and loading screens draw no 3D to make "
                                       "frames from, so only the game's own frames show.";
@@ -1167,7 +1169,7 @@ const char* hn_framegen_by(int v, int variant) {
     bool off = false;      // (DLSS FG cannot run: not offered)
     bool forced = false;   // (RX_VK_DLSS_FG=1 chooses)
     if (variant >= 0) {
-        if (variant == 0) return t[v == 0 ? 0 : 1];
+        if (variant == 0) return t[std::clamp(v, 0, 2)];
         if (variant < nows) why = variant;
         else if (variant == nows) return paused;
         else if (variant > forced_at && variant - forced_at <= kCannot) {
@@ -1178,12 +1180,14 @@ const char* hn_framegen_by(int v, int variant) {
         } else {
             return nullptr;
         }
-    } else if ((why = dlss_fg_unavailable()) != FG_SKIP_NONE) {
+    } else if (v == 1 && !dlss_fg_forced()) {
+        return t[1];   // (Built-in FG, chosen)
+    } else if ((why = dlss_fg_unavailable()) != FG_SKIP_NONE) {   // (FSR 3.1 FG makes them: why not DLSS FG)
         off = true, dlss = (int)dlss_why();
     } else if (dlss_fg_forced()) {
         forced = true;
     } else {
-        if (v != 0) return t[1];
+        if (v != 0) return t[v == 2 ? 2 : 1];
         const FgMaker m = opts.framegen >= 1 ? framegen_maker() : FgMaker::None;
         if (m == FgMaker::DlssPaused) return paused;
         if (m != FgMaker::BuiltIn && m != FgMaker::Fsr3) return t[0];
@@ -1196,7 +1200,7 @@ const char* hn_framegen_by(int v, int variant) {
     }
     const char* text = off && why == FG_SKIP_DEVICE && dlss_why_text(dlss) ? dlss_why_text(dlss)
                                                                           : framegen_skip_text(why, most);
-    if (!text) return t[v == 0 && !off ? 0 : 1];
+    if (!text) return t[off || v == 2 ? 2 : v == 1 ? 1 : 0];
     snprintf(out, sizeof b[0], off ? "DLSS FG cannot run: %s" : "Not DLSS FG now: %s", text);
     return out;
 }
@@ -1478,7 +1482,7 @@ Row rows[] = {
     {TAB_GRAPHICS, "Frame generation", &opts.framegen, 0, 8, 1, tx_framegen,
      "Makes frames between the game's own, for smoother motion, at a little input delay. Fast motion or camera cuts can "
      "show artifacts.", hn_framegen, false, true},
-    {TAB_GRAPHICS, "Frame generation by", &opts.framegen_by, 0, 1, 1, tx_framegen_by,
+    {TAB_GRAPHICS, "Frame generation by", &opts.framegen_by, 0, 2, 1, tx_framegen_by,
      "Who makes the frames at 2x and up. NVIDIA DLSS Frame Generation needs a temporal Upscaler (DLSS, DLAA or FSR) for "
      "the scene's depth and motion. Changes at once.", hn_framegen_by, false, true},
     {TAB_GRAPHICS, "Game frame rate cap", &opts.fps_cap, -1, 6, 1, tx_fps_cap,
@@ -2881,6 +2885,8 @@ void set_row(Row& r, int v, int dir, bool keep = true) {
         v = step_output_choice(*r.value, dir);
         if (v == *r.value) return;
     }
+    // (longshot) Frame generation by where DLSS FG cannot run: FSR 3.1 FG (0; a 2 is the same) and Built-in FG (1)
+    if (r.value == &opts.framegen_by && !framegen_by_dlss_offered()) v = (v % 2 + 2) % 2;
     if (stops_at_ends(r)) v = std::min(std::max(v, r.lo), r.hi);   // (a scale: it stops at its ends)
     if (r.value == &opts.pad_layout) {
         if (v > 2) v = dir > 0 ? 0 : 2;

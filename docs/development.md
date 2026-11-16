@@ -270,11 +270,13 @@ runs the native network; this is a test override, not a requirement for GPUs alr
 
 
 
-For **FSR 3.1 frame generation**, use Frame generation **2x** and `RX_VK_FSR_FG=1`. Native HDR PsychoV35
+**FSR 3.1 frame generation** makes the frames at any Frame generation setting (Auto, 2x to 8x) where DLSS FG does not, with
+Frame generation by at **FSR 3.1 FG**, or at **DLSS FG** (`RX_VK_FSR_FG=0` never, `=1` over the row; `RX_VK_FSR_FG_HUD=0` lets
+AMD's passes move the HUD with the scene, as they did, for an A/B). Native HDR PsychoV35
 automatically enables the compatible independent RGBA16F depth/motion input path unless `RX_VK_PSYCHOV35_DLSS=0`.
 This does not enable the legacy FSR
-upscaler. To isolate FSR generation on NVIDIA hardware, select Frame generation by **Built-in FG** or use
-`RX_VK_DLSS_FG=0`; confirm actual `fsr3fi` made-frame counts, not only the menu selection. FSR generation remains off by default.
+upscaler. To isolate FSR generation on NVIDIA hardware, select Frame generation by **FSR 3.1 FG** or use
+`RX_VK_DLSS_FG=0`; confirm actual `fsr3fi` made-frame counts, not only the menu selection.
 The captured present's actual PQ/sRGB encoding and HDR peak are given to both AMD interpolation and optical flow;
 format, tone mapper, encoding and luminance changes reset the corresponding histories. See
 [FSR frame generation](temporal-history.md#native-hdr-and-fsr-31-frame-generation) for limits and validation.
