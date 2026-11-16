@@ -639,6 +639,41 @@ def patch_solver_steps(s):
     return s, done
 
 
+# f_8263e8e0, the steering update: after applying a turn it clamps the saved rate (+36) to the turn's magnitude times
+# the step. The turn was already scaled by the step, so a rate-limited update keeps rate * step squared: above 60 fps
+# Gohma can keep circling the ceiling without reaching her next point (issue 312). Convert the turn back to a rate for
+# both bounds when 0 < step < 1. At a step of 1 or more, and for invalid steps, keep the game's arithmetic unchanged.
+TURN_RATE_HEAD = "void f_8263e8e0(Ctx *__restrict A64_NOESC c) {\n"
+TURN_RATE_OLD = """    {uint64_t _a=0,_b=0,_z,_v;memcpy(&_a,c->vreg[0],4);memcpy(&_b,c->vreg[1],4);_z=(_a^_b)&0x80000000ULL;
+    _v=a64_fpx_mul32_fma32(c,_a,_b,_z);
+    a64_vset64(c->vreg[1],_v);}
+    {uint64_t _a=0,_b=0,_z,_v;memcpy(&_a,c->vreg[0],4);memcpy(&_b,c->vreg[8],4);_z=(_a^_b)&0x80000000ULL;
+    _v=a64_fpx_mul32_fma32(c,_a,_b,_z);
+    a64_vset64(c->vreg[0],_v);}
+"""
+# v8 holds the positive step throughout both instructions. Its binary32 bits test the interval without a host FP
+# comparison (or changing the guest's flags); division still uses the guest FP helper, as the original multiply does.
+TURN_RATE_NEW = TURN_RATE_OLD.replace(
+    "    _v=a64_fpx_mul32_fma32(c,_a,_b,_z);",
+    "    if ((uint32_t)c->vreg[8][0] > 0 && (uint32_t)c->vreg[8][0] < 0x3f800000u)\n"
+    "        _v=a64_fpx_div32_div32(c,_a,_b);\n"
+    "    else _v=a64_fpx_mul32_fma32(c,_a,_b,_z);")
+
+
+def patch_turn_rate(s):
+    """The saved steering rate's two bounds: (s, 1) when both are patched, now or before; a changed anchor is left alone."""
+    at = _function(s, TURN_RATE_HEAD)
+    if at is None:
+        return s, 0
+    head, end = at
+    body = s[head:end]
+    if body.count(TURN_RATE_NEW) == 1:
+        return s, 1
+    if body.count(TURN_RATE_OLD) != 1:
+        return s, 0
+    return s[:head] + body.replace(TURN_RATE_OLD, TURN_RATE_NEW, 1) + s[end:], 1
+
+
 def patch_text_speed(s):
     """The scale at the head of the letters' block of f_80b1e140 (Text speed), and the call to hos_oot_text_pane after it
     (Text size: host/oot_text_size.c); None when the file has no such function, s unchanged when the
@@ -1025,6 +1060,11 @@ def patch_file(s, name, protect_hearts=False):
     if solver != out:
         lines.append("oot_patches: the solver steps rounded up above 60 fps in " + name)
     out = solver
+    turn, found = patch_turn_rate(out)
+    counts["saved turn rate"] += found
+    if turn != out:
+        lines.append("oot_patches: the saved steering rate above 60 fps in " + name)
+    out = turn
     return out, counts, lines
 
 
@@ -1032,7 +1072,7 @@ def report(paths, counts, protect_hearts=False):
     """The warnings from the files' counts (each file's patch_file counts, in the order of paths), and the step divides' rule:
     both or neither, so a file of paths that has the hook is put back"""
     done = {"dynamic resolution branch": 0, "text speed block": 0, "fixed path's scale": 0, "movie's frame count": 0,
-            "ocarina note wait": 0}
+            "ocarina note wait": 0, "saved turn rate": 0}
     if protect_hearts:   # (the supported build's: these places are its functions)
         done["menu focus hook"] = 0
         done["menu tick hook"] = 0
