@@ -100,3 +100,17 @@ Prochaines pistes, dans l'ordre : **le gouverneur de budget** (une page de menu,
 hoquets de 6,6 et 13,2 fps mesurés), puis **bindless** si on veut vraiment dépasser +10 %.
 
 ``
+
+## Le lookahead, mesure : mauvaise cible
+
+Les pires frames des journaux de Dimi (RX_VK_SLOW_LOG=30, ville et chargements) :
+
+| Frame | total | draw | submit | descripteurs | commands | pipelines | memory sync |
+|---|---|---|---|---|---|---|---|
+| 14739 | 6512 ms | 1469 | 908 | 534 | 512 | 339 | 1,1 |
+| 14751 | 2765 ms | 610 | 288 | 143 | 139 | 71 | 0,6 |
+| 187067 | 3926 ms | 449 | 651 | 255 | 99 | 55 | 1,3 |
+
+**La memoire ne coute rien** (memory sync ~1 ms) : anticiper les textures ne reglerait pas ces hoquets. Ils sont faits du **cout par draw de l enregistrement** (draw + descripteurs + submit + commands) quand 3 300 a 5 300 draws arrivent dans une frame, plus, pour les 6,5 s, ~4 s hors des postes mesures (le chargement du jeu).
+
+Conclusion : le lookahead de ressources est ecarte. La cible est le **cout par draw de la preparation d etat** (idee 4) : memes chemins en frame normale (2,5 ms de binds) et en chargement.
