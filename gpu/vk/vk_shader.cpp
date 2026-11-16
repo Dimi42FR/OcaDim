@@ -30,6 +30,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "pipeline_cache_file.h"   // (OcaDim: the shader seed mapped read-only, not read into a 539 MB vector)
 #include "shader_recompiler/backend/spirv/mma_layout.h"
 #include "shader_recompiler/ir_opt/passes.h"
 #include "shader_recompiler/ir_opt/fragment_output_guard.h"
@@ -2184,7 +2185,10 @@ struct SeedStage {
     uint8_t sph[sizeof(Shader::ProgramHeader)]{};
 };
 struct Seed {
-    std::vector<uint8_t> blob;
+    // (OcaDim) the file mapped read-only, not read into a vector: it is 539 MB on a prepared install and never written. The
+    // pages touched are the file's, so the system can drop them under pressure, and they do not count as the process's commit
+    // (the commit rule's pressure at the title is what load_default.h warns about). Same lifetime: mapped at the first open
+    PipelineCacheFile blob;
     std::vector<SeedStage> stages;
     std::vector<std::vector<uint32_t>> programs;
     std::unordered_map<uint64_t, uint32_t> index;   // (a stage by its code key: the pipeline state list's programs)
@@ -2196,8 +2200,8 @@ std::string beside_exe(const char* name) {
     return dir.substr(0, dir.find_last_of("\\/") + 1) + name;
 }
 Code stage_of_seed(const SeedStage& st) {
-    return parse_code(seed.blob.data() + st.control, std::vector<uint8_t>(seed.blob.begin() + (ptrdiff_t)st.code,
-                                                                          seed.blob.begin() + (ptrdiff_t)st.code + st.end));
+    const uint8_t* code = seed.blob.data() + st.code;
+    return parse_code(seed.blob.data() + st.control, std::vector<uint8_t>(code, code + st.end));
 }
 /// (longshot) A seed stage that does not parse fails its program: which one, and why (the prepare's "1 failed" named nothing)
 void seed_stage_failed(const Code& c, uint64_t program) {
@@ -2210,15 +2214,10 @@ void seed_stage_failed(const Code& c, uint64_t program) {
 std::string seed_path() { return beside_exe("longshot_shaders.bin"); }
 
 size_t seed_open() {
-    if (FILE* f = fopen(seed_path().c_str(), "rb")) {
-        _fseeki64(f, 0, SEEK_END);
-        seed.blob.resize((size_t)_ftelli64(f));
-        _fseeki64(f, 0, SEEK_SET);
-        if (seed.blob.size() < 16 || fread(seed.blob.data(), 1, seed.blob.size(), f) != seed.blob.size() ||
-            memcmp(seed.blob.data(), "HKSEED01", 8))
-            seed.blob.clear();
-        fclose(f);
-    }
+    if (seed.blob.empty())   // (mapped once, the file read-only: PARSE below each time, as before)
+        seed.blob = PipelineCacheFile::read(seed_path(), [](const uint8_t* head, uint64_t size) {
+            return size >= 16 && !std::memcmp(head, "HKSEED01", 8);
+        });
     if (seed.blob.empty()) return 0;
     static const bool seed_check = env_on("RX_VK_SEED_CHECK");
     disk_init();
@@ -2229,7 +2228,7 @@ size_t seed_open() {
     const size_t size = seed.blob.size();
     const auto u32 = [](size_t pos) { uint32_t v; std::memcpy(&v, seed.blob.data() + pos, 4); return v; };
     const auto bad = [] {
-        seed.blob.clear(), seed.stages.clear(), seed.programs.clear(), seed.index.clear();
+        seed.blob = PipelineCacheFile{}, seed.stages.clear(), seed.programs.clear(), seed.index.clear();
         disk_listing = false;
         return (size_t)0;
     };
