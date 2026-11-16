@@ -23,14 +23,16 @@ inline ImU32 alpha(ImU32 c, float k) {
     return (c & ~IM_COL32_A_MASK) | ((ImU32)std::clamp(a, 0, 255) << IM_COL32_A_SHIFT);
 }
 
-// ---- the palette ----
-constexpr ImU32 kInk = rgba(240, 232, 214), kInkBright = rgba(255, 250, 240), kSoft = rgba(214, 204, 184), kDim = rgba(168, 156, 136),
-                kGold = rgba(222, 152, 40), kGoldHi = rgba(238, 168, 52), kGoldInk = rgba(36, 24, 8), kAccent = rgba(214, 170, 96),
-                kEdge = rgba(122, 98, 64, 150), kCellDark = rgba(30, 25, 19, 246), kCellName = rgba(60, 47, 32, 240),
-                kCellNameSel = rgba(92, 70, 42, 248), kBronze = rgba(84, 64, 38), kColumn = rgba(34, 26, 17, 228),
-                kBannerTop = rgba(184, 146, 96, 246), kBanner = rgba(176, 138, 88, 246), kBannerInk = rgba(46, 30, 12),
-                kBannerEdge = rgba(70, 48, 24), kTabInset = rgba(84, 56, 30, 250), kBox = rgba(36, 28, 19, 248),
-                kBoxEdge = rgba(122, 98, 64, 220), kBar = rgba(22, 17, 11, 232), kListen = rgba(150, 120, 40);
+// ---- the palette (OcaDim: the brand's night blue and gold, assets/branding; the game's warm paper kept for the text) ----
+// (a warm ink on the game's bright pixels still clears 4.5:1; the gold is the one accent, and the selected value is dark ink
+// on it. The tan the game's own menu uses is now the brand's navy: the menu reads as OcaDim over the game, not as the game)
+constexpr ImU32 kInk = rgba(243, 234, 216), kInkBright = rgba(255, 251, 242), kSoft = rgba(215, 204, 184), kDim = rgba(169, 160, 140),
+                kGold = rgba(227, 178, 76), kGoldHi = rgba(240, 192, 96), kGoldInk = rgba(20, 16, 10), kAccent = rgba(201, 164, 94),
+                kEdge = rgba(46, 62, 88, 160), kCellDark = rgba(14, 22, 38, 246), kCellName = rgba(26, 36, 54, 240),
+                kCellNameSel = rgba(36, 50, 74, 248), kBronze = rgba(58, 74, 102), kColumn = rgba(16, 26, 43, 228),
+                kBannerTop = rgba(27, 42, 68, 246), kBanner = rgba(22, 35, 58, 246), kBannerInk = rgba(233, 217, 180),
+                kBannerEdge = rgba(51, 72, 106), kTabInset = rgba(30, 44, 70, 250), kBox = rgba(16, 26, 43, 248),
+                kBoxEdge = rgba(58, 80, 116, 220), kBar = rgba(11, 18, 32, 232), kListen = rgba(192, 138, 50);
 constexpr int kDimAlpha = 185;   // (the game behind the menu)
 
 /// The unit: pixels per point. By the window's height and the Menu size (1 Small, 2 Medium, 3 Large; anything else, as the
@@ -125,6 +127,21 @@ inline void spaced(Ctx& c, ImFont* font, float px, ImVec2 p, ImU32 col, const ch
         c.d->AddText(font, px, ImVec2(x, p.y), col, q, next(q));
         x += font->CalcTextSizeA(px, FLT_MAX, 0, q, next(q)).x + gap;
     }
+}
+/// Capitals with extra space between the letters (gap in pixels), from x (left) on; the width drawn
+inline float spaced_left(Ctx& c, ImFont* font, float px, ImVec2 p, ImU32 col, const char* t, float gap) {
+    t = i18n::tr(t);
+    const auto next = [](const char* q) {
+        const char* e = q + 1;
+        while (*e && ((unsigned char)*e & 0xC0) == 0x80) e++;
+        return e;
+    };
+    float x = p.x;
+    for (const char* q = t; *q; q = next(q)) {
+        c.d->AddText(font, px, ImVec2(x, p.y), col, q, next(q));
+        x += font->CalcTextSizeA(px, FLT_MAX, 0, q, next(q)).x + gap;
+    }
+    return x - p.x - gap;
 }
 /// A soft shadow under a rectangle: layers growing outwards, fading
 inline void shadow(Ctx& c, ImVec2 a, ImVec2 b, float spread, float strength, float dy) {
