@@ -745,24 +745,50 @@ bool layouts_for(const VkDescriptorSetLayoutCreateInfo& li, VkPipelineLayoutCrea
     return true;
 }
 
-// (OcaDim, RX_VK_DRAW_RUNS=1) How many draws in a row share one program: the first bound on what auto-batching could merge
-// (a batch needs the same program and formats; the program alone is the optimistic one). Off: one bool test per draw.
-void draw_runs_note(const void* prog) {
+thread_local uint64_t last_push_hash = 0;   // (the draw's push block, as draw_runs_note's second key)
+bool draw_runs_on() {
     static const bool on = env_on("RX_VK_DRAW_RUNS");
-    if (!on) return;
+    return on;
+}
+// (OcaDim, RX_VK_DRAW_RUNS=1) How many draws in a row share one program (the optimistic bound on what auto-batching could
+// merge), and how many share the program *and* their push constants (the strict one: a draw whose push differs cannot join
+// a batch without a shader that reads its instance). Off: one bool test per draw.
+void draw_runs_note(const void* prog) {
+    if (!draw_runs_on()) return;
     static const void* last = nullptr;
+    static uint64_t last_h = 0;
     static uint64_t draws = 0, runs = 0, cur = 0, longest = 0;
-    draws++;
-    if (prog == last) {
-        cur++;
+    static uint64_t s_runs = 0, s_cur = 0, s_long = 0;
+    // (the window: the last 2000 draws, so a heavy scene's runs are read on their own, not averaged with menus)
+    static uint64_t w_draws = 0, w_runs = 0, w_cur = 0, w_long = 0, w_sruns = 0, w_scur = 0, w_slong = 0;
+    const bool same = prog == last;
+    const bool strict = same && last_push_hash == last_h;
+    last = prog, last_h = last_push_hash;
+    draws++, w_draws++;
+    if (same) {
+        cur++, w_cur++;
+        if (strict) s_cur++, w_scur++;
+        else {
+            if (s_cur > s_long) s_long = s_cur;
+            if (w_scur > w_slong) w_slong = w_scur;
+            s_runs++, s_cur = 1, w_sruns++, w_scur = 1;
+        }
     } else {
         if (cur > longest) longest = cur;
-        runs++, cur = 1, last = prog;
+        if (w_cur > w_long) w_long = w_cur;
+        if (s_cur > s_long) s_long = s_cur;
+        if (w_scur > w_slong) w_slong = w_scur;
+        runs++, cur = 1, w_runs++, w_cur = 1;
+        s_runs++, s_cur = 1, w_sruns++, w_scur = 1;
     }
-    if (draws % 3000 == 0)
-        logf("vk: draw runs (RX_VK_DRAW_RUNS=1): %llu draws, %llu runs, average %.2f, longest %llu",
-             (unsigned long long)draws, (unsigned long long)runs, draws / (double)std::max<uint64_t>(runs, 1),
-             (unsigned long long)std::max<uint64_t>(longest, cur));
+    if (w_draws == 2000) {
+        logf("vk: draw runs window (RX_VK_DRAW_RUNS=1): %llu draws, program-only %llu runs (avg %.2f, longest %llu), "
+             "program+push %llu runs (avg %.2f, longest %llu)",
+             (unsigned long long)w_draws, (unsigned long long)w_runs, w_draws / (double)std::max<uint64_t>(w_runs, 1),
+             (unsigned long long)std::max<uint64_t>(w_long, w_cur), (unsigned long long)w_sruns,
+             w_draws / (double)std::max<uint64_t>(w_sruns, 1), (unsigned long long)std::max<uint64_t>(w_slong, w_scur));
+        w_draws = w_runs = w_cur = w_long = w_sruns = w_scur = w_slong = 0;
+    }
 }
 
 void ensure_layout(Program& p) {
@@ -4851,7 +4877,10 @@ thread_local uint64_t fallback_indirect_input = 0;
 
 void push_constants(VkCommandBuffer cmd, const Program& p, const Targets* at, uint32_t fallback_first = 0) {
     checkpoint(cmd, p, at ? 'd' : 'c');
-    if (!p.uses_push) return;   // (most programs read none: a push a draw was ~5% of the replay's commands)
+    if (!p.uses_push) {
+        if (draw_runs_on()) last_push_hash = 0;   // (no push block: the program alone is the draw's key)
+        return;   // (most programs read none: a push a draw was ~5% of the replay's commands)
+    }
     FINE_N(FC_PUSHC, 1);
     uint8_t data[kPushSize]{};
     const float one = 1.0f;
@@ -4878,6 +4907,13 @@ void push_constants(VkCommandBuffer cmd, const Program& p, const Targets* at, ui
         // title's SMAA flagged 94% of the picture as edges: the red and streaked frames)
         const float ra[4] = {(float)at->width, (float)at->height, 0.0f, 0.0f};
         std::memcpy(data + Shader::Backend::SPIRV::RENDERAREA_LAYOUT_OFFSET, ra, sizeof ra);
+    }
+    // (OcaDim, RX_VK_DRAW_RUNS=1) the push block as the draws' key beside their program: two draws that differ here
+    // cannot be batched without a shader that reads its instance.
+    if (draw_runs_on()) {
+        uint64_t h = 1469598103934665603ull;
+        for (size_t i = 0; i < kPushSize; i++) h = (h ^ data[i]) * 1099511628211ull;
+        last_push_hash = h;
     }
     vkCmdPushConstants(cmd, p.layout, p.push_stages, 0, kPushSize, data);
 }
