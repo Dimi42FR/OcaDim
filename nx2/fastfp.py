@@ -114,14 +114,15 @@ def ff_convs(text):
     return n
 
 
-def ff_region(items):
+def ff_region(items, least=None):
     """a run's C text ([(pc, text)], every text ff_eligible): the fast and exact copies, or the exact text alone when the
-    run has too few float ops to pay for its check. (text, number of ops made fast)"""
+    run has too few float ops to pay for its check. (text, number of ops made fast). least: ff_min(), read once by the
+    caller (emit_function: once a function, not for each of the 3.8 million runs of OoT)"""
     exact = "\n".join(t for _, t in items)
     # (FF_CONV's matches are in one instruction's text each, so the run's count is their sum: most runs are a few
     # instructions with no float op, and only a run with enough of them is searched again below)
     n = sum(ff_convs(t) for _, t in items)
-    if n < ff_min():
+    if n < (ff_min() if least is None else least):
         return exact, 0
     fast = FF_CONV.sub(lambda m: "a64_ff_v%s(" % m.group(1) if m.group(1) else "a64_ff_%s(" % m.group(2), exact)
     xs = sorted({int(r) for r in REG_REF.findall(exact)})
@@ -323,10 +324,11 @@ def emit_function(self, e, texts):
     dirty = self.dirty_regs(body, pcs, texts) if local else None
     # (the run of joinable instructions so far, [(pc, text)]: ff_region)  # (fastfp)
     ff = bool(fastfp_mode()) and (ff_only() is None or self.fname(e) in ff_only())  # (fastfp)
+    least = ff_min()  # (fastfp)
     run = []  # (fastfp)
     def flush():  # (fastfp)
         if run:  # (fastfp)
-            text, n = ff_region(run)  # (fastfp)
+            text, n = ff_region(run, least)  # (fastfp)
             out.append(text)  # (fastfp)
             if n:  # (fastfp)
                 self.stats["ff_regions"] = self.stats.get("ff_regions", 0) + 1  # (fastfp)

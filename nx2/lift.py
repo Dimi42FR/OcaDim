@@ -29,6 +29,8 @@ import kit
 import nso2  # noqa: F401  (DT_RELR)
 import insn
 import fastfp   # (longshot) fast float regions (A64_FASTFP): its emit_function, under lift_fixes' and poll's wrappers
+import dead_flags   # (longshot) the kit's dead_flags, answered at once for a function that writes no flag
+import walk   # (longshot) the kit's walk, with one shared entry per plain op's word
 import lift_fixes
 import suyu_rt_fixes
 import chunks
@@ -44,6 +46,8 @@ import a64_rtgen
 
 insn.install()
 fastfp.install()   # (before lift_fixes and poll wrap emit_function: theirs go around this one)
+dead_flags.install()
+walk.install()
 lift_fixes.install()
 suyu_rt_fixes.install()
 
