@@ -4876,8 +4876,6 @@ void draw_fps(ui::Ctx& c, bool under_banner) {
         for (int i = 0; i < kCols; i++)
             if (col[i].ms > 0) ms[k++] = col[i].ms;
         // (up at once, down slowly, so the whole graph does not rescale with each frame that scrolls out)
-        const double want = fs::graph_top(target, fs::typical_ms(ms, k));
-        topms = want >= topms ? want : std::max(want, topms * 0.995);
         // (up at once, down slowly, so the whole graph does not rescale with each frame that scrolls out: 0.5% a 60th of a second,
         // whatever the frame rate the counter is drawn at)
         const double want = fs::graph_top(target, fs::typical_ms(ms, k));
@@ -4917,32 +4915,6 @@ void draw_fps(ui::Ctx& c, bool under_banner) {
     // with a render thread a lane under the graph on the same time axis, the render thread's frame)
     static ImVec2 pts[kCols];
     const auto yv = [&](float ms) { return std::max(gy0, gy1 - ms * py); };
-    const auto cx_of = [&](int i) { return x0 + (i + 0.5f - (float)scroll) * cw; };   // (scrolled smoothly)
-    // (the parts' colours, one meaning in every lane: blue the game's work, red the waits for the GPU, purple the render thread,
-    // grey the pacing and idle; the lighter shade of a family its smaller part)
-    static const ImU32 part_col[fs::kParts] = {ui::rgba(96, 160, 232), ui::rgba(160, 200, 245), ui::rgba(246, 150, 130),
-                                                ui::rgba(120, 120, 120), ui::rgba(168, 132, 230), ui::rgba(232, 72, 60)};
-    static const char* const names[fs::kParts] = {"Game", "Renderer", "GPU present", "Pacing", "Render thread", "GPU fence"};
-    static const bool part_waits[fs::kParts] = {false, false, true, false, true, true};   // (under the legend's "Waiting on")
-    static const int order[fs::kParts] = {fs::kGame, fs::kRender, fs::kWaitRender, fs::kWaitGpu, fs::kGpuWait, fs::kPace};
-    static const ImU32 rt_col[fs::kRtParts] = {ui::rgba(168, 132, 230), ui::rgba(210, 190, 245), ui::rgba(232, 72, 60),
-                                                ui::rgba(110, 110, 110)};
-    static const char* const rt_names[fs::kRtParts] = {"Recording", "Workers", "GPU slot", "Idle"};
-    const auto alpha = [](ImU32 c, int a) { return (c & 0x00FFFFFF) | ((ImU32)a << 24); };
-    c.d->PushClipRect(ImVec2(x0, gy0 - 8 * s), ImVec2(x1, gy1 + 1), true);
-    if (parts)
-        for (int i = 0; i < kCols; i++) {
-            if (col[i].ms <= 0) continue;
-            const float l = cx_of(i) - cw * 0.5f + 0.5f, r = l + cw - 0.5f;   // (a hairline between columns)
-            float yb = gy1;
-            for (int o = 0; o < fs::kParts && yb > gy0; o++) {
-                const float hgt = col[i].part[order[o]] * py;
-                if (hgt <= 0) continue;
-                const float yt = std::max(gy0, yb - hgt);
-                c.d->AddRectFilled(ImVec2(l, yt), ImVec2(r, yb), alpha(part_col[order[o]], 190));
-                yb = yt;
-            }
-        }
     const auto cx_of = [&](int i) { return x0 + (i + 0.5f - (float)scroll) * cw; };   // (scrolled smoothly)
     // (the parts' colours, one meaning in every lane: blue the game's work, red the waits for the GPU, purple the render thread,
     // grey the pacing and idle; the lighter shade of a family its smaller part)

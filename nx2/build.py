@@ -1021,8 +1021,6 @@ def flag_text(fl):
     """The flags an object key is named by. Include folders are left out (their headers are in deps). The builder's
     own folder is <root> (issue 565: versions\\<tag>\\... made every update look new). --sysroot= is <sysroot>: the
     AppImage mount is a new /tmp/.mount_... path every start, and that path is not a change in the headers. -MD is left out:
-    it writes the depfile beside the object (renderer_deps) and changes nothing in it."""
-    AppImage mount is a new /tmp/.mount_... path every start, and that path is not a change in the headers. -MD is left out:
     it writes the depfile beside the object (renderer_deps) and changes nothing in it. -fprofile-instr-use= is <profile>: the
     play profile (RX_PGO, RX_VK_PGO) is in the work folder, and its contents are in the -D..._PROFILE_SHA1 beside it; its path
     kept another work folder from sharing the hot pieces and the renderer's objects (object_store.py, dev_packs.py)."""
@@ -1674,15 +1672,6 @@ def main():
         for src in vk_sources():
             name = os.path.relpath(src, vk).replace(os.sep, "_")[:-4]
             lib = os.path.relpath(src, vk).split(os.sep)[0] in ("eden", "sirit")
-            obj = os.path.join(obj_dir, "vk_" + name + ".o")
-            extras = ((logo_text if os.path.basename(src) == "vk_imgui.cpp" else b"") +
-                      (ngx_deps if os.path.basename(src) == "vk_dlss.cpp" else b"") +
-                      (xess_deps if os.path.basename(src) == "vk_xess.cpp" else b"") +
-                      (imgui_deps if os.path.basename(src) in imgui_users else b""))
-            if not lib:   # (the back end's own files: the headers their depfile names, renderer_deps; DEPFILE_JOBS re-keys them)
-                DEPFILE_JOBS[obj] = (vdeps, vdeps_roots, extras)
-            vk_jobs.append((cxx, src, obj,
-                            (tp_vflags if lib else vflags + vk_pgo_flags) + ([] if lib else ["-MD"]) +
             obj = os.path.join(obj_dir, "vk_" + name + ".o")
             extras = ((logo_text if os.path.basename(src) == "vk_imgui.cpp" else b"") +
                       (output_device_deps if os.path.basename(src) == "vk_menu.cpp" else b"") +

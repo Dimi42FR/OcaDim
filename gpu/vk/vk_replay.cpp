@@ -3769,8 +3769,6 @@ static void wait_rec_seq(uint64_t seq, uint64_t timeout_ns, int* ok) {
     VkResult res;
     {
         FpsWait fw(fps_gpu_wait_kind());   // (the FPS counter's Breakdown; in the game's fence wait, its kind)
-        *ok = vkWaitSemaphores(dev.device, &wi, timeout_ns) == VK_SUCCESS;
-        FpsWait fw(fps_gpu_wait_kind());   // (the FPS counter's Breakdown; in the game's fence wait, its kind)
         res = vkWaitSemaphores(dev.device, &wi, timeout_ns);
     }
     *ok = res == VK_SUCCESS;

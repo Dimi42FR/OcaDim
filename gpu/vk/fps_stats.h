@@ -73,15 +73,6 @@ inline const char* corner_name(int v) {
 /// GPU work), and the wait for the frame's turn (the frame pacing, the game's own sleeps, vsync). (longshot) And the game's
 /// waits for its fences, on any of its threads (OoT's main thread makes most): for work the renderer had not recorded yet
 /// (kWaitRender), or had and the GPU had not run yet (kWaitGpu). On another thread they are carved out of the game's part:
-/// the presenting thread waited for that thread meanwhile
-enum Part { kGame, kRender, kGpuWait, kPace, kWaitRender, kWaitGpu, kParts };
-/// (longshot) The render thread's frame (threaded rendering): its recording and submitting (what is left), its waits for the
-/// parallel replay's workers, for the GPU (a recording slot), and for work (idle). Over the same present-to-present span
-enum RenderPart { kRtWork, kRtWorkers, kRtGpu, kRtIdle, kRtParts };
-/// is left), the renderer's recording and submitting, waits for the GPU (a recording slot, OoT's own poll for its frame's
-/// GPU work), and the wait for the frame's turn (the frame pacing, the game's own sleeps, vsync). (longshot) And the game's
-/// waits for its fences, on any of its threads (OoT's main thread makes most): for work the renderer had not recorded yet
-/// (kWaitRender), or had and the GPU had not run yet (kWaitGpu). On another thread they are carved out of the game's part:
 /// the presenting thread waited for that thread meanwhile. kWaitRender also takes the present's wait for room (the render
 /// thread a frame behind). kWaitMain: with the render thread, the present's wait for the main thread's signal that the frame
 /// is written (the game's own time, until then in the renderer's part)
@@ -104,27 +95,13 @@ struct Frame {
 /// that began before the frame did), and the game's the rest; then the fence waits of the game's other threads taken out of
 /// the game's part, as far as it goes
 inline void split(Frame& f, double ms, double render, double gpu_wait, double pace, double wait_render = 0, double wait_gpu = 0,
-                  double other_render = 0, double other_gpu = 0) {
-/// The parts of a frame of `ms`: what was measured on the presenting thread, scaled down if it is more than the frame (a wait
-/// that began before the frame did), and the game's the rest; then the fence waits of the game's other threads taken out of
-/// the game's part, as far as it goes
-inline void split(Frame& f, double ms, double render, double gpu_wait, double pace, double wait_render = 0, double wait_gpu = 0,
                   double other_render = 0, double other_gpu = 0, double wait_main = 0) {
     f.ms = (float)ms;
     render = std::max(render, 0.0), gpu_wait = std::max(gpu_wait, 0.0), pace = std::max(pace, 0.0);
-    wait_render = std::max(wait_render, 0.0), wait_gpu = std::max(wait_gpu, 0.0);
-    const double sum = render + gpu_wait + pace + wait_render + wait_gpu;
     wait_render = std::max(wait_render, 0.0), wait_gpu = std::max(wait_gpu, 0.0), wait_main = std::max(wait_main, 0.0);
     const double sum = render + gpu_wait + pace + wait_render + wait_gpu + wait_main;
     const double k = sum > ms && sum > 0 ? std::max(ms, 0.0) / sum : 1.0;
     f.part[kRender] = (float)(render * k), f.part[kGpuWait] = (float)(gpu_wait * k), f.part[kPace] = (float)(pace * k);
-    double game = std::max(0.0, ms - sum * k);
-    const double other_r = std::min(std::max(other_render, 0.0), game);
-    game -= other_r;
-    const double other_g = std::min(std::max(other_gpu, 0.0), game);
-    game -= other_g;
-    f.part[kWaitRender] = (float)(wait_render * k + other_r), f.part[kWaitGpu] = (float)(wait_gpu * k + other_g);
-    f.part[kGame] = (float)game;
     double game = std::max(0.0, ms - sum * k);
     const double other_r = std::min(std::max(other_render, 0.0), game);
     game -= other_r;
