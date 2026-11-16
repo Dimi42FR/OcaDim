@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: "Les petits PC : les pistes et les chiffres qu'on demande"
+    url: "https://github.com/Dimi42FR/OcaDim/blob/main/docs/PETITS-PC.md"
+    about: "Ce qui aide déjà, ce qu'on veut mesurer, et dans quel ordre on essaiera les pistes."
+  - name: "Signaler une performance lente (le guide de mesure)"
+    url: "https://github.com/Dimi42FR/OcaDim/blob/main/docs/performance-report.md"
+    about: "Le guide d'origine pour mesurer une scène lente : les lignes à mettre dans longshot_env.txt et le rapport de bug."
+  - name: "Crédits, provenance et licences"
+    url: "https://github.com/Dimi42FR/OcaDim/blob/main/CREDITS.md"
+    about: "D'où vient chaque morceau du code, et sous quelle licence."

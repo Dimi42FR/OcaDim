@@ -106,6 +106,19 @@ reste — les outils, ~250 Mo — se télécharge au premier lancement, **chaque
 
 ---
 
+## Petits PC : on a besoin de tes chiffres
+
+Rien n'est décidé pour les machines modestes, et on ne veut pas coder au hasard. **Ce qui aide déjà** est en place et en
+Auto (preset Minimum/Low, batched submits, prefetch des descripteurs, affinité CCX, workers du replay, correctifs
+au-delà de 60 fps), et le détail est dans **[docs/PETITS-PC.md](docs/PETITS-PC.md)** avec les pistes et l'ordre dans
+lequel on les essaiera.
+
+Si tu joues sur un petit PC, ouvre un **[retour petit PC](https://github.com/Dimi42FR/OcaDim/issues/new?template=retour-petit-pc.yml)** :
+il demande **4 chiffres** (fps, frame time, 1 % low, ce que le Breakdown attribue au GPU et au CPU), **3 noms** (la scène,
+le preset, l'upscaler et les résolutions) et le dossier `bug-reports`. C'est tout — et jamais ton `.nup` ni tes sauvegardes.
+
+---
+
 ## Ce que nous n'avons pas vu ailleurs
 
 À notre connaissance — et dit comme tel, pas comme un titre de propriété :

@@ -1,0 +1,170 @@
+name: Retour sur un petit PC
+description: Donne tes chiffres pour qu'OcaDim s'améliore sur les machines modestes (4 à 8 Go de VRAM, processeur ancien, portable).
+title: "[Petit PC] "
+labels: ["petit-pc"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Merci de prendre le temps. **On ne change rien au hasard** : ce formulaire sert à mesurer avant de coder.
+        Les pistes et l'ordre dans lequel on les essaiera sont dans [docs/PETITS-PC.md](../blob/main/docs/PETITS-PC.md).
+
+        Ne joins **jamais** ton `.nup`, tes clés ou tes sauvegardes. Le dossier `bug-reports` du jeu (menu → Gameplay →
+        Bug report) suffit : il enlève ton nom d'utilisateur.
+
+  - type: input
+    id: cpu
+    attributes:
+      label: Processeur
+      placeholder: Ryzen 5 2600, i5-8400, Steam Deck...
+    validations:
+      required: true
+
+  - type: input
+    id: gpu
+    attributes:
+      label: Carte graphique et pilote
+      placeholder: RX 6600, pilote 26.10.2 / GTX 1060 6 Go, pilote 580.12 / iGPU Vega 8
+    validations:
+      required: true
+
+  - type: input
+    id: memory
+    attributes:
+      label: Mémoire
+      placeholder: 16 Go de RAM, 8 Go de VRAM
+    validations:
+      required: true
+
+  - type: input
+    id: system
+    attributes:
+      label: Système
+      placeholder: Windows 11 24H2, 64 bits
+    validations:
+      required: true
+
+  - type: dropdown
+    id: preset
+    attributes:
+      label: Quality preset
+      description: Le preset choisi dans le menu (onglet Graphics, première ligne).
+      options:
+        - Minimum (4GB)
+        - Low (6GB)
+        - Balanced (8GB)
+        - High (12GB)
+        - Ultra (16GB+)
+        - Auto (this PC)
+        - Custom
+    validations:
+      required: true
+
+  - type: input
+    id: resolution
+    attributes:
+      label: Résolutions
+      description: Output resolution et Render resolution, tels que le menu les affiche.
+      placeholder: 1920x1080 en sortie, Render resolution 67 % (ou Auto)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: upscaler
+    attributes:
+      label: Upscaler
+      options:
+        - Game's own
+        - NVIDIA DLSS
+        - AMD FSR 3.1
+        - AMD FSR 4
+        - Off
+    validations:
+      required: true
+
+  - type: dropdown
+    id: framegen
+    attributes:
+      label: Frame generation
+      options:
+        - Off
+        - Auto
+        - 2x
+        - 4x
+        - 8x
+    validations:
+      required: true
+
+  - type: dropdown
+    id: framegen_by
+    attributes:
+      label: Frame generation by
+      options:
+        - Auto
+        - Built-in FG
+        - AMD FSR FG
+    validations:
+      required: true
+
+  - type: textarea
+    id: levers
+    attributes:
+      label: Les lignes OcaDim que tu as changées
+      description: >
+        Dans l'onglet Graphics : Replay workers, Descriptor prefetch, Replay segments, Above-60 fixes,
+        CPU affinity (CCX), Draw order barriers, Batched submits. Dis lesquelles ne sont plus en Auto.
+      placeholder: Tout en Auto, sauf Batched submits = On (testé aussi en Off)
+    validations:
+      required: false
+
+  - type: input
+    id: scene
+    attributes:
+      label: Où, et ce que tu faisais
+      description: La map et l'action, pour qu'on rejoue exactement la même chose.
+      placeholder: Bois Perdus, je traverse à cheval en regardant les arbres / Place du Château, caméra immobile
+    validations:
+      required: true
+
+  - type: textarea
+    id: counters
+    attributes:
+      label: Les chiffres du compteur
+      description: >
+        Menu → Gameplay → FPS counter au niveau **Breakdown** (ou Graph), pendant 60 à 90 secondes dans la scène.
+        Donne les fps, le frame time, le 1% low, et ce que le Breakdown attribue au GPU et au CPU.
+      placeholder: |
+        38 fps, 26,3 ms, 1% low 19 fps
+        GPU 97 %, textures 6,2 ms, replay 8,1 ms, attente du CPU 11,4 ms
+    validations:
+      required: true
+
+  - type: dropdown
+    id: feel
+    attributes:
+      label: Ce qui gêne le plus
+      options:
+        - Le débit (fps trop bas partout)
+        - Les saccades (le débit moyen va, mais ça accroche)
+        - L'input (latence, caméra qui répond mal)
+        - Le premier lancement et les temps de chargement
+        - Les shaders qui se compilent en jouant (gros hoquets au début)
+        - Autre (précisé plus bas)
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Autre chose
+      description: Ce que tu as remarqué, les réglages essayés, ce qui a aidé ou aggravé.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Avant d'envoyer
+      options:
+        - label: Je n'ai joint ni mon .nup, ni mes clés, ni mes sauvegardes, et je joins le dossier bug-reports ou le journal du jeu.
+          required: true
