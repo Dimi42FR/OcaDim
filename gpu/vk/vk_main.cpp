@@ -458,6 +458,11 @@ bool create_device() {
     // without them the feature stays off and the plain swapchain runs
     const uint32_t gfx_queues = std::min<uint32_t>(families[dev.queue_family].queueCount, 4u);
     uint32_t fg_family = gfx_queues >= 4 ? dev.queue_family : UINT32_MAX;
+    // (OcaDim, support) what the player asked for, before whether it can run: a report on a card whose AMD frame generation
+    // is missing needs the choice in its log (the Frame generation and Frame generation by rows, or RX_VK_FG_AMD)
+    logf("vk: frame generation asked: %s%s, by %s", opts.framegen ? "on" : "off",
+         opts.framegen ? (opts.framegen == 1 ? " (2x)" : opts.framegen == 2 ? " (3x)" : opts.framegen == 3 ? " (4x)" : " (more)") : "",
+         opts.framegen_by == 1 ? "NVIDIA DLSS FG" : opts.framegen_by == 2 ? "AMD FSR FG" : "Auto");
     if (fg_amd_requested()) {
         if (fg_family == UINT32_MAX)
             logf("vk: AMD FG: the graphics family has %u queues, 4 needed (the replay's and the SDK's three): off",
