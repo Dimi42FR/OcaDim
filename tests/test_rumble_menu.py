@@ -56,6 +56,11 @@ FIXTURE = r"""
 #define CHECK(x) do { if (!(x)) { std::fprintf(stderr, "FAIL %%d %%s\n", __LINE__, #x); return 1; } } while (0)
 %(options)s
 Options opts;
+bool debug_warning = false;
+int debug_warning_choice = 0;
+void sync_transition_autosave() {}
+bool menu_refresh = false;
+
 %(tabs)s
 %(row)s
 int saves = 0, presets = 0;
@@ -88,6 +93,9 @@ int perf_value = 0;   // (the Performance tab's rows: stops_at_ends names it)
 %(ini_key)s
 /* (the Microphone row's hook in set_row: no microphones here) */
 bool can_mic() { return false; }
+int output_pick;
+bool output_forced() { return false; }
+void output_chosen() {}   // Playback selection is covered by test_audio_output_devices.py.
 /* (the Upscaler row's choices, which set_row steps through: the game's own only, here) */
 unsigned upscalers_available() { return 1; }
 void mic_chosen() {}

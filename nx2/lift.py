@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # (python -I le
 import kit
 import nso2  # noqa: F401  (DT_RELR)
 import insn
+import fastfp   # (longshot) fast float regions (A64_FASTFP): its emit_function, under lift_fixes' and poll's wrappers
 import lift_fixes
 import suyu_rt_fixes
 import chunks
@@ -42,6 +43,7 @@ import a64_lift
 import a64_rtgen
 
 insn.install()
+fastfp.install()   # (before lift_fixes and poll wrap emit_function: theirs go around this one)
 lift_fixes.install()
 suyu_rt_fixes.install()
 
@@ -171,6 +173,8 @@ def main():
         oot_wide.install(L, img)
         import oot_fov   # (the gameplay lens, before projection and culling are built)
         oot_fov.install(L, img, next((m["build_id"] for m in meta["modules"] if m["name"] == "main"), ""))
+        import oot_shadow   # (the sun's shadow resolution, after the game sizes its cascades)
+        oot_shadow.install(L, img, next((m["build_id"] for m in meta["modules"] if m["name"] == "main"), ""))
         import oot_jitter   # (the temporal upscalers' camera jitter, DLSS's and FSR 3.1's: none unless one runs, host/rx_backend.c)
         oot_jitter.install(L, img)
     L.discover(max_insns=a.max_func)

@@ -19,6 +19,8 @@ compare its message with the supported identifiers in the requirements above.
 
 **Linux and SteamOS:** before opening the `.AppImage`, open its **Properties** in your file manager and enable
 **Allow executing file as program** (the wording differs between desktops). Then open the launcher.
+**On a Steam Deck,** read [Playing on the Steam Deck](steam-deck-playbook.md) before your first build: what the
+build costs on the Deck, which two switches help, and the one clock setting worth knowing.
 
 For the full setup instructions, follow [the Windows steps](../README.md#on-windows) or
 [the Linux steps](../README.md#on-linux).

@@ -31,6 +31,7 @@ FIXTURE = r'''#include "gpu/vk/vk_menu_keys.h"
 // API_ENUMS
 #include <algorithm>
 #include <atomic>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -78,7 +79,7 @@ KEYBOARD = r'''
 enum {
     VK_INSERT = 0x2d, VK_UP = 0x26, VK_DOWN = 0x28, VK_LEFT = 0x25, VK_RIGHT = 0x27,
     VK_ESCAPE = 0x1b, VK_F1 = 0x70, VK_RETURN = 0x0d, VK_DELETE = 0x2e, VK_BACK = 8,
-    VK_TAB = 9, VK_PRIOR = 0x21, VK_NEXT = 0x22, VK_HOME = 0x24, VK_END = 0x23
+    VK_TAB = 9, VK_PRIOR = 0x21, VK_NEXT = 0x22, VK_HOME = 0x24, VK_END = 0x23, VK_F10 = 0x79
 };
 using HWND = int;
 using DWORD = unsigned;
@@ -95,7 +96,12 @@ static bool take_key_press(int key) {
     queued_key = 0;
     return true;
 }
-static struct { bool (*take_key_press)(int); float (*aspect_ratio)(); } queue_host{take_key_press, nullptr}, *host;
+static struct {
+    bool (*take_key_press)(int);
+    float (*aspect_ratio)();
+    int64_t (*now_ns)();
+    void (*audio_output_select)(const char*);
+} queue_host{take_key_press, nullptr, nullptr, nullptr}, *host;
 
 static bool keyboard_toggle(int mode, int key, bool queued, bool has_focus = true) {
     opts.menu_shortcut = mode;
@@ -131,6 +137,10 @@ static void test_keyboard() {
 // (menu_tick's Esc block, after the keys are read: what it reaches, stubbed)
 static std::atomic<bool> open_now;
 static int page, ask_sel, listening;
+static bool quick_debug, debug_warning, editing, tab_left, tab_right;
+static constexpr int TAB_DEBUG = 1;
+static int cur_tab, tab_selected[2];
+[[maybe_unused]] static int warp_warning_action;
 static bool changed, tune_mode;   // (tune_mode: the compact bar, open; it opens when its key is held as the menu opens)
 static bool compact_key_held;     // (menu_tick's tune_down: Right Shift, or Right Ctrl, held)
 static bool restart_ask() { return false; }
@@ -139,6 +149,8 @@ static void dlss_probe() {}
 static void fsr4_probe() {}
 static void xess_probe() {}
 static void refresh_mics() {}
+static void refresh_outputs() {}   // Playback discovery is covered by test_audio_output_devices.py.
+static bool can_outputs() { return false; }
 // TX_MENU_SHORTCUT
 
 // One tick with key pressed (0: none) and the options o, the menu open before it or not: whether it is open after. *back:
@@ -159,6 +171,8 @@ static bool tick_key(const Options& o, int key, bool queued, bool open_before, b
     // (a menu Esc opens is the full menu, or the compact bar with its key held, as with Insert and F1)
     CHECK(tune_mode == (open_now.load() && !open_before && compact_key_held));
     (void)ask_sel;
+    (void)tab_left;
+    (void)cur_tab;
     *back = press[5];
     return open_now.load();
 }
@@ -196,6 +210,9 @@ static std::string ini_path() { return ini_file; }
 static int parse_output(const char*) { return 0; }
 static std::string mic_want;
 [[maybe_unused]] static std::string gpu_saved_card;   // (menu_init reads gpu_device_id=: gpu_choice.h)
+static std::string output_want, output_saved_name;
+static std::string output_id_key(const char* text) { return text; }
+static std::string output_name_key(const char* text) { return text; }
 [[maybe_unused]] static uint64_t auto_for = 0, auto_tuned = 0;   // (the Quality preset Auto (this PC)'s fingerprints, which save() writes)
 static struct { int steps = 0; bool went_down = false; } auto_tuning;   // (and its tuning's steps)
 static std::string mic_key(const char* name) { return name; }
@@ -275,7 +292,7 @@ def main():
     key_poll = tick[tick.index("    enum { K_N ="):tick.index("    // (longshot) the gamepads")]
     esc_at = tick.index("    const bool esc_opens")
     # (the Esc block ends where the keys' branches begin: the text field's first, as the Insert menu's text fields have it)
-    esc_block = tick[esc_at:tick.index("    if (open_now.load() && editing) {", esc_at)]
+    esc_block = tick[esc_at:tick.index("    if (open_now.load() && debug_warning) {", esc_at)]
     tx_at = menu.index("const char* tx_menu_shortcut(int v) {")
     tx = menu[tx_at:menu.index("\n}\n", tx_at) + 3]
     header = (ROOT / "gpu/vk/vk_menu.h").read_text(encoding="utf-8")
@@ -322,7 +339,7 @@ def main():
     # (Insert, F1 or Esc: Esc on a closed menu opens it, and that press does not also go back a page)
     need(tick, r"const bool esc_opens = opts\.menu_shortcut == 2 && press\[5\] && !open_now\.load\(\);\s*"
                r"if \(esc_opens\) press\[5\] = false;", "Esc does not open a closed menu with the Esc shortcut")
-    need(tick, r"\} else if \(press\[0\] \|\| press\[6\] \|\| esc_opens\) \{\s*open_now = !open_now\.load\(\)",
+    need(tick, r"\} else if \(press\[0\] \|\| press\[6\] \|\| esc_opens\) \{\s*quick_debug = false;\s*open_now = !open_now\.load\(\)",
          "the Esc shortcut's press does not open the menu")
     # (the pad: confirm and back from A's and B's bindings, every tick, not fixed positions)
     need(tick, r"menu_keys::confirm_back\(host->binding\(HOS_BIND_PAD, HOS_SW_A, 0\), host->binding\(HOS_BIND_PAD, HOS_SW_B, 0\)",

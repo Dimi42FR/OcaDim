@@ -47,8 +47,8 @@ Five minutes, then a first build.
    `git blame` past your clone, a version name from the tags (a shallow build calls itself by its commit, `2331f46`),
    and cutting a release (`scripts/release.py`). For those, `git fetch --unshallow --tags` once.
 
-2. **Get the team's tooling and sign in.** The sign-in, `forge.py` (forks, pull requests, issues), the team chat and
-   test requests live in [MagicBeanDev/Tooling](https://git.magicbean.dev/MagicBeanDev/Tooling), shared by every
+2. **Get the team's tooling and sign in.** The sign-in, `forge.py` (forks, pull requests, issues) and the team chat live
+   in [MagicBeanDev/Tooling](https://git.magicbean.dev/MagicBeanDev/Tooling), shared by every
    MagicBeanDev repository. Clone it beside this checkout, keep it current (`git -C ../Tooling pull --ff-only`), and
    run its scripts from here:
 
@@ -59,7 +59,7 @@ Five minutes, then a first build.
 
    Click **Sign in with Discord** (or sign in with the email account you made on git.magicbean.dev) and approve. That
    one sign-in covers git.magicbean.dev (git signs in by itself from then on, and the remote `forge` points at
-   Longshot), the team chat and [test requests](docs/test-requests.md). The first time creates your account.
+   Longshot) and the team chat. The first time creates your account.
    [Tooling's docs/forge.md](https://git.magicbean.dev/MagicBeanDev/Tooling/src/branch/main/docs/forge.md) has the details and the other commands.
 
    **Using Claude Code?** Install the team's plugin once per PC, for the skills (`/magicbean:team-updates`,
@@ -88,7 +88,7 @@ break.
 
 | | What |
 |---|---|
-| **Test on other hardware** | NVIDIA cards are the most tested; the README's [status table](README.md#project-status) says what works where, and the [tested configurations catalogue](https://longshot.magicbean.dev/tested-configurations/) lists the runs behind it. Reports from AMD and Intel cards, other drivers, other distributions and SteamOS help even when everything works. Pull requests that need a run on your hardware are queued as [test requests](docs/test-requests.md). |
+| **Test on other hardware** | NVIDIA cards are the most tested; the README's [status table](README.md#project-status) says what works where, and the [tested configurations catalogue](https://longshot.magicbean.dev/tested-configurations/) lists the runs behind it. Reports from AMD and Intel cards, other drivers, other distributions and SteamOS help even when everything works. Lend your PC to the [Test Farm](https://beanstalk.magicbean.dev/how): it tests approved pull requests on your hardware by itself. |
 | **Play further** | The tested area is the start of the game. Reaching new areas, cutscenes, menus and items finds problems nobody has seen. |
 | **Report what is broken** | Use the [issue forms](https://git.magicbean.dev/MagicBeanDev/Longshot/issues/new/choose): game problem, install or build problem, save problem or idea. Include the version, your hardware, where you were and `longshot_log.txt`. |
 | **Send a fix** | Branch, fix, test, open a pull request from your fork ([how](#commits-and-pull-requests)). Small, focused changes are the easiest to review. |
@@ -231,7 +231,10 @@ python -I -B tests/run_all.py
 
 It runs every `tests/test_*.py` and `nx2/test_*.py` in its own process, the C++ unit tests under `gpu/vk/tests` and a
 byte-compile of every tracked Python file, keeps going after a failure, and ends with a table and every failure's
-output. Name part of a path to run only matching checks (`tests/run_all.py ub_`). A check whose tool is missing (a
+output. Name part of a path to run only matching checks (`tests/run_all.py ub_`). While you work, `--changed [BASE]`
+runs only the checks that read a file your branch changed since it left `main` (committed, uncommitted or untracked:
+by path, by name or as a module they import; every check when the runner or a shared test file changed). Before a pull
+request the whole run is still the one that counts. A check whose tool is missing (a
 compiler, `spirv-val`, the SPIR-V or Vulkan headers, `zstandard`) is skipped and says so; `--strict` fails it instead.
 Checks that can't run everywhere say so in their own file (`RUN_ALL_SKIP`); `--no-skip` runs them anyway.
 
@@ -271,6 +274,10 @@ for scripted input, screenshots, frame dumps and profiles are in the development
   ```
 
   `{name}` is a tool the runner finds (`cxx`, `vulkan_headers`, `spirv_headers`, `spirv_val`, `glslang`, `dotnet`).
+- A check that cuts a function or a block out of a source file by its text uses `tests/srccut.py`: `block(text,
+  marker)` from the marker to the brace that closes it (braces in strings, comments and preprocessor lines not
+  counted), `between(text, start, end)`. A marker that is missing or appears twice stops the check with one message
+  naming the source and the marker, so a renamed function is one clear failure, not a wrong cut.
 - Keep it fast, and make it pass on Linux and Windows where it can.
 - For a renderer or runtime fix, say what you saw before and after, on which GPU and driver, and where in the game.
 

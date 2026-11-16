@@ -1022,12 +1022,18 @@ def flag_text(fl):
     own folder is <root> (issue 565: versions\\<tag>\\... made every update look new). --sysroot= is <sysroot>: the
     AppImage mount is a new /tmp/.mount_... path every start, and that path is not a change in the headers. -MD is left out:
     it writes the depfile beside the object (renderer_deps) and changes nothing in it."""
+    AppImage mount is a new /tmp/.mount_... path every start, and that path is not a change in the headers. -MD is left out:
+    it writes the depfile beside the object (renderer_deps) and changes nothing in it. -fprofile-instr-use= is <profile>: the
+    play profile (RX_PGO, RX_VK_PGO) is in the work folder, and its contents are in the -D..._PROFILE_SHA1 beside it; its path
+    kept another work folder from sharing the hot pieces and the renderer's objects (object_store.py, dev_packs.py)."""
     kept = []
     for f in fl:
         if f.startswith("-I") or f == "-MD":
             continue
         if f.startswith("--sysroot="):
             f = "--sysroot=<sysroot>"
+        elif f.startswith("-fprofile-instr-use="):
+            f = "-fprofile-instr-use=<profile>"
         else:
             f = f.replace(kit.ROOT, "<root>")
         kept.append(f)
@@ -1044,6 +1050,7 @@ def key_of(src, fl, deps):
     """object_key, without reading a source HASHES still knows: the key worked out from it before, for these flags and headers,
     is the same"""
     part = kept_part(fl, deps)
+    USED.setdefault(src, set()).add(part)
     entry, st = known(src)
     if entry is not None and part in entry["keys"]:
         return entry["keys"][part]
@@ -1064,6 +1071,12 @@ HASH_SCHEME = 1
 RACY_NS = 2 * 10 ** 9
 HASHES = {}   # (source path -> {"stat": [size, mtime_ns, id], "sha1": the content's, "keys": {kept_part: object key}})
 HASHES_AT = [0]   # (when the record read in was written, in ns: entries for files written after it, less RACY_NS, are not trusted)
+# (hckrman101 on #2702) a record is written under the time its build started, before it stat'd and read any source: the save
+# comes after the whole plan, seconds later, and the 2 s rule is about the stat. And it keeps, for each source this build looked
+# at, only the keys this build asked for: a header's edit added a key to every renderer source, and the file only grew. A source
+# this build did not look at (a renderer-only build's lifted C) keeps its record as it was
+HASHES_STARTED = [0]
+USED = {}   # (source path -> the kept_parts key_of was asked for this build; content_sha1's sources with none)
 
 
 def file_stat(src):
@@ -1097,6 +1110,7 @@ def remember(src, st, content):
 
 def content_sha1(src):
     """A source's content's sha1, from the record when it still describes the file"""
+    USED.setdefault(src, set())
     entry, st = known(src)
     if entry is not None:
         return entry["sha1"]
@@ -1104,7 +1118,9 @@ def content_sha1(src):
 
 
 def load_hashes(out):
+    HASHES_STARTED[0] = time.time_ns()   # (before any source is stat'd: the time the next record is written under)
     HASHES.clear()
+    USED.clear()
     HASHES_AT[0] = 0
     try:
         with open(os.path.join(out, HASH_CACHE), encoding="utf-8") as f:
@@ -1123,8 +1139,12 @@ def load_hashes(out):
 
 def save_hashes(out):
     """The record of the sources this build saw, for the next one (written atomically; a failure only costs the next build a read)"""
-    data = {"scheme": HASH_SCHEME, "written_ns": time.time_ns(),
-            "files": {src: e for src, e in sorted(HASHES.items()) if os.path.exists(src)}}
+    def kept(src, e):
+        if src not in USED:
+            return e
+        return dict(e, keys={part: key for part, key in e["keys"].items() if part in USED[src]})
+    data = {"scheme": HASH_SCHEME, "written_ns": HASHES_STARTED[0] or time.time_ns(),
+            "files": {src: kept(src, e) for src, e in sorted(HASHES.items()) if os.path.exists(src)}}
     tmp = os.path.join(out, HASH_CACHE + ".new")
     try:
         with open(tmp, "w", encoding="utf-8", newline="\n") as f:
@@ -1613,6 +1633,10 @@ def main():
         vdeps_roots = (vk, os.path.join(GPU, "render"), os.path.join(GPU, "compat"),
                        os.path.join(GPU, "third_party", "suyu", "video_core", "textures"))
         vdeps = tree_headers(*vdeps_roots)
+        vdeps_roots = (vk, os.path.join(GPU, "render"), os.path.join(GPU, "compat"),
+                       os.path.join(GPU, "third_party", "suyu", "video_core", "textures"))
+        vdeps = tree_headers(*vdeps_roots)
+        output_device_deps = open(os.path.join(HOST, "audio_output_devices.h"), "rb").read()
         # (longshot) Dear ImGui (third_party/imgui) draws the overlays over the window's image (gpu/vk/vk_imgui.cpp; vk_menu.cpp
         # draws with it). Its objects see only its own headers; its headers are a dependency of the two files that include them
         imgui = os.path.normpath(os.path.join(kit.HERE, "..", "third_party", "imgui"))
@@ -1652,6 +1676,16 @@ def main():
             lib = os.path.relpath(src, vk).split(os.sep)[0] in ("eden", "sirit")
             obj = os.path.join(obj_dir, "vk_" + name + ".o")
             extras = ((logo_text if os.path.basename(src) == "vk_imgui.cpp" else b"") +
+                      (ngx_deps if os.path.basename(src) == "vk_dlss.cpp" else b"") +
+                      (xess_deps if os.path.basename(src) == "vk_xess.cpp" else b"") +
+                      (imgui_deps if os.path.basename(src) in imgui_users else b""))
+            if not lib:   # (the back end's own files: the headers their depfile names, renderer_deps; DEPFILE_JOBS re-keys them)
+                DEPFILE_JOBS[obj] = (vdeps, vdeps_roots, extras)
+            vk_jobs.append((cxx, src, obj,
+                            (tp_vflags if lib else vflags + vk_pgo_flags) + ([] if lib else ["-MD"]) +
+            obj = os.path.join(obj_dir, "vk_" + name + ".o")
+            extras = ((logo_text if os.path.basename(src) == "vk_imgui.cpp" else b"") +
+                      (output_device_deps if os.path.basename(src) == "vk_menu.cpp" else b"") +
                       (ngx_deps if os.path.basename(src) == "vk_dlss.cpp" else b"") +
                       (xess_deps if os.path.basename(src) == "vk_xess.cpp" else b"") +
                       (imgui_deps if os.path.basename(src) in imgui_users else b""))

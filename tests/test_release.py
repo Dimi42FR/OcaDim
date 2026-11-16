@@ -10,6 +10,7 @@ Needs git and the openssl command line.
 """
 import base64
 import contextlib
+import datetime
 import hashlib
 import http.server
 import importlib.util
@@ -133,6 +134,15 @@ class Channels(unittest.TestCase):
         # (pulling a bad version: deleted, or back to a draft, the channel falls back to the one before)
         rels[-1]["draft"] = True
         self.assertEqual(release.newest(rels, "stable", 3), "v3.0.0")
+
+    def test_the_newest_nightlys_age(self):
+        # (the newest by count, published ones only, from published_at; none when there is none: the nightly then builds)
+        rels = [{"tag_name": t, "draft": d, "published_at": p} for t, d, p in (
+            ("nightly-9-aaaaaaaa", False, "2026-11-15T10:00:00Z"), ("nightly-12-bbbbbbbb", False, "2026-11-15T09:00:00+00:00"),
+            ("nightly-13-cccccccc", True, "2026-11-15T11:00:00Z"), ("v3.0.0", False, "2026-11-15T11:30:00Z"))]
+        noon = datetime.datetime(2026, 11, 15, 12, tzinfo=datetime.timezone.utc).timestamp()
+        self.assertEqual(release.nightly_age(rels, now=noon), 3 * 3600)
+        self.assertIsNone(release.nightly_age(rels[2:], now=noon))
 
 
 class Bump(unittest.TestCase):
@@ -265,6 +275,26 @@ class Bump(unittest.TestCase):
         self.assertNotIn("Earlier", first)
         self.git("tag", "v3.0.1")
         self.assertEqual(release.earlier_rcs("v3.0.1", 3, str(self.dir)), [])
+
+    def test_a_nightly_after_the_first_has_two_lists(self):
+        # (new since the nightly before, then everything since the last version in one list, as an rc's page does; the first
+        # nightly, and a nightly whose predecessor is the last version's commit, keep one list)
+        self.git("tag", "v3.0.0-rc.1")
+        stub = self.cliff_stub(self.dir)
+        with mock.patch.dict(os.environ, stub):
+            first = release.notes("nightly-5-aaaaaaaa", "longshot", root=str(self.dir))
+        self.assertNotIn("Earlier", first)
+        self.commit("fix: a")
+        self.git("tag", "nightly-6-bbbbbbbb")
+        self.commit("fix: b")
+        self.git("tag", "nightly-7-cccccccc")
+        self.commit("fix: c")
+        self.assertEqual(release.previous_nightly("nightly-8-dddddddd", str(self.dir)), "nightly-7-cccccccc")
+        with mock.patch.dict(os.environ, stub):
+            page = release.notes("nightly-8-dddddddd", "longshot", root=str(self.dir))
+        new, older = page.split("\n## Earlier changes (since v3.0.0-rc.1)\n")
+        self.assertIn("nightly-7-cccccccc..HEAD", new.split())
+        self.assertIn("v3.0.0-rc.1..nightly-7-cccccccc", older.split())
 
     def test_the_earlier_rcs_with_no_stable_skip_the_newer_commits(self):
         # (the launcher before v1.0.0: no stable and no first commit, so no range; what came after the last earlier rc is

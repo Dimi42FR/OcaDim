@@ -39,8 +39,8 @@ including their measurement, switch and tested-configuration requirements. The e
   could not run it, say so and keep the PR WIP until the Test Farm or a person has covered what is missing. The
   [measure skill](../.claude/skills/measure/SKILL.md) has the steps for numbers against `main`.
 
-When the PR needs hardware you do not have, follow the
-[request-testing skill](../.claude/skills/request-testing/SKILL.md).
+When the PR needs hardware you do not have, ask the Test Farm on it (`@Beanstalk <what to test, in words>`; a BigBean
+approves the request): [how it works](https://beanstalk.magicbean.dev/how).
 
 ## Screenshots for visible changes
 

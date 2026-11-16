@@ -51,3 +51,5 @@ _deps/
 setup/dist/
 setup/OcaDimSetup/bin/
 setup/OcaDimSetup/obj/
+# ---- the game a developer installed beside the sources ----
+jeu/

@@ -429,6 +429,11 @@ static LRESULT CALLBACK wndproc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_SYSKEYDOWN:   /* Alt+Enter, as on Linux (display_sdl.c); other Alt keys (Alt+F4) go on to Windows */
+        if (wp == VK_F10 && !(lp & (1 << 29))) {
+            extern void hos_vk_note_key_press(unsigned key);
+            if (!(lp & (1 << 30))) hos_vk_note_key_press(VK_F10);
+            return 0;
+        }
         if (wp == VK_RETURN && (lp & (1 << 29))) {
             if (!(lp & (1 << 30))) set_fullscreen(w, !fullscreen);
             return 0;

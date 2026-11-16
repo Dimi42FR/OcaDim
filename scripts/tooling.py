@@ -1,4 +1,4 @@
-"""Where MagicBeanDev/Tooling is: the team's shared scripts (forge.py, team_chat.py, test_requests.py and the sign-in)
+"""Where MagicBeanDev/Tooling is: the team's shared scripts (forge.py, team_chat.py and the sign-in)
 and the agents' skills live there, not in this repository.
 
 Clone it once beside this checkout and keep it current (AGENTS.md, CONTRIBUTING.md):

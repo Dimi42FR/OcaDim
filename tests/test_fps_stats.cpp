@@ -62,6 +62,8 @@ int main() {
     CHECK("they add up", near(f.part[0] + f.part[1] + f.part[2] + f.part[3], 10.0));
     fs::split(f, 8.0, -1.0, 0, 0);
     CHECK("a negative part is none", near(f.part[fs::kRender], 0) && near(f.part[fs::kGame], 8.0));
+    fs::split(f, 20.0, 1.0, 0, 0, 0, 0, 0, 0, 12.0);   // (the present's wait for the main thread: its own part, not the renderer's)
+    CHECK("the main thread's wait", near(f.part[fs::kWaitMain], 12.0) && near(f.part[fs::kRender], 1.0) && near(f.part[fs::kGame], 7.0));
 
     // the ring: the newest first, the oldest dropped past its size
     static fs::Ring<8> r8;

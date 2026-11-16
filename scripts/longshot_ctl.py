@@ -28,12 +28,15 @@ steer it and read its state from a shell, a test or a coding agent. Standard lib
     mem read ADDR SIZE [--format hex|u8|u16|u32|u64|f32]   read guest memory (HOS_CONTROL_MEM=ro or rw)
     mem write ADDR HEX                          write guest memory (HOS_CONTROL_MEM=rw); aliases: ro->r/read, rw->readwrite
     quit                                        the game exits
+    relaunch [--timeout 120]                    the game starts again (the Insert menu's Restart now), with the same
+                                                command and environment; back when its bridge answers again
     raw '{"cmd": "status"}'                     any request
 
 The socket defaults to $HOS_CONTROL. Plain lines by default, --json for the replies as they come. Exit status: 0 done,
 1 an error reply, 2 no game or bad usage, 3 a timeout.
 """
 import argparse
+import calendar
 import codecs
 import contextlib
 import functools
@@ -126,6 +129,26 @@ class Bridge:
 
     def close(self):
         (self.sock or self.pipe).close()
+
+    def server_pid(self):
+        """The pid of the process that serves this connection, as the system says (Windows: the pipe's server,
+        GetNamedPipeServerProcessId; Linux: the socket's peer, SO_PEERCRED); None when it can't tell"""
+        try:
+            if WINDOWS:
+                import ctypes
+                import msvcrt
+                from ctypes import wintypes
+                k = ctypes.WinDLL("kernel32", use_last_error=True)
+                k.GetNamedPipeServerProcessId.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.ULONG)]
+                pid = wintypes.ULONG()
+                if k.GetNamedPipeServerProcessId(msvcrt.get_osfhandle(self.pipe.fileno()), ctypes.byref(pid)):
+                    return pid.value or None
+                return None
+            import struct
+            cred = self.sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
+            return struct.unpack("3i", cred)[0] or None
+        except (OSError, AttributeError, ValueError):
+            return None
 
     def send(self, obj):
         data = (json.dumps(obj, separators=(",", ":")) + "\n").encode()
@@ -283,6 +306,83 @@ def format_bytes(data, fmt):
     for i in range(0, len(data) - n + 1, n):
         out.append(struct.unpack(code, data[i:i + n])[0])
     return " ".join(("%g" if fmt == "f32" else "%d") % v for v in out)
+
+
+def relaunch(b, timeout):
+    """The game started again (the relaunch command), then its status once its bridge answers on the same socket from the
+    process started again: one whose uptime is no longer than the wait (its bridge started after the ask), not the old one
+    answering before it lets go of the socket (status gives the uptime to 0.1 s: 0.05 s to spare). A connection the old
+    one drops mid-request (Windows: a write to its pipe as it closes, EINVAL) is tried again. b is closed; the status reply
+    has after_s, the seconds it took.
+    In a session (--run DIR) the session follows the game: the run folder's manifest records the relaunch, and then the
+    process that serves the socket again, its pid and birth identity as the system gives them (follow_relaunch), so
+    stop, show and the run's supervisor go on with the game started again. On Linux that is the same process (execve);
+    on Windows it is a new one"""
+    session = getattr(b, "session", None)
+    ticket = None
+    if session:
+        info = session.info()
+        ticket = {"id": uuid.uuid4().hex, "state": "asked", "asked_at": utc_now(), "timeout": timeout,
+                  "from": {"pid": info["pid"], "process_start": info["process_start"]}}
+        session.update(relaunch=ticket)
+    try:
+        check(b.request("relaunch"))
+    except BaseException:
+        if session:
+            session.update(relaunch=dict(ticket, state="refused"))
+        raise
+    path = b.path
+    b.close()
+    t0 = time.monotonic()
+    while True:
+        try:
+            nb = Bridge(path, 2)
+            try:
+                st = nb.request("status", timeout=5)
+                server = nb.server_pid() if session else None
+            finally:
+                nb.close()
+            waited = time.monotonic() - t0
+            if st.get("ok") and st.get("uptime", float("inf")) <= waited + 0.05:
+                st = dict(st, after_s=round(waited, 1))
+                if session:
+                    st["session"] = follow_relaunch(session, ticket, server)
+                return st
+        except (Failed, OSError):
+            pass
+        if time.monotonic() - t0 > timeout:
+            if session:
+                session.update(relaunch=dict(ticket, state="failed", ended_at=utc_now()))
+            raise Failed("the game did not answer again in %.0f s" % timeout, 3)
+        time.sleep(0.2)
+
+
+def follow_relaunch(session, ticket, pid):
+    """The run's manifest moved to the process that answers after a relaunch: pid (the socket's server, from the system)
+    and its birth identity. The same process (Linux: execve keeps both) is kept as it is; one the client can't tell, or one
+    gone already, leaves the run failed to follow (stop and show then refuse, as for any game that is gone).
+    A run that ended meanwhile, or whose supervisor stopped waiting for this ticket (relaunched_game: it is no longer
+    asked), is left as it is: the game started again is not written into a run nobody watches"""
+    birth = process_start(pid)
+    with run_lock(session.folder):
+        info = session._read()
+        current = info.get("relaunch") or {}
+        if info["state"] in ("finished", "failed") or current.get("id") != ticket["id"] or current.get("state") != "asked":
+            raise Failed("relaunched, but the run ended before the game answered again: the run does not follow it: %s"
+                         % session.folder, 3)
+        if birth is None:
+            state = "lost"
+        elif pid == info["pid"] and birth == info["process_start"]:
+            state = "same-process"
+        else:
+            state = "followed"
+            info.update(pid=pid, process_start=birth, relaunches=info.get("relaunches", 0) + 1)
+        info["relaunch"] = dict(ticket, state=state, ended_at=utc_now(), to={"pid": pid, "process_start": birth})
+        write_json(session.manifest, info)
+    if state == "lost":
+        raise Failed("relaunched, but the process serving the socket can't be told: the run no longer follows the game: %s"
+                     % session.folder, 3)
+    return state
 
 
 def connect(a, timeout=10.0):
@@ -468,6 +568,9 @@ def run(a):
                 print(slots_text(r))
         elif a.command == "quit":
             show(a, check(b.request("quit")), lambda r: "quitting")
+        elif a.command == "relaunch":
+            st = relaunch(b, a.timeout)
+            show(a, st, lambda r: "relaunched: answering again after %.1f s (uptime %.1f s)" % (r["after_s"], r["uptime"]))
         elif a.command == "raw":
             req = json.loads(a.request)
             b.next_id += 1
@@ -1052,6 +1155,103 @@ def terminate_child(process):
         return "terminate"
 
 
+class Adopted:
+    """The game a Windows relaunch started (host/hos_relaunch.c: a new process, not this supervisor's child), held by a
+    handle this supervisor opened while the process's birth identity was the manifest's, so a pid reused later is never
+    waited for or ended. It answers as the Popen child does where supervise, stop_child and terminate_child ask it"""
+
+    def __init__(self, pid, birth):
+        import ctypes
+        from ctypes import wintypes
+        self.k = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.k.OpenProcess.restype = wintypes.HANDLE
+        self.k.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        self.k.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        self.k.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        self.k.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        self.k.CloseHandle.argtypes = [wintypes.HANDLE]
+        self.pid, self.birth, self.returncode = pid, birth, None
+        # (SYNCHRONIZE | PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION; the identity checked after the handle is
+        # held, so the process the handle names is the one that was checked)
+        self.h = self.k.OpenProcess(0x100000 | 0x0001 | 0x1000, False, pid)
+        if not self.h or process_start(pid) != birth:
+            self.close()
+            raise Failed("the relaunched game is gone or its pid was reused", 2)
+
+    def close(self):
+        if self.h:
+            self.k.CloseHandle(self.h)
+            self.h = None
+
+    def _wait(self, ms):
+        from ctypes import wintypes
+        import ctypes
+        if self.returncode is not None:
+            return True
+        if self.k.WaitForSingleObject(self.h, ms) != 0:
+            return False
+        code = wintypes.DWORD()
+        self.returncode = code.value if self.k.GetExitCodeProcess(self.h, ctypes.byref(code)) else 1
+        return True
+
+    def poll(self):
+        return self.returncode if self._wait(0) else None
+
+    def wait(self, timeout=None):
+        if not self._wait(0xFFFFFFFF if timeout is None else max(0, int(timeout * 1000))):
+            raise subprocess.TimeoutExpired("relaunched game", timeout)
+        return self.returncode
+
+    def terminate(self):
+        if self.returncode is None:
+            self.k.TerminateProcess(self.h, 1)
+
+    kill = terminate
+
+
+def relaunched_game(session, process, birth):
+    """After the game the supervisor watches ended: the game a relaunch of it started, when the client followed it to a new
+    process (follow_relaunch), held as Adopted; else None, and the run ends. A relaunch still being waited for by its
+    client is waited for, as long as the client said it would wait and a little more, counted from the ask (asked_at), so
+    a ticket left asked by a client that ended mid-wait does not hold up a later exit. Giving up marks the ticket failed
+    under the manifest's lock, so a client that follows the game later finds it so and leaves the run alone"""
+    since = time.time()   # (for a ticket without asked_at: from the exit)
+    while True:
+        info = session.info()
+        ticket = info.get("relaunch") or {}
+        mine = ticket.get("from") == {"pid": process.pid, "process_start": birth}
+        if not mine or info.get("stop_request") or ticket.get("state") not in ("asked", "followed"):
+            return None
+        if ticket["state"] == "followed":
+            if not WINDOWS or ticket["to"]["pid"] == process.pid:
+                return None
+            try:
+                return Adopted(info["pid"], info["process_start"])
+            except Failed:
+                return None
+        if time.time() >= relaunch_deadline(ticket, since):
+            with run_lock(session.folder):
+                info = session._read()
+                current = info.get("relaunch") or {}
+                if current.get("id") == ticket.get("id") and current.get("state") == "asked":
+                    info["relaunch"] = dict(current, state="failed", ended_at=utc_now())
+                    write_json(session.manifest, info)
+                    return None
+            continue   # (the client wrote its ticket meanwhile: read again)
+        time.sleep(0.05)
+
+
+def relaunch_deadline(ticket, since):
+    """When a supervisor stops waiting for a relaunch (the system's clock, seconds): the client's --timeout from its ask,
+    and 10 s more, for the client's last try (a 2 s open, a 5 s status) and asked_at's whole seconds; from since when the
+    ticket has no asked_at"""
+    try:
+        asked = calendar.timegm(time.strptime(ticket["asked_at"], "%Y-%m-%dT%H:%M:%SZ"))
+    except (KeyError, TypeError, ValueError):
+        asked = since
+    return asked + float(ticket.get("timeout") or 120) + 10
+
+
 def supervise(folder):
     session, process = Session(folder), None
     info = session.update(owner={"pid": os.getpid(), "birth": process_start(os.getpid())}, state="starting")
@@ -1066,21 +1266,26 @@ def supervise(folder):
         info = session.update(pid=process.pid, process_start=birth, started_at=utc_now())
         reply = wait_ready(session, info["ready"], info["ready_timeout"], process)
         session.update(state="running", ready_reply=reply)
-        while process.poll() is None:
-            info = session.info()
-            request = info.get("stop_request")
-            if request:
-                if request["pid"] != process.pid or request["process_start"] != birth:
-                    result = {"method": "refused", "process_exited": False, "error": "process identity changed"}
-                else:
-                    session.update(state="stopping")
-                    result = stop_child(process, info, request["timeout"], request["terminate"])
-                method = result["method"]
-                session.update(stop_result=dict(result, id=request["id"]), stop_request=None,
-                               state="stopping" if result["process_exited"] else "running")
-            if (session.folder / "cancel").exists():
-                method = "cancel-" + terminate_child(process)
-            time.sleep(0.05)
+        while True:
+            while process.poll() is None:
+                info = session.info()
+                request = info.get("stop_request")
+                if request:
+                    if request["pid"] != process.pid or request["process_start"] != birth:
+                        result = {"method": "refused", "process_exited": False, "error": "process identity changed"}
+                    else:
+                        session.update(state="stopping")
+                        result = stop_child(process, info, request["timeout"], request["terminate"])
+                    method = result["method"]
+                    session.update(stop_result=dict(result, id=request["id"]), stop_request=None,
+                                   state="stopping" if result["process_exited"] else "running")
+                if (session.folder / "cancel").exists():
+                    method = "cancel-" + terminate_child(process)
+                time.sleep(0.05)
+            followed = relaunched_game(session, process, birth)
+            if followed is None:
+                break
+            process, birth = followed, followed.birth   # (the game started again: watched and stopped as the first one was)
     except BaseException as e:
         error, code = str(e), e.code if isinstance(e, Failed) else 2
         if process is not None:
@@ -1349,6 +1554,8 @@ def main(argv=None):
     q = sub.add_parser("slots", help="the save slots: last written, sizes, scene; * the newest (Continue's)")
     q.add_argument("--thumbs", metavar="DIR", help="each slot's file-select picture written there as slot_NN.jpg")
     sub.add_parser("quit")
+    q = sub.add_parser("relaunch", help="the game starts again (the Insert menu's Restart now); back when it answers")
+    q.add_argument("--timeout", type=float, default=120, help="seconds for the game started again to answer")
     q = sub.add_parser("raw")
     q.add_argument("request", help="a JSON request object")
     q = sub.add_parser("runs", help="list run manifests under a root")

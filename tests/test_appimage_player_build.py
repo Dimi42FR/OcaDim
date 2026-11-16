@@ -151,6 +151,8 @@ class TheChecksAreWired(unittest.TestCase):
         # LONGSHOT_VK_PREBUILT by the loop)
         self.assertFalse([l for l in script.splitlines()
                           if "longshot_vk.so" in l and not l.strip().startswith("#")])
+        # (the image's: $TOOLS/usr/lib/longshot is the build tools' install, tools.lock's places, outside the image)
+        self.assertNotIn("$APPDIR/usr/lib/longshot", script)
         self.assertRegex(script, r'\ncp -a gpu/vk gpu/compat gpu/third_party "\$T/gpu/"\n')
         self.assertRegex(script, r'\ncp -a nx2 host scripts LICENSE README.md assets tools.lock "\$T/"\n')
         build = (ROOT / "nx2/build.py").read_text(encoding="utf-8")

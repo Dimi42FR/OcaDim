@@ -360,6 +360,46 @@ class PhaseClock:
 
 PHASES = PhaseClock(STARTED)
 
+# (the lift's steps in the order nx2/lift.py ends them, as PhaseClock names them, with the seconds each took on a Ryzen 5 5600 under
+# Windows (nightly-34, 2026-11-13): the weights of Translate's progress until this PC has a lift of its own in build_times.json)
+LIFT_STEPS = (("image and discovery", 47.0), ("coverage", 24.6), ("emit and write", 99.6), ("big chunks split", 17.6),
+              ("patches", 10.0), ("output size and page-mark groups", 37.5), ("runtime tables and standalone files", 11.5))
+
+
+def lift_weights(work):
+    """Each lift step's share of Translate: the seconds this PC's last whole lift took (build_times.json's phases), else
+    LIFT_STEPS's. A record missing a step is not this lift's (an older translator, a lift cut short): LIFT_STEPS then"""
+    for b in reversed(load_times(work)["builds"]):
+        phases = b.get("phases")
+        took = {} if not isinstance(phases, dict) else {
+            k[len("lift: "):]: v for k, v in phases.items() if k.startswith("lift: ") and isinstance(v, (int, float))}
+        if not took:
+            continue
+        mine = [next((v for k, v in took.items() if k.startswith(name)), None) for name, _ in LIFT_STEPS]
+        if all(v is not None and v > 0 for v in mine):
+            return [(name, float(v)) for (name, _), v in zip(LIFT_STEPS, mine)]
+        break
+    return list(LIFT_STEPS)
+
+
+def lift_progress(work, tell=None):
+    """An on_line for the lift: Translate's '@@progress' as each of its steps ends (its 'lift: <step> in <s>s' line, or the
+    discovery's), weighted by lift_weights. Before this the builders' bar sat at Translate's start for its whole 4 minutes"""
+    tell = tell or (lambda f: say("progress", "%.3f" % f))
+    weights = lift_weights(work)
+    total = sum(w for _, w in weights) or 1.0
+    done = set()
+
+    def on_line(line):
+        m = PhaseClock.LIFT_STEP.match(line)
+        step = m.group(1) if m else "image and discovery" if PhaseClock.DISCOVERY.match(line) else None
+        name = next((n for n, _ in weights if step and step.startswith(n)), None)
+        if name is None or name in done:
+            return
+        done.add(name)
+        tell(min(1.0, sum(w for n, w in weights if n in done) / total))
+    return on_line
+
 
 class Silent(Exception):
     """a step printed nothing for longer than run()'s silence"""
@@ -1076,9 +1116,7 @@ def lock_work(work):
     path = os.path.join(os.path.abspath(work), WORK_LOCK)
     if _WORK_LOCK and _WORK_LOCK[0] == path:
         return
-    if _WORK_LOCK:
-        _WORK_LOCK[1].close()
-        _WORK_LOCK.clear()
+    release_work()
     f = open(path, "a+b")
     try:
         f.seek(0)
@@ -1092,6 +1130,15 @@ def lock_work(work):
         f.close()
         fail("Another build is using the work folder %s. Wait for it to end (or stop it), then build again." % work)
     _WORK_LOCK[:] = [path, f]
+
+
+def release_work():
+    """Let go of the work folder's lock, if this process holds one. A build doesn't need to: the lock goes when its process ends.
+    The tests do, after running main() in their own process: Windows can't delete a temporary work folder while its
+    make_game.lock is still open"""
+    if _WORK_LOCK:
+        _WORK_LOCK[1].close()
+        _WORK_LOCK.clear()
 
 
 def stop_stray_compilers(work, default_work):
@@ -2635,7 +2682,7 @@ def main(a=None):
                     write_lift_key(work, key)
                 else:
                     inputs = lift_key(exefs, work, env, planning=False)   # (what the lift reads and does not write, as it starts)
-                    run(PY + ["nx2/lift.py", "--standalone", "--write", "--exefs", exefs, "--work", work], env)
+                    run(PY + ["nx2/lift.py", "--standalone", "--write", "--exefs", exefs, "--work", work], env, lift_progress(work))
                     if os.path.isfile(os.path.join(work, "sa", "gen", "code_hot.c")):
                         run(PY + ["nx2/split_hot.py", os.path.join(work, "sa", "gen")], env)   # (eight files side by side: ~6 minutes, not 79)
                     # (the lift writes inputs of the next one: split_hot's kept pieces, image/hot_pieces.txt, which the key hashes. Its key is
@@ -2824,6 +2871,11 @@ def main(a=None):
     else:
         note_shader_list(work, romfs, os.path.join(out, "longshot_shaders.bin"))
     PHASES.part("shader list")
+    # (longshot) the text that names the console, reworded for a PC in every language (host/texts.c serves them; a mod's own wins)
+    texts = os.path.join(out, "texts")
+    if run(PY + [os.path.join(HERE, "text_assets.py"), "--romfs", romfs, "--out", texts], check=False, output=sys.stderr):
+        print("the texts were not reworded for a PC: the game shows its own", flush=True)
+        shutil.rmtree(texts, ignore_errors=True)
     # (longshot) the button prompts of other controllers (host/prompts.c): the game's icon font redrawn per controller, with fontTools.
     # Without it the game shows its own icons
     prompts = os.path.join(out, "prompts")

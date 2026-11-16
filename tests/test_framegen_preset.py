@@ -46,6 +46,11 @@ FIXTURE = r"""
 #define CHECK(x) do { if (!(x)) { std::fprintf(stderr, "FAIL %d: %s\n", __LINE__, #x); return 1; } } while (0)
 /* OPTIONS */
 Options opts;
+bool debug_warning = false;
+int debug_warning_choice = 0;
+void sync_transition_autosave() {}
+bool menu_refresh = false;
+
 /* TABS */
 /* ROW */
 int saves = 0;
@@ -67,6 +72,9 @@ struct { void note(const int*) {} } restart_state;
 int perf_value = 0;   // (the Performance tab's rows: stops_at_ends names it)
 bool can_mic() { return false; }
 void mic_chosen() {}
+int output_pick;
+bool output_forced() { return false; }
+void output_chosen() {}   // Playback selection is covered by test_audio_output_devices.py.
 void samplers_changed() {}
 void menu_debug_rows(int, int) {}   // (the Debug rows that apply in play: vk_draw.cpp)
 int temporal_resets = 0;

@@ -70,6 +70,7 @@
 #include "vk_menu.h"
 #include "vk_texture.h"
 
+#include "vk_builtin_spv.h"   // (RX_VK_SHADER_DIR)
 #include "shaders/dlss_actor_frag_spv.h"
 #include "shaders/dlss_actor_vert_spv.h"
 #include "shaders/dlss_out_comp_spv.h"
@@ -278,7 +279,10 @@ struct State {
     uint64_t engines_made = 0;  // (prepare's new histories: a feature or context made again, each a stall in play)
     float status_jitter[2]{};   // (the last evaluation's jitter, in render pixels, and whether it had motion)
     bool status_motion = false;
-    struct Dead { uint64_t frame; std::function<void()> free; };
+    // (value: vk_retirement_value when let go. The frames counted are the replay's: with no window (HOS_HEADLESS, as test runs
+    // use) nothing waits for the present ring, and only the 48-slot recording ring bounds how far behind the GPU is, many frames
+    // when a frame has few recordings, so 4 frames on did not prove the GPU done with it. Freed once both have passed; never at 0)
+    struct Dead { uint64_t frame; uint64_t value; std::function<void()> free; };
     std::vector<Dead> dead;   // (what work in flight may still use: freed a few frames on)
     uint64_t asked = 0;       // (the frame an upscale last asked for an engine: temporal_idle)
     std::atomic<bool> holding{false};   // (an engine's state, images or frees still to do: temporal_idle has something to let go)
@@ -329,12 +333,12 @@ bool fail(const char* why) {   // (the network runs: why, when it changes and ev
     return false;
 }
 
-void later(std::function<void()> f) { st().dead.push_back({texture_frame_no(), std::move(f)}); }
+void later(std::function<void()> f) { st().dead.push_back({texture_frame_no(), vk_retirement_value(), std::move(f)}); }
 void free_dead(bool all) {
     State& s = st();
-    const uint64_t now = texture_frame_no();
+    const uint64_t now = texture_frame_no(), done = vk_timeline_completed();
     for (size_t i = 0; i < s.dead.size();) {
-        if (all || now - s.dead[i].frame > 4) {
+        if (all || (now - s.dead[i].frame > 4 && s.dead[i].value && done >= s.dead[i].value)) {
             s.dead[i].free();
             s.dead[i] = std::move(s.dead.back());
             s.dead.pop_back();
@@ -423,7 +427,7 @@ bool make_pipelines() {
     if (!dev.push_descriptor || !vkCmdPushDescriptorSetKHR) return false;
     const VkDescriptorType S = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, I = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     const VkDescriptorType prep_types[5] = {S, S, I, I, I}, out_types[2] = {S, I};
-    if (!s.prep && !make_pipeline(DLSS_PREP_COMP_SPV, sizeof DLSS_PREP_COMP_SPV, prep_types, 5, 84, s.prep_set, s.prep_layout, s.prep))
+    if (!s.prep && !make_pipeline(BUILTIN_SPV_ARGS(DLSS_PREP_COMP_SPV), prep_types, 5, 84, s.prep_set, s.prep_layout, s.prep))
         return false;
     // (the HDR ones, for an engine that takes HDR colour. dlss_prep.comp squares the square-root encoded scene into linear
     // light (kSquare, its constant 1), what an HDR feature and its auto exposure are made for, and its ceiling (kColorMax,
@@ -438,12 +442,12 @@ bool make_pipelines() {
     static const VkSpecializationMapEntry out_hdr_entry{0, 0, sizeof(VkBool32)};
     static const VkSpecializationInfo out_hdr_spec{1, &out_hdr_entry, sizeof out_hdr_square, &out_hdr_square};
     static_assert(sizeof(PrepSpec) == sizeof(float) + sizeof(VkBool32), "dlss_prep.comp's constants, packed");
-    if (!s.prep_hdr && !make_pipeline(DLSS_PREP_COMP_SPV, sizeof DLSS_PREP_COMP_SPV, prep_types, 5, 84, s.prep_hdr_set,
+    if (!s.prep_hdr && !make_pipeline(BUILTIN_SPV_ARGS(DLSS_PREP_COMP_SPV), prep_types, 5, 84, s.prep_hdr_set,
                                       s.prep_hdr_layout, s.prep_hdr, &prep_hdr_spec))
         return false;
-    if (!s.out && !make_pipeline(DLSS_OUT_COMP_SPV, sizeof DLSS_OUT_COMP_SPV, out_types, 2, 8, s.out_set, s.out_layout, s.out))
+    if (!s.out && !make_pipeline(BUILTIN_SPV_ARGS(DLSS_OUT_COMP_SPV), out_types, 2, 8, s.out_set, s.out_layout, s.out))
         return false;
-    if (!s.out_hdr && !make_pipeline(DLSS_OUT_COMP_SPV, sizeof DLSS_OUT_COMP_SPV, out_types, 2, 8, s.out_hdr_set,
+    if (!s.out_hdr && !make_pipeline(BUILTIN_SPV_ARGS(DLSS_OUT_COMP_SPV), out_types, 2, 8, s.out_hdr_set,
                                      s.out_hdr_layout, s.out_hdr, &out_hdr_spec))
         return false;
     VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
@@ -463,7 +467,7 @@ bool make_rgba_output() {
     static const VkBool32 square = VK_FALSE; // HDR prep already decoded the network colour to linear.
     static const VkSpecializationMapEntry entry{0, 0, sizeof square};
     static const VkSpecializationInfo spec{1, &entry, sizeof square, &square};
-    return make_pipeline(DLSS_OUT_RGBA_COMP_SPV, sizeof DLSS_OUT_RGBA_COMP_SPV, types, 2, 8,
+    return make_pipeline(BUILTIN_SPV_ARGS(DLSS_OUT_RGBA_COMP_SPV), types, 2, 8,
                          s.out_rgba_set, s.out_rgba_layout, s.out_rgba, &spec);
 }
 
@@ -473,7 +477,7 @@ bool make_rgba_stretch() {
     State& s = st();
     if (s.stretch_rgba) return true;
     const VkDescriptorType types[2] = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE};
-    return make_pipeline(DLSS_OUT_RGBA_COMP_SPV, sizeof DLSS_OUT_RGBA_COMP_SPV, types, 2, 8,
+    return make_pipeline(BUILTIN_SPV_ARGS(DLSS_OUT_RGBA_COMP_SPV), types, 2, 8,
                          s.stretch_rgba_set, s.stretch_rgba_layout, s.stretch_rgba);
 }
 
@@ -529,8 +533,9 @@ bool make_actor_pipeline() {
     if (vkCreatePipelineLayout(dev.device, &pi, nullptr, &s.actor_layout) != VK_SUCCESS) return false;
     IntelDriverGate gate;
     VkShaderModule m[2]{};
-    const uint32_t* code[2] = {DLSS_ACTOR_VERT_SPV, DLSS_ACTOR_FRAG_SPV};
-    const size_t size[2] = {sizeof DLSS_ACTOR_VERT_SPV, sizeof DLSS_ACTOR_FRAG_SPV};
+    const auto vert = BUILTIN_SPV(DLSS_ACTOR_VERT_SPV), frag = BUILTIN_SPV(DLSS_ACTOR_FRAG_SPV);
+    const uint32_t* code[2] = {vert.code, frag.code};
+    const size_t size[2] = {vert.size, frag.size};
     for (int i = 0; i < 2; i++) {
         VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
         mi.codeSize = size[i], mi.pCode = code[i];

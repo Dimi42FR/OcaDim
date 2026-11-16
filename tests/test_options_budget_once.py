@@ -12,6 +12,8 @@ menu = (Path(__file__).resolve().parents[1] / "gpu/vk/vk_menu.cpp").read_text(en
 # row's card and the retired rows' lines are theirs too)
 mine_block = menu[menu.index("bool mine = "):menu.index("for (const Row& r : rows)")]
 owned = set(re.findall(r'key == "([a-z_]+)"', mine_block))
+owned = set(re.findall(r'key == "([a-z_]+)"', re.search(r"bool mine = ([^;]+);", menu).group(1)))
+owned |= set(re.findall(r'mine \|= key == "([a-z_]+)";', menu))   # (the keys added a line each after it: gpu_device_id, #736)
 written = set(re.findall(r'fprintf\(f, "([a-z_]+)=', menu))
 missing = sorted(written - owned)
 print(f"FAIL: save() writes {missing} but keeps the file's old lines of them too" if missing else f"ok: {sorted(written)}")

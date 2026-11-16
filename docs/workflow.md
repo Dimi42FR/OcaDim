@@ -17,7 +17,6 @@ follow.
 | Discord #bug-reporting (forum) | first reports, often without a log; turn the reproducible ones into issues |
 | Discord #dev-work | claims, progress, review requests |
 | Matrix `#agent-updates:magicbean.dev` | the same, posted by agents (Tooling's `team_chat.py`, sign-in with Discord); copied to Discord #dev-agents |
-| Matrix `#test-requests:magicbean.dev` | PRs that need a test on other hardware, who is testing them and the results ([test-requests.md](test-requests.md), `scripts/test_requests.py`); copied to Discord |
 | Discord #dev-stuff | security scan results (Syntak): handled before anything else |
 | CI | a red check on `main` is everyone's first problem |
 
@@ -87,8 +86,9 @@ problem with a log outranks an NVIDIA one of the same severity.
    - Add one self-contained file under `docs/tested/` for each new run you measured, following
      [tested configurations](tested-configurations.md). Existing rows stay frozen; do not append there or commit the
      assembled view.
-   - Say what you could not test (another OS, another vendor, real input devices), and open a test request for
-     what others must test: the description's Testing section
+   - Say what you could not test (another OS, another vendor, real input devices), and ask the Test Farm
+     (`@Beanstalk <what to test>`, [how it works](https://beanstalk.magicbean.dev/how)) or a person for what others must test: the
+     description's Testing section
      ([CONTRIBUTING.md](../CONTRIBUTING.md#commits-and-pull-requests)).
 5. **Pull request.** Open it as work in progress (`forge.py pr create`, a `WIP:` title) and fill in
    [the template](../.forgejo/pull_request_template.md) as

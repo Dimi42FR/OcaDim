@@ -22,6 +22,10 @@ Each is a runtime switch where it can be, so the game's own path stays reachable
 - The OptimizeChangeBank thread's allocations tried again when their heap is full (host/oot_heap_retry.c): f_804566e0's two
   calls of f_80522050, its GPU memory (GPU_ALLOC_SITES), and its two tryAllocs of CPU buffers (HEAP_ALLOC_SITES). They went on
   with a null pointer and crashed writing through it (issue 1697). The supported build only.
+- The Voice Language option kept after a restart (host/oot_voice.c): the voice resource's update (f_80a9ca30) asks
+  GameDataMgr whether the option was written (f_80a9d1c0) and applies it only then; option.sav's value replaces the
+  option without a write, so a saved choice was never applied (issue 430). The call goes through hos_oot_voice_option,
+  which also says yes when the option's value is not the one of the update before. The supported build only.
 - Ocarina note controls: the note-wait action's start (f_828a9190) and tick (f_828a9280) report the wait to the host (hos_oc_wait, hos_oc_beat), which swaps the five notes for its own controls (host/nn_hid.c); a tick whose gates refuse reports no wait, so a dialogue keeps its buttons.
 """
 import collections
@@ -833,6 +837,25 @@ def patch_heap_retry(s):
     return s, found
 
 
+# The voice resource's update (f_80a9ca30) asks GameDataMgr whether OptionData.VoiceLanguage was written (f_80a9d1c0, its one
+# call there, by its return address) and reads and applies the option only then. Made through host/oot_voice.c
+# hos_oot_voice_option, which calls the game's own and also answers yes when the option's value changed without a write
+# (option.sav read after the start: issue 430). f_80a9d1c0's other callers stay as they are.
+VOICE_OPTION_OLD = "c->x[30] = 0x80a9ca9cULL; f_80a9d1c0(c);"
+VOICE_OPTION_NEW = "c->x[30] = 0x80a9ca9cULL; hos_oot_voice_option(c, f_80a9d1c0);   /* (nx2/oot_patches.py: host/oot_voice.c) */"
+VOICE_OPTION_DECL = "void hos_oot_voice_option(Ctx *A64_NOESC c, A64Fn game);\n"
+
+
+def patch_voice_option(s):
+    """The voice resource's question in one file's text: (text, 1 when made now or found made, else 0)"""
+    if VOICE_OPTION_NEW in s:
+        return s, 1
+    if s.count(VOICE_OPTION_OLD) != 1 or s.count('#include "a64.h"\n') != 1:
+        return s, 0
+    s = s.replace(VOICE_OPTION_OLD, VOICE_OPTION_NEW, 1)
+    return s.replace('#include "a64.h"\n', '#include "a64.h"\n' + VOICE_OPTION_DECL, 1), 1
+
+
 # (the wait action's start and tick, code_033.c; the anchors carry call-return PC literals, so each is once in its function)
 OC_DECL = ("extern volatile int hos_oc_wait;\nextern volatile int hos_oc_last_kind;\n"
            "extern volatile unsigned hos_oc_beat;\n"
@@ -1008,6 +1031,12 @@ def patch_file(s, name, protect_hearts=False):
         out = center
         counts["disable camera centering"] += 1
         lines.append("oot_patches: disable camera centering switch in " + name)
+    if protect_hearts and "if (hos_oot_trace_save(c)) return;" not in out:
+        signature = "void f_80bc72d0(Ctx *__restrict A64_NOESC c) {\n"
+        if signature in out:
+            out = out.replace(signature, signature + "    if (hos_oot_trace_save(c)) return;\n", 1)
+            out = out.replace('#include "a64.h"\n', '#include "a64.h"\nextern int hos_oot_trace_save(Ctx *c);\n', 1)
+            lines.append("oot_patches: save request trace in " + name)
     opening = patch_opening(out) if protect_hearts else None
     if opening is not None:
         n = opening.count(OPENING_REQUEST) + opening.count(OPENING_TIMELINE) + opening.count(OPENING_QUERY)
@@ -1048,6 +1077,11 @@ def patch_file(s, name, protect_hearts=False):
     if heap != out:
         lines.append("oot_patches: heap-full retries of the OptimizeChangeBank allocations in " + name)
     out = heap
+    voice, found = patch_voice_option(out) if protect_hearts else (out, 0)
+    counts["voice option check"] += found
+    if voice != out:
+        lines.append("oot_patches: the Voice Language option followed after option.sav is read in " + name)
+    out = voice
     out, whole = patch_whole_frames(out)
     counts["whole sites"] += out.count(WHOLE_MARK)   # (made now, or by an earlier run over this file)
     if whole:
@@ -1095,6 +1129,7 @@ def report(paths, counts, protect_hearts=False):
         done["scene format"] = 0
         done["zstd stream hook"] = 0
         done["zstd frames hook"] = 0
+        done["voice option check"] = 0
     total = collections.Counter()
     for c in counts:
         total.update(c)
