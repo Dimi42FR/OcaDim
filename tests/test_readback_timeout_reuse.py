@@ -146,7 +146,8 @@ static bool remade_log_on() { return false; }
 static uint64_t evicted_key(uint64_t gpu, uint32_t, uint32_t, uint32_t) { return gpu; }
 struct Evicted { uint64_t frame; bool rendered; };
 static std::mutex from_memory_mu, evicted_mu;
-static std::unordered_map<uint64_t, uint64_t> evicted_from_memory;
+static std::unordered_map<uint64_t, std::pair<uint64_t, uint64_t>> evicted_from_memory;   // (guest size, the frame it went)
+static std::vector<std::unique_ptr<Texture>> tex_tombstones;   // (OcaDim: the retired objects' pool, the removal loop's)
 static std::unordered_map<uint64_t, Evicted> evicted_at;
 static std::unordered_map<const Texture*, uint64_t> remade;
 static std::set<const Texture*> destroyed, written;

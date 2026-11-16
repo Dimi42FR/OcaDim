@@ -256,7 +256,7 @@ bool remade_log_on() {
 // characters, shop shelves, floors, which spread over play time on 4-8 GB cards (the ones that evict) and changed each time a
 // menu was opened and closed (issue 993). RX_VK_REMADE_SKIP=1: as before
 std::mutex from_memory_mu;
-std::unordered_map<uint64_t, uint64_t> evicted_from_memory;   // (evicted_key -> guest size)
+std::unordered_map<uint64_t, std::pair<uint64_t, uint64_t>> evicted_from_memory;   // (evicted_key -> guest size, the frame it went)
 std::atomic<uint64_t> st_remade_uploaded{0};
 bool remade_skip_old() {
     static const bool on = getenv("RX_VK_REMADE_SKIP") && atoi(getenv("RX_VK_REMADE_SKIP")) != 0;
@@ -1631,6 +1631,16 @@ std::vector<UpSlow> up_slowest;
 std::mutex up_mu;   // (uploads may come from a parallel replay's threads)
 std::atomic<int64_t> frame_upload_ns{0};   // (this frame's time in upload(), every thread's)
 std::atomic<int64_t> st_deferred{0}, st_deferred_frame{0};
+// (longshot, OcaDim, RX_VK_MEM_CENSUS) what the budget's eviction costs in decoding again: the uploads of textures made
+// again after an eviction within 600 frames, kept apart from the first ones (up_frame_again), and in all (census_*)
+UpStat up_frame_again[UP_COUNT];
+std::atomic<int64_t> census_again_n{0}, census_again_bytes{0}, census_first_n{0}, census_first_bytes{0};
+std::atomic<int64_t> census_again_ns{0}, census_first_ns{0};
+std::atomic<int64_t> census_remake_n{0}, census_remake_bytes{0};
+// (how long after its eviction a texture came back: 0-5, 6-30, 31-60, 61-300, over 300 frames. Within a few frames, the
+// eviction chose what the next frames needed; far out, the scene's working set is simply past the budget)
+std::atomic<int64_t> census_age_n[5], census_age_bytes[5];
+int census_age_bucket(uint32_t ago) { return ago <= 5 ? 0 : ago <= 30 ? 1 : ago <= 60 ? 2 : ago <= 300 ? 3 : 4; }
 void upload_frame_report() {
     std::lock_guard lk(up_mu);
     int64_t ns = 0;
@@ -1646,6 +1656,13 @@ void upload_frame_report() {
                 k += snprintf(line + k, sizeof line - k, " %s %lld (%.1f MB, %.0f ms);", names[r], (long long)up_frame[r].n,
                               up_frame[r].bytes / 1048576.0, up_frame[r].ns / 1e6);
         std::sort(up_slowest.begin(), up_slowest.end(), [](const UpSlow& a, const UpSlow& b) { return a.ns > b.ns; });
+        if (texture_census_on()) {   // (OcaDim: of those uploads, the textures made again after an eviction)
+            int64_t n = 0, bytes = 0, tns = 0;
+            for (const UpStat& a : up_frame_again) n += a.n, bytes += a.bytes, tns += a.ns;
+            if (n && k < (int)sizeof line - 80)
+                k += snprintf(line + k, sizeof line - k, " made again after an eviction: %lld (%.1f MB, %.0f ms);", (long long)n,
+                              bytes / 1048576.0, tns / 1e6);
+        }
         for (size_t i = 0; i < up_slowest.size() && i < 3 && k < (int)sizeof line - 80; i++)
             k += snprintf(line + k, sizeof line - k, " [%ux%u x%u NVN %#x %s %.1f MB %.0f ms]", up_slowest[i].w, up_slowest[i].h,
                           up_slowest[i].layers, up_slowest[i].nvn, names[up_slowest[i].route], up_slowest[i].bytes / 1048576.0,
@@ -1653,6 +1670,7 @@ void upload_frame_report() {
         logf("%s", line);
     }
     for (UpStat& u : up_frame) u = {};
+    for (UpStat& u : up_frame_again) u = {};
     up_slowest.clear();
 }
 bool upload_inner(Texture& tex, const Ranges* dirty);
@@ -1665,6 +1683,17 @@ bool upload(Texture& tex, const Ranges* dirty) {
     std::lock_guard lk(up_mu);
     UpStat& u = up_frame[up_route];
     u.n++, u.bytes += (int64_t)tex.guest_size, u.ns += ns;
+    if (tex.made_again) {
+        UpStat& a = up_frame_again[up_route];
+        a.n++, a.bytes += (int64_t)tex.guest_size, a.ns += ns;
+        if (up_route == UP_ASTC) census_again_n.fetch_add(1, std::memory_order_relaxed),
+            census_again_bytes.fetch_add((int64_t)tex.guest_size, std::memory_order_relaxed),
+            census_again_ns.fetch_add(ns, std::memory_order_relaxed);
+    } else if (up_route == UP_ASTC) {
+        census_first_n.fetch_add(1, std::memory_order_relaxed),
+            census_first_bytes.fetch_add((int64_t)tex.guest_size, std::memory_order_relaxed),
+            census_first_ns.fetch_add(ns, std::memory_order_relaxed);
+    }
     if (ns > 2000000) {
         up_slowest.push_back({ns, tex.width, tex.height, tex.layers, tex.nvn_format, up_route, tex.guest_size});
         if (up_slowest.size() > 64) {
@@ -2242,6 +2271,22 @@ Texture* create(const Key& key, const nvn_tex* t, VkFormat vf, bool astc, int bw
     case NVN_TEXTURE_TARGET_3D: x.type = VK_IMAGE_TYPE_3D, x.depth = std::max(1u, d.depth); break;
     default: break;
     }
+    {   // (longshot, OcaDim, RX_VK_MEM_CENSUS) this storage, size and format went through the budget within 600 frames: this
+        // object is a make again, and what it costs to decode is the eviction's. Kept on the object: the upload that follows
+        // (and any whole one after) is counted as made again, against the first ones. Off: nothing, not even the lookup
+        if (texture_census_on()) {
+            std::lock_guard lk(from_memory_mu);
+            const auto e = evicted_from_memory.find(evicted_key(x.gpu, x.width, x.height, x.nvn_format));
+            if (e != evicted_from_memory.end() && e->second.first == x.guest_size && frame_no - e->second.second <= 600) {
+                x.made_again = true, x.evicted_ago = (uint32_t)(frame_no - e->second.second);
+                census_remake_n.fetch_add(1, std::memory_order_relaxed);
+                census_remake_bytes.fetch_add((int64_t)x.guest_size, std::memory_order_relaxed);
+                const int bucket = census_age_bucket(x.evicted_ago);
+                census_age_n[bucket].fetch_add(1, std::memory_order_relaxed);
+                census_age_bytes[bucket].fetch_add((int64_t)x.guest_size, std::memory_order_relaxed);
+            }
+        }
+    }
     const uint32_t max_dim = std::max({x.width, x.height, x.depth});
     const uint32_t max_levels = 1 + (uint32_t)std::floor(std::log2((double)max_dim));
     x.levels = nvn_tex_is_linear(&d) ? 1 : std::clamp<uint32_t>(d.levels, 1, max_levels);
@@ -2591,6 +2636,31 @@ Texture* create(const Key& key, const nvn_tex* t, VkFormat vf, bool astc, int bw
 
 } // namespace
 
+// (longshot, OcaDim, RX_VK_MEM_CENSUS) the budget's thrashing in one line: the textures the eviction made it decode again,
+// and how much of the ASTC route's work those re-uploads were (the counters live in the anonymous namespace above)
+bool texture_census_on() {
+    static const bool on = env_on("RX_VK_MEM_CENSUS");
+    return on;
+}
+void texture_census_log() {
+    if (!texture_census_on()) return;
+    const int64_t an = census_again_n.load(), ab = census_again_bytes.load();
+    const int64_t fn = census_first_n.load(), fb = census_first_bytes.load();
+    const int64_t rn = census_remake_n.load(), rb = census_remake_bytes.load();
+    const double ams = census_again_ns.load() / 1e6, fms = census_first_ns.load() / 1e6;
+    logf("vk: memory census: %lld textures made again after an eviction (%lld MB); ASTC on the GPU: %lld first (%lld MB, "
+         "%.0f ms), %lld made again (%lld MB, %.0f ms), %lld%% of its bytes and %lld%% of its time",
+         (long long)rn, (long long)(rb >> 20), (long long)fn, (long long)(fb >> 20), fms, (long long)an, (long long)(ab >> 20), ams,
+         (long long)(fb + ab ? ab * 100 / (fb + ab) : 0), (long long)(fms + ams > 0 ? ams * 100 / (fms + ams) : 0));
+    static const char* ages[5] = {"0-5", "6-30", "31-60", "61-300", "over 300"};
+    char line[400];
+    int k = 0;
+    for (int b = 0; b < 5; b++)
+        k += snprintf(line + k, sizeof line - k, " %s: %lld (%lld MB);", ages[b], (long long)census_age_n[b].load(),
+                      (long long)(census_age_bytes[b].load() >> 20));
+    logf("vk: memory census: made again after its eviction, frames later:%s", line);
+}
+
 std::atomic<uint64_t> work_epoch{0};
 namespace {
 // (each thread's own: the display thread's present records barriers too)
@@ -2898,7 +2968,7 @@ Texture* texture_touch(Texture* tex, bool for_sampling) {
     if (owned && !remade_skip_old()) {   // (one evicted that came from memory: uploaded from it again. Above)
         std::lock_guard lk(from_memory_mu);
         auto e = evicted_from_memory.find(evicted_key(tex->gpu, tex->width, tex->height, tex->nvn_format));
-        if (e != evicted_from_memory.end() && e->second == tex->guest_size) {
+        if (e != evicted_from_memory.end() && e->second.first == tex->guest_size) {
             evicted_from_memory.erase(e);
             owned = 0;
             const uint64_t n = ++st_remade_uploaded;
@@ -5203,7 +5273,7 @@ void texture_frame(uint64_t completed) {
         if (!tex->gpu_written && tex->uploaded && !remade_skip_old()) {   // (above: made again, it is uploaded from memory)
             std::lock_guard lk(from_memory_mu);
             if (evicted_from_memory.size() > 50000) evicted_from_memory.clear();   // (a bound)
-            evicted_from_memory[evicted_key(tex->gpu, tex->width, tex->height, tex->nvn_format)] = tex->guest_size;
+            evicted_from_memory[evicted_key(tex->gpu, tex->width, tex->height, tex->nvn_format)] = {tex->guest_size, frame_no};
         }
         if (remade_log_on()) {
             std::lock_guard lk(evicted_mu);

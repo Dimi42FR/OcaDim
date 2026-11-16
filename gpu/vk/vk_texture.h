@@ -65,6 +65,10 @@ struct Texture {
     bool uploaded = false;    // from guest memory, as of upload_gen
     uint32_t upload_gen = 0;
     uint64_t bc_retry_frame = 0;   // (longshot) a BC3 image whose upload failed: tried again from this frame (vk_texture.cpp)
+    // (longshot, OcaDim, RX_VK_MEM_CENSUS) the same storage, size and format went through the budget within 600 frames:
+    // this object is a make again, and its decode is one the eviction cost. evicted_ago: the frames since it went
+    bool made_again = false;
+    uint32_t evicted_ago = 0;
     uint64_t map_sig = 0;     // (a texture in a virtual pool: its pages' mapping when last uploaded)
     std::vector<uint64_t> page_map;   // (and each 64 KB page's guest address then: what a remap changed)
     struct Run { uint64_t off, guest, n; };   // (and its storage as runs of contiguous guest memory)
@@ -238,6 +242,10 @@ void pass_start_barrier(VkCommandBuffer cmd);
 /// Pass starts with the fragment-stage barrier, since the start
 int64_t pass_barriers_relaxed();
 void texture_stats(int64_t* uploads, int64_t* astc_gpu, int64_t* bytes_uploaded);
+/// (longshot, OcaDim, RX_VK_MEM_CENSUS) the uploads of textures made again after an eviction, against the first ones: whether
+/// the budget's thrashing is what the decode costs, and the line it logs every 120 presents
+bool texture_census_on();
+void texture_census_log();
 /// (longshot) whether texture_read_texels' walk of r at that row stride (0: the region's own) and its own image stride
 /// stays within avail bytes of the data it is given (overflow-checked: the stride is the game's)
 bool texels_fit(const nvn_tex* t, const NVNcopyRegion* r, uint64_t row, uint64_t avail);

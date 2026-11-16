@@ -4769,6 +4769,7 @@ void log_frame_stats() {
              (up - l_up) / 120.0, (upb - l_upb) / 120.0 / 1048576.0, (st_ub_updates - l_ubu) / 120.0,
              (st_ub_overlays - l_ubo) / 120.0, (st_wait_ns - l_wait) / 120.0 / 1e6, (long long)pl, pms,
              (long long)tr, (long long)fl, texture_count(), (unsigned long long)(texture_bytes() >> 20));
+        if (texture_census_on()) texture_census_log();
         {
             const auto waits = gpu_wait_stats::counters.take();
             const double scale = 1.0 / (120.0 * 1e6);
