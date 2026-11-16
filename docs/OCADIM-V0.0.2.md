@@ -91,8 +91,10 @@ qu'un auto-batching pourrait fusionner. Run de 90 s, scène chargée (2 360 draw
 — et c'est avec la clé la plus optimiste (le programme seul ; un vrai batch demande aussi les mêmes formats et layouts).
 Sur les 4,3 ms de binds + draw : **1,2 ms au mieux, ~5 %**.
 
-**Verdict : l'auto-batching ne vaut pas son chantier.** Il reste la version opportuniste (fusionner seulement les runs
-longs, ≥ 8) si un jour le besoin se représente, mais elle ne peut pas dépasser ce plafond.
+**Verdict : l'auto-batching ne vaut pas son chantier.** Avec la clé stricte (programme + push constants + descripteurs),
+la moyenne tombe à **1,06-1,10** : deux draws consécutifs du même programme lient presque toujours des **textures
+différentes**. Fusionner exige donc bindless, et le plafond resterait ~1,5 draw par run (~9 %). Ce n'est pas un prototype
+d'un jour, c'est un chantier de plusieurs semaines pour un gain borné.
 
 Prochaines pistes, dans l'ordre : **le gouverneur de budget** (une page de menu, zéro risque), puis **le lookahead** (les
 hoquets de 6,6 et 13,2 fps mesurés), puis **bindless** si on veut vraiment dépasser +10 %.

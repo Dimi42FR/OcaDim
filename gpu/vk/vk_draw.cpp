@@ -746,6 +746,16 @@ bool layouts_for(const VkDescriptorSetLayoutCreateInfo& li, VkPipelineLayoutCrea
 }
 
 thread_local uint64_t last_push_hash = 0;   // (the draw's push block, as draw_runs_note's second key)
+thread_local uint64_t last_desc_hash = 0;   // (the descriptors it pushed: the third key)
+uint64_t desc_hash(const std::vector<VkWriteDescriptorSet>& w) {
+    uint64_t h = 1469598103934665603ull;
+    for (const VkWriteDescriptorSet& d : w) {
+        const uint64_t v = d.pImageInfo ? (uint64_t)d.pImageInfo->imageView
+                                        : d.pBufferInfo ? (uint64_t)d.pBufferInfo->buffer + d.pBufferInfo->offset : 0;
+        h = (h ^ ((uint64_t)d.dstBinding << 1) ^ v) * 1099511628211ull;
+    }
+    return h;
+}
 bool draw_runs_on() {
     static const bool on = env_on("RX_VK_DRAW_RUNS");
     return on;
@@ -756,14 +766,14 @@ bool draw_runs_on() {
 void draw_runs_note(const void* prog) {
     if (!draw_runs_on()) return;
     static const void* last = nullptr;
-    static uint64_t last_h = 0;
+    static uint64_t last_h = 0, last_d = 0;
     static uint64_t draws = 0, runs = 0, cur = 0, longest = 0;
     static uint64_t s_runs = 0, s_cur = 0, s_long = 0;
     // (the window: the last 2000 draws, so a heavy scene's runs are read on their own, not averaged with menus)
     static uint64_t w_draws = 0, w_runs = 0, w_cur = 0, w_long = 0, w_sruns = 0, w_scur = 0, w_slong = 0;
     const bool same = prog == last;
-    const bool strict = same && last_push_hash == last_h;
-    last = prog, last_h = last_push_hash;
+    const bool strict = same && last_push_hash == last_h && last_desc_hash == last_d;
+    last = prog, last_h = last_push_hash, last_d = last_desc_hash;
     draws++, w_draws++;
     if (same) {
         cur++, w_cur++;
@@ -4756,6 +4766,7 @@ bool bind_descriptors(VkCommandBuffer cmd, VkPipelineBindPoint bp, const Program
             }
             {
                 FINE_SCOPE(FT_PUSHCALL);
+                if (draw_runs_on()) last_desc_hash = desc_hash(wr.writes);
                 vkCmdPushDescriptorSetKHR(cmd, bp, p.layout, 0, (uint32_t)wr.writes.size(), wr.writes.data());
             }
             ps.cmd = cmd, ps.layout = p.layout, ps.n = wr.writes.size();
@@ -4793,6 +4804,7 @@ bool bind_descriptors(VkCommandBuffer cmd, VkPipelineBindPoint bp, const Program
                 for (const VkWriteDescriptorSet& w : changed) fine_n[FC_PUSH_DESCS] += w.descriptorCount;
             }
             FINE_SCOPE(FT_PUSHCALL);
+            if (draw_runs_on()) last_desc_hash = desc_hash(changed);
             vkCmdPushDescriptorSetKHR(cmd, bp, p.layout, 0, (uint32_t)changed.size(), changed.data());
         } else {
             FINE_N(FC_PUSH_NONE, 1);
