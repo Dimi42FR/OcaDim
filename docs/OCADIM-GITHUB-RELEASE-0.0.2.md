@@ -63,6 +63,12 @@
 - **Les mises à jour restent disponibles** : le launcher/updater n'est pas modifié.
 - DLSS exige le dossier `ngx/` à côté de `longshot.exe` ; l'onglet NVIDIA et DLSS restent absents sur AMD.
 
+## Remerciements
+
+- **@mrmimmmme** : pour la touche **Run** (pouvoir binder une touche pour la course), l'onglet **NVIDIA** (les
+  reglages du constructeur au meme endroit) et le **widescreen** rendu visible des l'onglet Display.
+- **@444nils** : pour la **nouvelle icone** OcaDim, desormais portee par l'executable.
+
 ## 5. Connu
 
 - **Shaders manquants** : `cache/longshot_driver_faults.txt` mémorise les programmes sur lesquels le pilote a

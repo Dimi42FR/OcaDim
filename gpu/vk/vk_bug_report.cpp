@@ -549,11 +549,11 @@ std::string write(const Inputs& in) {
     }
 
     std::string text;
-    text += "Longshot bug report, made by the Insert menu's Bug report on " + when(in.now, "%Y-%m-%d at %H:%M") + ".\n\n";
+    text += "OcaDim bug report, made by the Insert menu's Bug report on " + when(in.now, "%Y-%m-%d at %H:%M") + ".\n\n";
     text += std::string("To send it: open ") + kIssues + " and choose Game problem (or the link at the end of this file, which "
             "fills in the answers below), copy the answers below into the fields of the same names, say what happened, and drag "
             "the files of this folder, this one too, into the issue.\n\n";
-    text += "### Longshot version\n\n" + in.version + "\n\n";
+    text += "### OcaDim version\n\n" + in.version + "\n\n";
     text += "### Where in the game\n\n" + where + "\n\n";
     text += "### Graphics card and driver version\n\n" + gpu + "\n\n";
     text += "### CPU, RAM and operating system\n\n" + in.system + "\n\n";
