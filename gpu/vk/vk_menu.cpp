@@ -2540,12 +2540,30 @@ std::string share_saved;   // (the first sentence: the zip's name, its pipelines
 std::atomic<bool> share_busy{false};   // (the worker is copying and opening: presses wait for it)
 std::atomic<int> share_result{-1};     // (the worker's answer: 1 copied, 2 the issue opened; -1 none waiting)
 /// (menu_tick, each frame) the worker's answer into the help box's line
+/// How the help box names the zip's folder: share_downloads' words for it, in the menu's language, else the folder's own name
+/// alone (no user name on screen). (The help box's lines are put together from pieces, each looked up as it goes in: ui::para
+/// looks the whole line up, which no table has)
+std::string share_folder_name(std::string dir, const std::string& where) {
+    if (!where.empty()) return i18n::tr(where.c_str());
+    while (dir.size() > 1 && (dir.back() == '/' || dir.back() == '\\')) dir.pop_back();
+    return dir.substr(dir.find_last_of("\\/") + 1);
+}
+/// The help box's first sentence after a save: the zip's name, its pipelines and its folder (share_folder_name)
+std::string share_saved_line(const std::string& name, long long n, const std::string& folder) {
+    return i18n::tr("Saved ") + name + " (" + std::to_string(n) + i18n::tr(" pipelines) in ") + folder + ". ";
+}
+/// The rest of it, once the worker has answered (share_result: 1 copied, 2 the issue opened)
+std::string share_done_line(int r) {
+    return std::string(i18n::tr((r & 1) ? "The report is copied. " : "The report is in the zip. ")) +
+           i18n::tr((r & 2) ? "Issue 14 is open in your browser: attach" : "Open git.magicbean.dev/MagicBeanDev/Longshot/issues/14 and attach") +
+           i18n::tr(" the zip to a comment, then paste the report and say where you played.");
+}
+/// The help box's line when the zip could not be written in that folder (share_folder_name)
+std::string share_not_written_line(const std::string& folder) { return i18n::tr("The zip could not be written in ") + folder + "."; }
 void share_finish() {
     const int r = share_result.exchange(-1);
     if (r < 0) return;
-    share_said = share_saved + ((r & 1) ? "The report is copied. " : "The report is in the zip. ") +
-                 ((r & 2) ? "Issue 14 is open in your browser: attach" : "Open git.magicbean.dev/MagicBeanDev/Longshot/issues/14 and attach") +
-                 " the zip to a comment, then paste the report and say where you played.";
+    share_said = share_saved + share_done_line(r);
     share_busy.store(false);
     menu_refresh = true;
 }
@@ -2883,18 +2901,16 @@ void share_pipeline_list() {
 #endif
     const std::string path = dir + (dir.back() == '/' || dir.back() == '\\' ? "" : sep) + name;
     const bool written = share_write(path, zip);
-    std::string folder = dir;   // (its name alone: no user name on screen)
-    while (folder.size() > 1 && (folder.back() == '/' || folder.back() == '\\')) folder.pop_back();
-    folder = folder.substr(folder.find_last_of("\\/") + 1);
-    if (!where.empty()) folder = where;
+    const std::string folder = share_folder_name(dir, where);
     if (!written) {
-        share_said = "The zip could not be written in " + folder + ".", share_value = "Not saved";
+        share_said = share_not_written_line(folder), share_value = "Not saved";
         logf("menu: Save my pipeline list: %s could not be written", name.c_str());
         return;
     }
     share_value = "Saved";
-    share_saved = "Saved " + name + " (" + std::to_string(n) + " pipelines) in " + folder + ". ";
-    logf("menu: Save my pipeline list: %s, %lld pipelines, in %s", name.c_str(), n, folder.c_str());
+    share_saved = share_saved_line(name, n, folder);
+    logf("menu: Save my pipeline list: %s, %lld pipelines, in %s", name.c_str(), n,
+         (where.empty() ? folder : where).c_str());   // (the log in English: where's own words, not the help box's)
     if (env_on("HOS_HEADLESS")) {   // (a run without a window: nothing to show the browser or the folder on)
         share_result.store(0);
         share_finish();
@@ -2903,7 +2919,7 @@ void share_pipeline_list() {
     // (the clipboard, the folder and the browser on a worker of their own: ShellExecuteW and xdg-open can take hundreds of ms, and
     // this is the present thread. Presses are ignored until it is done: share_busy)
     share_busy.store(true);
-    share_said = share_saved + "Opening the issue...";
+    share_said = share_saved + i18n::tr("Opening the issue...");
     try {
         std::thread([lines, path, dir] {
 #ifdef _WIN32
