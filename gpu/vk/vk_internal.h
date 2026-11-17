@@ -357,6 +357,13 @@ bool readback_early_on();
 /// 1 over 1 MiB; 2 a bare or wide storage range); the pages the soft write watch reported (full: memory_collect_written's, begun as
 /// collection gen, from early_check_collect_begin: 0 when the check is off)
 void early_check_gpu_write(uint64_t lo, uint64_t hi, uint64_t value, uint64_t part, int kind);
+/// (longshot, vk_replay.cpp: frame overlap) a draw or a dispatch is recorded now (vk_draw.cpp push_constants); follows: a
+/// dispatch, or a draw whose program follows pointers into the game's memory: its recording reads it at the GPU's time
+void frame_overlap_op(bool follows);
+/// (longshot, vk_memory.cpp, for vk_replay.cpp's frame ahead counters) the mirror syncs' dirty pages so far from the capture
+/// taken last and from guest memory as it was at the replay; and the next capture to be taken, looked at: its pages and pools
+void memory_sync_sources(int64_t* capture, int64_t* live);
+void memory_capture_peek(int64_t* pages, int64_t* pools);
 void early_check_cpu_pages(const uint32_t* pages, int64_t n, bool full, uint32_t gen);
 uint32_t early_check_collect_begin();
 void early_in_place_write(uint64_t lo, uint64_t hi, uint64_t value);

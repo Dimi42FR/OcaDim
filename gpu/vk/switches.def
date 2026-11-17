@@ -267,7 +267,7 @@ SW(RX_VK_CAP_SPARE_MB, hw, int, "32 MB of spare capture buffers on cards allowin
 SW(RX_VK_CASCADE_BIAS, tune, string, "0,0: nothing added", "Adds a depth bias <units>,<slope> to the sun's shadow cascades.")
 SW(RX_VK_CHECKPOINTS, kill, enum, "on: NVIDIA diagnostic checkpoints before each draw where the driver has the extension", "0 turns off draw checkpoints; ext enables the extension only; 1 also uses AMD buffer markers where NV's are missing.")
 SW(RX_VK_CHECK_BANKS, diag, bool, "off: no check", "Compares each constant-bank fill against the per-word path and logs up to 20 mismatches.")
-SW(RX_VK_CHUNK, tune, int, "120 draws and dispatches a part", "Draws and dispatches per part a long submission is cut into; 0 sends it whole.")
+SW(RX_VK_CHUNK, tune, int, "240 draws and dispatches a part", "Draws and dispatches per part a long submission is cut into; 0 sends it whole.")
 SW(RX_VK_CLEAR_CPU_MAX, tune, int, "256 bytes", "Largest buffer clear also applied on the CPU in stream order; 0 leaves every clear to the GPU.")
 SW(RX_VK_COMMIT_RESERVE_MB, tune, int, "2560 MB (Windows commit rule); Linux pressure uses linux_pressure.h's own default", "Sets how many MB of commit (or swap, on Linux) the textures leave free for the rest of the system; 0 turns the rule off.")
 SW(RX_VK_COMPACT, kill, bool, "on: sampled textures in a pool of their own, compacted", "=0 (or empty) turns off the texture pool's compaction and its separate pool.")

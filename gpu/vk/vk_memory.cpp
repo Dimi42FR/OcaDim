@@ -2465,7 +2465,7 @@ struct LateStats {
     int64_t rd_fixed = 0, rd_earlier_rec = 0, rd_not_recorded = 0, rd_this_part = 0, fix_diff_pages = 0, fix_whole_pages = 0,
             sync_pages = 0, sync_known = 0, sync_left_unknown = 0;
 } st_lfx;
-std::vector<uint32_t> shadow_forgotten_last;   // (sorted)
+std::vector<uint32_t> shadow_forgotten_last;   // (as the forget's lists gave them, in no order: shadow_synced_known walks it)
 bool shadow_forgotten_all = false;   // (the forget's lists overflowed: no page synced since is known to equal guest memory)
 struct ShadowSynced { uint64_t lo, page; VkBuffer shadow; };
 std::vector<ShadowSynced> shadow_synced;   // (synced since the last write-back's forget, into that shadow; pools_mu)
@@ -2487,13 +2487,34 @@ void shadow_sync_copy(VkCommandBuffer up, VkBuffer src, Pool& p, const std::vect
 // the mirror's words of a span whole over guest memory's newer ones, which the late pages' fix then read as stamped words.
 // Left unknown they are read from guest memory at the next write-back that writes the page back)
 void shadow_synced_known() {
+    if (shadow_synced.empty()) return;
+    // (which of the synced pages the forget's list holds. That list is in the order its pages were reported, thousands of
+    // them at a write-back, and was sorted at every part's end only to be searched here for these few: with the forget's own
+    // sorts, 0.36 ms a frame of the render thread in Castle Town's market. Now the synced pages are the ones sorted, and the
+    // list is walked once: each page is asked of a filter of the synced pages' low 12 bits, then searched for among them)
+    static thread_local std::vector<uint32_t> want;
+    static thread_local std::vector<uint8_t> late;
+    const auto page_of = [](const ShadowSynced& s) { return (uint32_t)((s.lo >> kPageShift) + s.page); };
+    want.clear();
+    for (const ShadowSynced& s : shadow_synced) want.push_back(page_of(s));
+    std::sort(want.begin(), want.end());
+    want.erase(std::unique(want.begin(), want.end()), want.end());
+    late.assign(want.size(), 0);
+    if (!shadow_forgotten_all && !shadow_forgotten_last.empty()) {
+        uint64_t filter[64]{};
+        for (const uint32_t w : want) filter[(w & 4095) >> 6] |= 1ull << (w & 63);
+        for (const uint32_t f : shadow_forgotten_last) {
+            if (!(filter[(f & 4095) >> 6] >> (f & 63) & 1)) continue;
+            const auto at = std::lower_bound(want.begin(), want.end(), f);
+            if (at != want.end() && *at == f) late[(size_t)(at - want.begin())] = 1;
+        }
+    }
     for (const ShadowSynced& s : shadow_synced) {   // (a shadow made since has not had the copy: shadow_synced_freed)
         const auto it = imported.find(s.lo);
         if (it == imported.end() || !it->second.shadow || it->second.shadow != s.shadow) continue;
         std::vector<uint64_t>& known = it->second.shadow_known;
         if ((s.page >> 6) >= known.size()) continue;
-        if (shadow_forgotten_all ||
-            std::binary_search(shadow_forgotten_last.begin(), shadow_forgotten_last.end(), (uint32_t)((s.lo >> kPageShift) + s.page))) {
+        if (shadow_forgotten_all || late[(size_t)(std::lower_bound(want.begin(), want.end(), page_of(s)) - want.begin())]) {
             st_lfx.sync_left_unknown++;
             continue;
         }
@@ -6130,7 +6151,10 @@ void shadows_forget_written() {
         std::vector<uint32_t>& pages = which == 0 ? game : which == 1 ? collected : replay;
         int64_t& known = which == 0 ? st_wbd_known_game : which == 1 ? st_wbd_known_collected : st_wbd_known_replay;
         if (pages.empty()) continue;
-        std::sort(pages.begin(), pages.end());
+        // (as the lists were built, not sorted: a page's bit is cleared and counted the same wherever it stands in its list. The
+        // pool found for a page is kept for the pages after it, and a capture or a collection reports its pages in ascending
+        // order, so the pools are looked up once a run of pages, not once a page. Sorting each list at every part's end for
+        // that alone was 0.36 ms a frame of the render thread in Castle Town's market)
         Pool* p = nullptr;
         for (uint32_t pg : pages) {
             const uint64_t a = (uint64_t)pg << kPageShift;
@@ -6151,10 +6175,10 @@ void shadows_forget_written() {
     }
     // (the pages the capture did not take that were written since: the replay's own writes and the collection's, for the late
     // pages' summary line: a page synced from a capture and also in these has newer words in guest memory than the shadow)
+    // (in the lists' order, not sorted: shadow_synced_known walks it once for the pages it asks about)
     shadow_forgotten_last.clear();
     shadow_forgotten_last.insert(shadow_forgotten_last.end(), collected.begin(), collected.end());
     shadow_forgotten_last.insert(shadow_forgotten_last.end(), replay.begin(), replay.end());
-    std::sort(shadow_forgotten_last.begin(), shadow_forgotten_last.end());
 }
 // (the pass's pipeline: 24 bytes of push constants and no descriptors, its buffers by address; made once)
 struct WbdPipe {
@@ -6860,5 +6884,34 @@ void msync_pass_report() {
 void memory_stats(int64_t* mirrors, uint64_t* mirror_mb, int64_t* sync_bytes, int64_t* sync_copies, int64_t* wb_bytes) {
     *mirrors = st_mirrors, *mirror_mb = mirror_bytes >> 20, *sync_bytes = st_sync_bytes, *sync_copies = st_sync_copies;
     *wb_bytes = st_wb_bytes;
+}
+/// (frame overlap, vk_replay.cpp: counters) the mirror syncs' dirty pages so far that came from the capture taken last, and
+/// those copied from guest memory as it was at the replay (mirror_sync)
+void memory_sync_sources(int64_t* capture, int64_t* live) { *capture = st_sync_cap_pages, *live = st_sync_live_pages; }
+/// (the same) The capture the next memory_take_capture takes, looked at and left: its pages (written since the capture before
+/// it) and how many pools they lie in (pages in no imported pool count as one more)
+void memory_capture_peek(int64_t* pages, int64_t* pools) {
+    static thread_local std::vector<uint32_t> pg;
+    pg.clear();
+    {
+        std::lock_guard lk(cap_mu);
+        if (!captures.empty()) pg = captures.front()->pages;
+    }
+    *pages = (int64_t)pg.size(), *pools = 0;
+    if (pg.empty()) return;
+    std::lock_guard lk(pools_mu);
+    static thread_local std::vector<uint64_t> seen;
+    seen.clear();
+    uint64_t lo = 1, hi = 0;
+    for (uint32_t page : pg) {
+        const uint64_t g = (uint64_t)page << kPageShift;
+        if (g >= lo && g < hi) continue;
+        uint64_t key = 0;
+        lo = 1, hi = 0;
+        auto it = imported.upper_bound(g);
+        if (it != imported.begin() && (--it, g >= it->second.lo && g < it->second.hi)) key = lo = it->second.lo, hi = it->second.hi;
+        if (std::find(seen.begin(), seen.end(), key) == seen.end()) seen.push_back(key);
+    }
+    *pools = (int64_t)seen.size();
 }
 } // namespace mkwvk
