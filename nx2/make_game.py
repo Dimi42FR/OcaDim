@@ -52,6 +52,8 @@ BUILD_ID = "e0f3ccfa"   # (the version the patches, the hot list and the profile
 PROGRAM_ID = "0400486024DEC000"   # (the title itself: main.npdm's ACID names it, nx2/dump.py reads the same field)
 STARTED = time.time()   # (the build's total time, kept in build_times.json and said as @@times)
 sys.path[:0] = [HERE, os.path.join(ROOT, "third_party", "a64-kit", "tools")]   # (python -I leaves the script folder off)
+import long_paths  # noqa: E402
+long_paths.install()   # (paths past 260 characters on Windows, before anything reads a file: #1115)
 import toolchain as _toolchain
 import disk as _disk
 import object_store as _object_store
