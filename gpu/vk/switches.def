@@ -294,6 +294,8 @@ SW(RX_VK_DLSS_ACTOR_REACH, tune, float, "60 world units a second", "How far apar
 SW(RX_VK_DLSS_ACTOR_TOL, tune, int, "64", "Tolerance used when pairing an actor's pose with its pose of the frame before.")
 SW(RX_VK_DLSS_DEBUG, diag, enum, "unset: no debug view", "motion shows the motion vectors; alternate shows the game's own upscale every other frame as a test reference.")
 SW(RX_VK_DLSS_DIR, player, string, "the game folder's ngx, then the user's Longshot/ngx data folder", "Names another folder NGX looks in first for the DLSS and frame generation runtimes.")
+SW(RX_VK_DLSS_FADED, kill, bool, "on: the depth draws of a skinned mesh that had colour and has had none for 3 frames are left out (the camera inside Link, #1370)", "=0 draws them: the temporal upscalers and frame generation then follow the hidden body again.")
+SW(RX_VK_DLSS_FADED_LOG, diag, bool, "off: a line at the start and one for each stretch of frames with such draws left out", "=1 also logs a frame's counts at the first frames and why a hidden mesh's draws were drawn (vk: upscaler: faded:).")
 SW(RX_VK_DLSS_FG, player, enum, "the Insert menu's Frame generation by row", "0 rules DLSS frame generation out for the run, 1 forces it, over the Frame generation by row.")
 SW(RX_VK_DLSS_FG_INVALID, attempt, bool, "FLT_MAX is the 'no motion here' value", "0 makes zero the invalid motion vector value given to DLSS-G, as the Streamline path has it.")
 SW(RX_VK_DLSS_FG_MOST, diag, int, "as many generated frames as the runtime offers", "Caps the number of frames DLSS-G may make per game frame, to imitate an older runtime in checks.")
