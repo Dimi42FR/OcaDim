@@ -7900,16 +7900,24 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
         // (OcaDim) the same targets as the draw before: the note is per target and per frame, and the two calls behind
         // this take a lock each before their own "this frame's largest target is already noted" check. A repeat is a
         // no-op, so it is skipped here: 2 753 draws took 0.92 ms a frame of locks for nothing (RX_VK_PROF_FINE).
+        // (OcaDim) NOT by default: the skip compared the targets and the frame, not the camera. The same targets drawn
+        // with another camera in the same frame (a reflection, the sky, a second pass) kept the first camera's note, and
+        // the temporal upscaler then drew with the wrong matrices for a frame or two: the textures, the sky and the shield
+        // flashing on an RX 9070 XT. RX_VK_TEMPORAL_NOTES_KEEP=1 brings the skip back, now with the camera compared.
+        static const bool keep = env_on("RX_VK_TEMPORAL_NOTES_KEEP");
         static thread_local const Texture* note_color0;
         static thread_local Texture* note_depth;
         static thread_local uint32_t note_w, note_h;
-        static thread_local uint64_t note_frame;
-        if (at.n && at.color[0] && at.depth && (note_frame != texture_frame_no() || note_color0 != at.color[0] ||
-                                                 note_depth != at.depth || note_w != at.width || note_h != at.height)) {
+        static thread_local uint64_t note_frame, note_ubo, note_ubo_size;
+        const uint64_t ubo = s.ubo[0][0].addr, ubo_size = s.ubo[0][0].size;
+        if (at.n && at.color[0] && at.depth &&
+            (!keep || note_frame != texture_frame_no() || note_color0 != at.color[0] || note_depth != at.depth ||
+             note_w != at.width || note_h != at.height || note_ubo != ubo || note_ubo_size != ubo_size)) {
             FINE_SCOPE(FT_MID);
             temporal_note_scene_draw(at.color[0], at.width, at.height, at.depth, s.ubo[0][0].addr, s.ubo[0][0].size);
             fsr3_inputs::note_scene_draw(at.color[0], at.width, at.height, at.depth, s.ubo[0][0].addr, s.ubo[0][0].size);
             note_color0 = at.color[0], note_depth = at.depth, note_w = at.width, note_h = at.height;
+            note_ubo = ubo, note_ubo_size = ubo_size;
             note_frame = texture_frame_no();
         }
     }
