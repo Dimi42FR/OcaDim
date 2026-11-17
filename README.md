@@ -503,14 +503,19 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | Camera speed | 50% to 400%, in steps of 25 | 100% |
 | | Stick dead zone | Default (24%), 5%, 10%, 15%, 20%, 30% | Default (24%) |
 | | Rumble strength | Off, 25% to 150%, in steps of 25 | 100% |
-| | Layout preset | Nintendo (Def), Xbox / PC, Swap Face; Custom once you bind a button yourself (on the Controls page) | Nintendo (Def) |
+| | Layout preset | Nintendo (Def), Xbox / PC, Swap Face, Switch 2 Pro; Custom once you bind a button yourself (on the Controls page) | Nintendo (Def) |
 | | Button prompts | Auto, Switch, Xbox, PlayStation 4, PlayStation 5, Steam Deck, Keyboard (on the Controls page; changes at once where the game allows it, else after a restart) | Auto |
 | | Motion | Opens the Motion page: Motion controls (Off, On; On), Motion sensitivity X (10% to 600%) and Y (10% to 300%, in steps of 10; 100%), Invert motion X and Y (Off, On; Off), Motion deadzone (Low, Standard, High; Standard) | |
 | | Walk mode | Hold, Toggle | Hold |
 | | Walk speed | 15% to 90%, in steps of 5 | 45% |
 | | Controls | Opens the Controls page | |
 | | Menu shortcut | Insert or F1; F1 only; Insert, F1 or Esc | Insert, F1 or Esc |
+| | Controller menu button | None, Home, Back left (GL), Back right (GR) | Home |
 | | Compact menu key | Right Shift, Right Ctrl | Right Shift |
+| NFC | NFC tag | The tag files of your NFC folder, by their names | The first |
+| | Tap tag | Holds the chosen tag to the game's reader | |
+| | Remove tag | Takes it off the reader | |
+| | Scan tag on controller | Reads a tag you own with a Switch 2 Pro Controller (USB) and saves it in your NFC folder | |
 | Debug | Debug tools | Off, On (while on, the tools below it: Heart protection, No-clip flight, Mark position, Return to mark, Set time, Inventory item, Change quantity, Free camera, Teleport, Switch age, Inventory, Movement speed) | Off |
 | | Autosave: | On or Off, available with Debug tools off. Enabling Debug tools switches Autosave to Off. Off skips supported autosaves, including the verified map transitions. You can still save manually. | On |
 | | Player: Damage taken | Half, Normal, Double, Quadruple (live, while Debug tools is on; Half rounds damage up to a quarter heart; Heart protection wins) | Normal |
@@ -855,6 +860,25 @@ it. Without them the kernel's hid-nintendo driver runs the controller, and it ge
 anything SDL reports as a Switch Pro Controller or Joy-Con, and that includes third-party controllers in Switch mode
 (8BitDo, GameSir and others; SDL gives them Nintendo's ids). Some of them may turn it into weak rumble or none: set
 `HOS_HD_RUMBLE=0` to give them the plain motor rumble.
+
+**NFC tags:** where the game asks for a figure's NFC tag, the Insert menu's **NFC** tab gives it one. The tags are files
+in a folder of yours, dumps of tags you own: `.bin` (an NTAG215's 540 bytes; 532 and 572 byte ones too) or a Flipper
+Zero's `.nfc`. The folder is `%LOCALAPPDATA%\Longshot\nfc` on Windows and `~/.local/share/longshot/nfc` on Linux
+(`LONGSHOT_NFC_DIR` names another); the Longshot Launcher's NFC page adds and removes them, or copy them in yourself.
+Choose one in the **NFC tag** row and press **Tap tag** while the game waits for one (or before: it stays at the reader
+until the game reads it). With a Nintendo Switch 2 Pro Controller plugged in over USB (Windows), a real tag held on the
+controller is read too, and **Scan tag on controller** saves one into the folder. Only a tag's ID and its figure's model
+are read from a file; what a game writes to a tag is kept beside your saves instead (`user/nfc`), and no tag, real or
+file, is ever written. [docs/nfc.md](docs/nfc.md) has the details.
+
+**The Nintendo Switch 2 Pro Controller over USB (Windows):** Windows has no driver a game can use for it, so the game
+reads it itself: plugged in with its cable, it is a controller with its motion sensor and rumble like any other, with no
+bridge program. Pick **Switch 2 Pro** as the Layout preset (Controls page) for its own buttons and the Switch's icons;
+its Home button opens this menu (**Controller menu button**, which can also be GL or GR, or none). Only one program can
+have the controller: close Steam (it takes it for Steam Input) and any bridge such as Switch2Connect first, or the log
+says another program has it. A controller that stops taking rumble (it happens; the log says so) plays its own buzz and
+click instead until it is unplugged and plugged in again. Not over Bluetooth, where the controller speaks a pairing of
+Nintendo's own. `HOS_SWITCH2=0` leaves the controller alone.
 
 To change which gamepad button or key presses a Switch button, or which keys move, walk and turn the camera, open the
 Controls tab's Controls page. Choose a row and a column (Gamepad or Keyboard), press <kbd>Enter</kbd> (or the bottom

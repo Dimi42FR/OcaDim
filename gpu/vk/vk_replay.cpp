@@ -5894,6 +5894,7 @@ void present_image(VkImage src, uint32_t sw, uint32_t sh, const int crop[4], VkI
         }
     }
     menu_record(f.cmd, index, dev.swap_extent.width, dev.swap_extent.height);   // (longshot) Dear ImGui's overlays, over all of it
+    menu_rumble_tick();   // (longshot: the Rumble strength row's own rumble, vk_menu.cpp)
     image_barrier(f.cmd, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
     if (vkEndCommandBuffer(f.cmd) == VK_ERROR_DEVICE_LOST) device_lost();
     // (no wait: the image was free before the copy was recorded, image_free above. Not on the timeline either: one queue runs

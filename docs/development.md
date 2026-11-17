@@ -500,6 +500,11 @@ checks the decisions game-free, and on Linux runs the real helper against real p
 | `HOS_INPUT_SCRIPT=<presses>` | Presses timed from the game's first controller read |
 | `HOS_INPUT_LIVE=<file>` | A file the test appends lines of presses to, read every 30 ms; each line's times count from when it is read. A line `!cheat <n>` sends a Cheats page action, `!synclog` logs the NVN syncs (`!dump`, `!shots`, `!rdoc` and `!flasharm` were the WebGPU renderer's: the build has none, and they only log so) |
 | `HOS_INPUT_FRAME_CLOCK=1` | The script's time runs at 60 game frames a second instead of the wall clock |
+| `LONGSHOT_NFC_DIR=<folder>` | The folder of NFC tag files the Insert menu's NFC tab lists (`host/nn_nfp.c`), instead of the user's own (`docs/nfc.md`) |
+| `HOS_NFP_TRACE=1` | `nn::nfp`'s application area calls in the log |
+| `HOS_NFP_SEARCH=1` | A test's: the game's reader looks for a tag from the start, without the game's own NFC screen (the Switch 2 Pro Controller's reader, checked without playing to that screen) |
+| `HOS_SWITCH2=0` | The Nintendo Switch 2 Pro Controller over USB is not taken by the game (`host/pad_switch2.c`, Windows): a bridge program can then have it |
+| `HOS_SWITCH2_RUMBLE_TEST=1` | That controller's rumble checked without hands: a second at rest, a second of rumble, and how far its own accelerometer moved in each, in the log (`switch2: rumble test: ...`). The controller must lie still |
 | `HOS_INPUT_EXCLUSIVE`, `HOS_INPUT_BACKGROUND` (set) | As above |
 | `HOS_INPUT_SCRIPT_BACKGROUND` (set) | No longer needed, only said in the log: scripted and control-bridge presses count with the window behind another one anyway, and the player's keyboard and mouse never do (it used to let them through, so typing in another window reached a test run) |
 | `RX_VK_MENU_SCRIPT=<seconds>:<key>,...` | Timed Insert menu keys: `INS`, `UP`, `DOWN`, `LEFT`, `RIGHT`, `ESC`, `ENTER`, `TABL`, `TABR`, the pad's face buttons `PADS`, `PADE`, `PADW`, `PADN`; and for a text field, `TYPE:<text>` (typed as the keyboard would, up to the next comma) and, while it has the keyboard, `HOME`, `END`, `BACK`, `DEL` besides `LEFT`, `RIGHT`, `ENTER`, `ESC` |

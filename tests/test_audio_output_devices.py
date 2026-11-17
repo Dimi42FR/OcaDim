@@ -64,7 +64,8 @@ def check_host_callbacks(api, backend):
                 'monitor_info': 'hos_monitor_info', 'monitor_select': 'hos_monitor_select',
                 'perf_tracking': 'hos_perf_tracking'}
     assert len(fields) == len(table), 'Host interface/initializer lengths differ'
-    assert fields[-len(expected):] == list(expected), 'Append monitor callbacks after out-of-memory without shifting earlier callbacks'
+    start = fields.index('take_text')   # (later versions append their own after these)
+    assert fields[start:start + len(expected)] == list(expected), 'Append monitor callbacks after out-of-memory without shifting earlier callbacks'
     for field, value in expected.items():
         assert table[fields.index(field)] == value, 'Wrong host callback slot: ' + field
 
