@@ -68,6 +68,19 @@ qui coûtent, pas le rendu.
 - **Les chunks à petites fonctions compilent sans les passes de module de -O1** (`LONGSHOT_LIGHT_PASSES`, actif
   par défaut, #1002) : même code, moins de passe du compilateur.
 
+**Le setup (le wizard qui lit le `.nup`)**
+
+- **Le nombre de compilateurs suit la RAM**, pas seulement les cœurs : un quart des threads sous **12 Go**, la
+  moitié sous **16 Go**, tous sauf un au-dessus (`--jobs`). Avant, un PC de 8 Go partait sur `cœurs − 1`.
+- **2 Go laissés au bureau** sous 16 Go de RAM (`LONGSHOT_MEM_RESERVE_GB`), et le build tourne en priorité
+  *BelowNormal* : le PC reste utilisable pendant la compilation.
+- **Les shaders en échec sont redemandés à chaque mise à jour** : le setup met de côté
+  `cache/longshot_driver_faults.txt`, la liste où le jeu garde **pour toujours** les programmes sur lesquels le
+  pilote a fauté (clé : carte + version du pilote). C'est ce qui se voyait comme « les shaders ne se compilent
+  pas » : le jeu sautait ces shaders sans un mot, et une mise à jour ne les redemandait jamais. Si le pilote
+  fautait encore, la liste revient avec les mêmes lignes.
+- La **préparation des shaders** respectait déjà la RAM : 4 Go réservés au reste du PC, 768 Mo par worker.
+
 **Identité et diagnostic**
 - Icône **OcaDim** dans l'exécutable (générée dans `work/longshot_game.res`), « OcaDim » dans le pied du FPS Dev
   et dans le rapport de bug.

@@ -14,7 +14,7 @@ sealed record BuildResult(int Code, string? Error, string Tail);
 sealed class Setup
 {
     public const string Name = "OcaDim";
-    public const string Version = "0.0.1";
+    public const string Version = "0.0.2";
     public const string GameExe = "longshot.exe";
 
     public string InstallDir { get; set; } = DefaultInstallDir;
@@ -142,6 +142,8 @@ sealed class Setup
         foreach (var a in args) si.ArgumentList.Add(a);
         si.Environment["PYTHONIOENCODING"] = "utf-8";
         si.Environment["PYTHONUNBUFFERED"] = "1";
+        // (OcaDim) the memory the build leaves free, by this PC's RAM: nx2/build.py reads it (LONGSHOT_MEM_RESERVE_GB)
+        si.Environment["LONGSHOT_MEM_RESERVE_GB"] = ReserveGb;
         si.Environment["PATH"] = string.Join(Path.PathSeparator.ToString(),
             new[] { Path.Combine(mingw, "bin"), pythonDir, Environment.GetEnvironmentVariable("PATH") ?? "" });
         if (Directory.Exists(mingw)) si.Environment["LONGSHOT_MINGW"] = mingw;
@@ -163,6 +165,53 @@ sealed class Setup
     {
         "-I", "nx2/make_game.py", "--prepare", "--work", WorkDir, "--log", LogPath,
     };
+
+    /// <summary>(OcaDim) The compilers this PC gets. nx2/make_game.py on its own takes one per CPU thread but one (15 on
+    /// 16 threads) and nx2/build.py starts each only when the memory free holds it, so the RAM is respected — but a small
+    /// PC still sees that many threads. Here the count follows the RAM too: a quarter of the threads under 12 GB, half
+    /// under 16, all but one above.</summary>
+    static int JobsForPc()
+    {
+        int cpus = Math.Max(1, Environment.ProcessorCount);
+        double gb = TotalRamGb;
+        int jobs = gb < 12 ? Math.Max(2, cpus / 4) : gb < 16 ? Math.Max(2, cpus / 2) : Math.Max(2, cpus - 1);
+        return Math.Max(1, Math.Min(jobs, cpus));
+    }
+
+    /// <summary>(OcaDim) What the build leaves to the desktop, over nx2/build.py's 1.5 GB: 2 GB under 16 GB of RAM, so the
+    /// browser that was open before the setup keeps working while it builds.</summary>
+    static string ReserveGb => TotalRamGb < 16 ? "2" : "1.5";
+
+    static double TotalRamGb
+    {
+        get
+        {
+            try { return GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / (1024.0 * 1024 * 1024); }
+            catch (Exception) { return 16; }
+        }
+    }
+
+    /// <summary>(OcaDim) The driver's fault list, moved aside before an update: cache/longshot_driver_faults.txt keeps, for
+    /// good, every program the driver faulted on — keyed by vendor and driver version (gpu/vk/driver_faults.h). A program
+    /// on it is never asked of the driver again, which is what a player sees as "the shaders do not compile": the game
+    /// misses those shaders with no message. A new build may have fixed what faulted, so it gets one more try; if the
+    /// driver faults again the file comes back with the same lines.</summary>
+    public string? ForgetDriverFaults()
+    {
+        var path = Path.Combine(InstallDir, "cache", "longshot_driver_faults.txt");
+        try
+        {
+            if (!File.Exists(path)) return null;
+            var old = path + ".old";
+            File.Delete(old);
+            File.Move(path, old);
+            return old;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
 
     /// The game exe's own icon: nx2/make_icon.py writes work's longshot.res from OcaDim's .ico, and nx2/build.py links
     /// it into longshot.exe (the taskbar, Alt-Tab and the shortcut when it has no icon of its own). A missing Pillow or
@@ -230,9 +279,12 @@ sealed class Setup
                                               CancellationToken cancel)
     {
         var args = new List<string>(CommonArgs());
+        args.AddRange(new[] { "--jobs", JobsForPc().ToString(CultureInfo.InvariantCulture) });
         if (update)
         {
             args.AddRange(new[] { "--update", InstallDir });
+            var moved = ForgetDriverFaults();
+            if (moved != null) line("Shaders : liste des programmes que le pilote avait en échec mise de côté (" + moved + ")");
         }
         else
         {
