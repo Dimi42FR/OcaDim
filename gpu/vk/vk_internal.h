@@ -105,7 +105,7 @@ struct Device {
     // minImageCount (the Vulkan spec's limit). vk_framegen.cpp's present ahead holds two
     std::atomic<uint32_t> swap_spare{0};
     // (longshot) present_image's frame slots while frame generation runs, as create_swapchain made the chain for frame
-    // generation's sets (present_slots_for: 3, or a slot per frame of two sets where the swapchain does not wait for a refresh)
+    // generation's sets (present_slots_for: 3, or a slot per frame of two sets where the chain is made for two)
     std::atomic<uint32_t> swap_slots{3};
     std::vector<VkImageView> swap_views;   // (longshot) a view of each, for Dear ImGui's overlays (VK_NULL_HANDLE: none)
     VkFormat swap_view_format = VK_FORMAT_UNDEFINED;   // (their format: the UNORM one of an sRGB swapchain when it can be)

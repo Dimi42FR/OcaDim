@@ -485,7 +485,7 @@ bool create_device() {
     q.queueCount = 1;
     q.pQueuePriorities = &priority;
     // (longshot) The presents on a queue of a compute family of their own, beside the replay's (RX_VK_PRESENT_QUEUE=1 / 0: on /
-    // off; on by default with NVIDIA's driver on Windows, where it was measured). On the replay's queue vkQueuePresentKHR blocked
+    // off; off by default since v2.0.9: below). On the replay's queue vkQueuePresentKHR blocked
     // with dev.present_mu held, ~0.8 ms a present with frame interpolation at 4x and up to 8, and the game's main and presentation
     // threads waited there to submit. A second queue of the graphics family took that lock off the presents, but its presents
     // blocked longer (~2-4 ms: the graphics work of the two queues takes turns on the GPU) and the made frames were shown late
@@ -501,8 +501,14 @@ bool create_device() {
         VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
         p2.pNext = &dp;
         vkGetPhysicalDeviceProperties2(dev.physical, &p2);
-        want = false;   // (v2.0.9: off by default with the write-back diff until issue 1161's device lost is placed; was:
-        (void)dp;       //  NVIDIA's driver on Windows. RX_VK_PRESENT_QUEUE=1: on)
+        // (v2.0.9: off by default; was: NVIDIA's driver on Windows. Issue 1161's reporter, an RTX 4090 on NVIDIA's 621.14,
+        // had a black screen with it on, the write-back diff off too (4e24bd4d). On: a present no longer waits behind the
+        // game's work on the replay's queue, so a fixed frame generation multiplier's frames reach the screen at their times
+        // while the GPU is busy (vk_framegen.cpp display_main): DLSS Frame Gen 3x, V-Sync On, 165 Hz G-Sync, an RTX 5090 on
+        // 621.24 at ~48 fps GPU-bound, the shown frames' animation error went from 2.98 to 1.65 ms and the latency from 11.8
+        // to 8.7 ms)
+        want = false;
+        (void)dp;
 #endif
         if (const char* e = getenv("RX_VK_PRESENT_QUEUE")) want = atoi(e) != 0;
         for (uint32_t i = 0; want && i < n && compute_family == UINT32_MAX; i++)
@@ -1063,17 +1069,28 @@ bool create_swapchain(uint32_t width, uint32_t height) {
     VkSwapchainCreateInfoKHR ci{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
     ci.surface = dev.surface;
     ci.minImageCount = std::max(caps.minImageCount, 4u);   // (longshot: mailbox with frame interpolation: an image always free)
-    // doc: docs/design.md#13-frame-generations-presents-at-v-sync-off-as-rules (rule 4: two sets' spare images at V-Sync Off)
+    // doc: docs/design.md#13-frame-generations-presents-as-rules (rule 4: two sets' spare images on the timeline)
     // (longshot) A fixed frame generation multiplier's set is presented ahead (vk_framegen.cpp present_ahead_wanted): each
     // of its frames holds an image from the copy to its present, so the set needs as many spare images as it has frames. 3x
     // and 4x ask for that many over the surface's least (an NVIDIA surface: 5 and 6 images); a set the chain cannot hold is
-    // shown one at a time as before. Where the swapchain does not wait for a refresh (V-Sync Off; mailbox) two sets' worth:
+    // shown one at a time as before. Two sets' worth while the sets are on the game's timeline, whatever the present mode:
     // the next set's copies go to the GPU as soon as it comes, while this one is still shown (display_main's take_early; an
     // NVIDIA surface: 6 images at 2x, its most, 8, from 3x up; at 4x, under two sets, the next set's later copies wait for
-    // images). RX_VK_FG_TIMELINE=0 (the sets as before, display_main): one set's
+    // images). Under FIFO with one set's, the copies went to the GPU once the set before was shown, behind the game's next
+    // frame, and the GPU's delay (vk_framegen.cpp pace_delay) grew with its own lateness. RX_VK_FG_TIMELINE=0 (the sets as
+    // before, display_main): one set's. Under FIFO a set with more frames than the chain can ever hold spare (an NVIDIA
+    // surface, 8 images: 7x and 8x) is not presented ahead and goes out as it comes: two sets' images there only deepen
+    // FIFO's queue, two refreshes more delay (the review, 2026-11-17): one set's, as before. (present_image makes the chain
+    // again when the multiplier changes past 4x too)
     static const char* timeline_env = getenv("RX_VK_FG_TIMELINE");
     const bool timeline = !(timeline_env && env_value_off(timeline_env));
-    const uint32_t fg_sets = mode == VK_PRESENT_MODE_FIFO_KHR || !timeline ? 1 : 2;
+    const bool set_too_big = mode == VK_PRESENT_MODE_FIFO_KHR && caps.maxImageCount &&
+                             (uint32_t)std::max(opts.framegen, 0) > caps.maxImageCount - std::min(caps.maxImageCount, caps.minImageCount);
+    // (under FIFO, display_main holds the frames a refresh apart (vk_framegen.cpp fifo_slot), which needs the display's refresh.
+    // With none known (display_refresh_mhz 0) the frames go as they come, and two sets' images would only let FIFO queue more
+    // of them than main's one set did: more delay, nothing gained. One set's there, as before: the review of #1442)
+    const bool fifo_unpaced = mode == VK_PRESENT_MODE_FIFO_KHR && display_refresh_mhz() <= 0;
+    const uint32_t fg_sets = timeline && !set_too_big && !fifo_unpaced ? 2 : 1;
     // (at most kPresentSlotsMax over the least, present_image's frame slots: an image past them would share a slot with
     // the set still shown (docs/design.md section 13, rule 4) and cost video memory for nothing. swapchain_framegen stops at
     // 4, so two sets ask for 8 today; the cap keeps that so if it changes: HumanBean's review of #1362)

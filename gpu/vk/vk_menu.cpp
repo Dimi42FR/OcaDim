@@ -1120,9 +1120,9 @@ const char* hn_framegen(int v, int variant) {
     return b[std::clamp(v, 2, 8)];
 }
 MENU_HINTS(hn_pace, 0,
-           "As soon as it is ready. With V-Sync Off, frame generation's fixed multipliers show each frame at its own time.",
-           "At an even interval: less stutter, at up to one frame of delay. With V-Sync Off, frame generation's fixed "
-           "multipliers show each frame at its own time.")
+           "As soon as it is ready. Frame generation's fixed multipliers show each frame at its own time.",
+           "At an even interval: less stutter, at up to one frame of delay. Frame generation's fixed multipliers show each "
+           "frame at its own time.")
 /// (longshot) Who made the made frames lately (vk_framegen.cpp framegen_maker), with Frame generation on; nullptr: none made.
 /// One name each, "<engine> FG", on the Frame generation by row and the FPS counter alike; "DLSS FG paused" where DLSS FG
 /// showed the game's frames alone (the game's own menus: vk_dlss.cpp dlss_fg_holds)

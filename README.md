@@ -555,9 +555,9 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
   runs (RTX 40 and newer, at 2x to 8x; AMD FSR 3.1 makes the frames it does not, such as Frame generation's Auto), and the
   default there; **FSR 3.1 FG**, AMD FSR 3.1's frame interpolation (any GPU it runs on, at every multiplier and at Auto,
   from the scene's depth and motion; below), the default everywhere else; **Built-in FG**, the renderer's own. **Frame pacing** shows frames at an even interval: less stutter, up to one frame of delay. It paces
-  the frames that frame generation shows, so it has no effect while Frame generation is Off. With V-Sync Off, a fixed
-  multiplier shows each frame at its own time on the game's timeline whether Frame pacing is On or Off (where the
-  window's swapchain holds all of a set's frames at once: up to 6x on an NVIDIA card). For the most even of those frames,
+  the frames that frame generation shows, so it has no effect while Frame generation is Off. A fixed multiplier shows each
+  frame at its own time on the game's timeline whether Frame pacing is On or Off (with V-Sync On one a refresh at most;
+  where the window's swapchain holds all of a set's frames at once: up to 6x on an NVIDIA card). For the most even of those frames,
   put `RX_VK_PRESENT_QUEUE=1` in `longshot_env.txt`: the presents then get a queue of their own, and no made frame waits
   there behind the game's next frame (off by default since Hookshot issue 1161, before the fork, where it gave an RTX 4090 a black screen).
 - **Game frame rate cap** limits the frames the game renders. With a cap of 60 and Frame generation at 2x, the output
