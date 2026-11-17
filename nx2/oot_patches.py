@@ -607,6 +607,17 @@ SOLVER_NEW = SOLVER_OLD.replace(
     "    recomp_store32(", "    c->x[1]=hos_oot_solver_steps((uint32_t)c->x[1], (uint32_t)c->vreg[0][0], (uint32_t)c->vreg[1][0]);"
     "   /* (nx2/oot_patches.py: solver steps rounded up above 60 fps) */\n    recomp_store32(", 1)
 SOLVER_DECL = "extern uint32_t hos_oot_solver_steps(uint32_t game, uint32_t scaled_bits, uint32_t per_frame_bits);\n"
+# A horse's jump state machine, f_82c59eb0 (s10 its step): while the horse gets ready to jump it sets the blend frames into its
+# JumpReady animation each frame, and with a step under 1 (slow motion at 60 fps) it takes them from last frame's plus the step.
+# Above 60 fps every step is under 1, the blend frames grew each frame, and Epona galloped through fences while her body went
+# over them. Before the branch on its "step < 1" test (fcmp s10, 1.0; b.pl past the slow-motion branch), hos_oot_horse_whole_step
+# sends a step that is the whole frame's (the time object's step, [[slot]]+0x10) past it too (host/oot_high_fps.h).
+HORSE_HEAD = "void f_82c59eb0(Ctx *__restrict A64_NOESC c) {\n"
+HORSE_TEST = "    a64_vset64(c->vreg[9],0x3f800000ULL);\n    { if (!a64_fcmp32(c,c->vreg[10],c->vreg[9])) "   # (its line goes on)
+HORSE_BRANCH = "if (!c->n) { goto L_82c5ae48; }\n"
+HORSE_SKIP = ("    if (hos_oot_horse_whole_step((uint32_t)c->vreg[10][0], " + SOUND_SLOT + " + 2192)) { goto L_82c5ae48; }"
+              "   /* (nx2/oot_patches.py: a horse's jump blend above 60 fps) */\n")
+HORSE_DECL = "extern int hos_oot_horse_whole_step(uint32_t step_bits, uint64_t slot);\n"
 
 
 def _function(s, head_text):
@@ -692,6 +703,28 @@ def patch_solver_steps(s):
     if done and SOLVER_DECL not in s:
         s = s.replace('#include "a64.h"\n', '#include "a64.h"\n' + SOLVER_DECL, 1)
     return s, done
+
+
+def patch_horse_jump(s):
+    """A horse's jump state machine's step test with the whole-frame one before it: (s, 1) when it is in s with it (made now or
+    before), (s, 0) when it is not here or its code differs (another game version: left as it is)"""
+    at = _function(s, HORSE_HEAD)
+    if at is None:
+        return s, 0
+    head, end = at
+    body = s[head:end]
+    if body.count(HORSE_SKIP + HORSE_BRANCH) == 1:
+        return s, 1
+    if body.count(HORSE_TEST) != 1 or HORSE_SKIP in body:
+        return s, 0
+    line_end = body.find("\n", body.index(HORSE_TEST) + len(HORSE_TEST))
+    if line_end < 0 or not body.startswith(HORSE_BRANCH, line_end + 1):
+        return s, 0
+    body = body[:line_end + 1] + HORSE_SKIP + body[line_end + 1:]
+    s = s[:head] + body + s[end:]
+    if HORSE_DECL not in s:
+        s = s.replace('#include "a64.h"\n', '#include "a64.h"\n' + HORSE_DECL, 1)
+    return s, 1
 
 
 # f_8263e8e0, the steering update: after applying a turn it clamps the saved rate (+36) to the turn's magnitude times
@@ -1130,6 +1163,11 @@ def patch_file(s, name, protect_hearts=False):
     if turn != out:
         lines.append("oot_patches: the saved steering rate above 60 fps in " + name)
     out = turn
+    horse, found = patch_horse_jump(out)
+    counts["horse jump step"] += found
+    if horse != out:
+        lines.append("oot_patches: a horse's jump blend above 60 fps in " + name)
+    out = horse
     return out, counts, lines
 
 
@@ -1176,6 +1214,8 @@ def report(paths, counts, protect_hearts=False):
         print("oot_patches: WARNING: the music manager's change flags were found %d times, not once" % total["music manager flags"])
     if total["solver sites"] != len(SOLVER_HEADS):   # (without them, above 60 fps moving platforms can drop Link)
         print("oot_patches: WARNING: the solver step count was found at %d of %d places" % (total["solver sites"], len(SOLVER_HEADS)))
+    if total["horse jump step"] != 1:   # (without it, above 60 fps Epona gallops through the fences she jumps)
+        print("oot_patches: WARNING: the horse's jump step test was found %d times, not once" % total["horse jump step"])
     for what, n in done.items():
         if n != 1:
             print("oot_patches: WARNING: the %s was found %d times" % (what, n))
