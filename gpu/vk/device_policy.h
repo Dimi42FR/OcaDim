@@ -273,7 +273,7 @@ struct DevicePolicy {
     // name. RX_VK_MESH_SHADERS, read at the site. Read (create_device, which asks the driver itself: the facts come later)
     int mesh_mode = 0;
     // RADV on GCN 1-4: fallback compute stages over this many phis are not built, as RADV's compiler grew past 25 GB on
-    // them (an RX 580); 0 elsewhere, no limit. RX_VK_FALLBACK_PHI_LIMIT. Site (vk_draw.cpp), step 5
+    // them (an RX 580); Mesa's Intel driver its own (20000); 0 elsewhere, no limit. RX_VK_FALLBACK_PHI_LIMIT. Site (vk_draw.cpp), step 5
     uint32_t fallback_phi_limit = 0;
     // Intel on Windows: one thread at a time in igvk64's compiler, which faulted with two (an Arc A750, issue 496; a UHD).
     // Not where the row's Auto is side by side (intel_side_by_side_auto); the Intel shader compiles row and
@@ -472,7 +472,9 @@ inline DevicePolicy device_policy(const DeviceFacts& f) {
     // (corrected: AMD's Windows driver, whose hang issue 996 is, and not the vendor, which also held RADV's and AMDVLK's
     // builds to one at a time. To go back: f.amd())
     p.fault_gate_serial = f.driver_id == VK_DRIVER_ID_AMD_PROPRIETARY;
-    p.fallback_phi_limit = f.radv_gcn() ? fallback_size::kRadvGcnPhiLimit : 0;
+    // (Mesa's Intel driver has its own limit: its compiler did not finish the 29,000- and 80,000-phi stages, fallback_size_policy.h)
+    p.fallback_phi_limit = f.radv_gcn() ? fallback_size::kRadvGcnPhiLimit
+                           : f.driver_id == VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA ? fallback_size::kIntelPhiLimit : 0;
     p.intel_side_by_side_auto = f.windows && f.intel() && intel_side_by_side_measured(f.device_id, f.driver_version);
     p.intel_compile_gate = f.windows && f.intel() && !p.intel_side_by_side_auto;
     // (corrected: Intel's Windows driver, whose compiler issue 496 is, and not the vendor, which also held ANV's compute

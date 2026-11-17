@@ -515,6 +515,14 @@ void prepare_guess(size_t out[3]);   // (the three parts' counts from the files,
 /// what is done kept (the program cache, the driver's) and not counted as a start that ended inside them
 void prepare_stop();
 bool prepare_stopped();
+void prepare_compiled();   // (longshot, vk_main.cpp) a driver compile ended: the preparation's watchdog sees the driver answer
+bool prepare_compiling();   // (longshot, vk_draw.cpp) a driver compile is under way: a slow one gets longer before a stop
+/// (longshot, vk_main.cpp) The preparation's watchdog saw the process keep half a CPU or more busy: a compile under way is at
+/// work, not stuck on a lock. False in a game start, which has no watchdog
+bool prepare_compiler_busy();
+/// (longshot, vk_draw.cpp) The driver's compiler takes minutes over one large program while it works (Mesa's Intel driver:
+/// a 32-lane variant was not done after 15 minutes on an Iris Xe): the watchdog waits an hour for a compile at work, not 900 s
+bool prepare_long_compiles();
 /// (longshot, vk_draw.cpp) The pipeline cache is being written out before the game (precompile_warm, a GB and more): every
 /// pipeline is counted by then, and the start-up screen says what it waits on
 bool prepare_saving();
