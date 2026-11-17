@@ -8368,7 +8368,8 @@ struct DispatchClock {   // (a dispatch over 2 ms: logged, with where its time w
 /// image; left out, the output stays black under the UI drawn over it. Here a rejected compute pass that writes a
 /// storage image larger than the largest colour texture it samples (and does not also write) is replaced by a linear
 /// blit of that texture into the image: the frame at its full size, without the network's detail. (An image the
-/// pass also samples is one of its inputs, never the output.)
+/// pass also samples is one of its inputs, never the output.) The gameplay networks' passes also when the image is the
+/// texture's size: the full-size pass at 100% Render resolution, an anti-aliasing of the 3D at the output's size.
 /// The first replacement of each program is logged.
 /// (shaders/movie_upscale.comp) The upscale in a shader: it reads and writes the two images as the network's own passes do, where a blit came
 /// out black on an RX 9070 XT. False: no way to, the blit is tried
@@ -8488,7 +8489,11 @@ bool upscale_stub(VkCommandBuffer cmd, const NvnState& s, uint64_t key) {
         const uint64_t a = (uint64_t)t.d.width * t.d.height;
         if (a > in_area) in = t, in_area = a, in_h = s.tex[5][i];
     }
-    if (!in_area || out_area <= in_area) return false;
+    // (an output no larger than the input is no upscale, except for the gameplay networks: at 100% Render resolution the
+    // full-size pass, 9dc98871eb7fc101, reads the 3D at the output's own size and writes the picture. Left out on a GPU
+    // without f16 shaders (vk_shader.cpp: GTX 10, Polaris on RADV) and turned away here, it wrote nothing: the 3D was black
+    // under the HUD at 100%, and only there)
+    if (!in_area || out_area < in_area || (out_area == in_area && !gameplay_network(key))) return false;
     Texture* src = texture_get(&in, true);
     Texture* dst = texture_get(&out, false);
     if (!src || !dst || !src->image || !dst->image || (src->aspect | dst->aspect) != VK_IMAGE_ASPECT_COLOR_BIT || src->bc ||
@@ -8519,9 +8524,10 @@ bool upscale_stub(VkCommandBuffer cmd, const NvnState& s, uint64_t key) {
             logf("vk: movie upscaling uses the linear compute path");
         return true;
     }
-    // Failed upscales can receive RGB9E5 bits in a shared R11 image, including the 75% gameplay TAAU.
-    // Match the observed base-level 2D case only; other fallbacks keep their existing blit.
+    // Failed upscales can receive RGB9E5 bits in a shared R11 image, including the gameplay networks (the 75% TAAU and the
+    // full-size pass). Match the observed base-level 2D case only; other fallbacks keep their existing blit.
     const bool gameplay_taau = key == 0xfd029a317a9a4b94ull;
+    const bool gameplay_full = key == 0x9dc98871eb7fc101ull;
     if (gameplay_taau && scene_tonemap_on() &&
         (src->format == VK_FORMAT_R16G16B16A16_SFLOAT || dst->format == VK_FORMAT_R16G16B16A16_SFLOAT)) {
         if (src->format != VK_FORMAT_R16G16B16A16_SFLOAT || dst->format != VK_FORMAT_R16G16B16A16_SFLOAT ||
@@ -8552,7 +8558,7 @@ bool upscale_stub(VkCommandBuffer cmd, const NvnState& s, uint64_t key) {
         }
         return false; // Do not blit perceptually encoded PsychoV35 input into a linear output.
     }
-    if ((!gameplay_network(key) || gameplay_taau) && in.d.format == NVN_FORMAT_RGB9E5F && out.d.format == NVN_FORMAT_R11G11B10F &&
+    if (in.d.format == NVN_FORMAT_RGB9E5F && out.d.format == NVN_FORMAT_R11G11B10F &&
         src->format == VK_FORMAT_B10G11R11_UFLOAT_PACK32 && dst->format == VK_FORMAT_B10G11R11_UFLOAT_PACK32 &&
         (fd.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) &&
         src->type == VK_IMAGE_TYPE_2D && dst->type == VK_IMAGE_TYPE_2D && src->depth == 1 && dst->depth == 1 &&
@@ -8583,11 +8589,17 @@ bool upscale_stub(VkCommandBuffer cmd, const NvnState& s, uint64_t key) {
                     if (!logged_gameplay_upscale.exchange(true, std::memory_order_relaxed))
                         logf("vk: gameplay RGB9E5 upscale uses the typed fallback");
                 }
+                if (gameplay_full) {
+                    static std::atomic<bool> logged_full{false};
+                    if (!logged_full.exchange(true, std::memory_order_relaxed))
+                        logf("vk: the full-size network 9dc98871eb7fc101 is drawn by the typed fallback (%ux%u -> %ux%u)",
+                             in.d.width, in.d.height, out.d.width, out.d.height);
+                }
                 return true;
             }
         }
     }
-    if (gameplay_taau && in.d.format == NVN_FORMAT_RGB9E5F && out.d.format == NVN_FORMAT_R11G11B10F &&
+    if ((gameplay_taau || gameplay_full) && in.d.format == NVN_FORMAT_RGB9E5F && out.d.format == NVN_FORMAT_R11G11B10F &&
         src->format == VK_FORMAT_B10G11R11_UFLOAT_PACK32 && dst->format == VK_FORMAT_B10G11R11_UFLOAT_PACK32) {
         static std::atomic<bool> warned_gameplay_upscale{false};
         if (!warned_gameplay_upscale.exchange(true, std::memory_order_relaxed))
