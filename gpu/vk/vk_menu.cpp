@@ -5105,7 +5105,7 @@ void draw_fps(ui::Ctx& c, bool under_banner) {
 // (longshot) The player's build, as the start-up screen names it: the wordmark says OCADIM and this is the line under it. The
 // same pair is in host/hos.h (HOS_PRODUCT_NAME/VERSION) for the window's title, the console's, the log's and the dialogs; keep
 // them equal. The upstream build the sources come from stays in the log's first line, where a report needs it.
-#define OCADIM_VERSION "0.0.1"
+#define OCADIM_VERSION "0.2.0"
 
 /// The start-up screen: the logo, the wordmark, what the start is doing, a bar, over the player's own artwork darkened to a
 /// warm dark. A little below the middle; what is under the logo at 0.86 of the logo's scale. startup_fade, 0 to 1, darkens it

@@ -66,7 +66,7 @@ int hos_game_is_mkw(void);
 /* (OcaDim) the player sees the build's own name: the window's title, the taskbar's, the console's and the dialogs'. The
    version is this build's, not the upstream release the sources come from (LONGSHOT_VERSION, logged beside it) */
 #define HOS_PRODUCT_NAME "OcaDim"
-#define HOS_PRODUCT_VERSION "0.0.1"
+#define HOS_PRODUCT_VERSION "0.2.0"
 #define HOS_GAME_TITLE HOS_PRODUCT_NAME " " HOS_PRODUCT_VERSION
 uint64_t hos_used_memory(uint64_t base);   /* (hos_mem.c) base + heap + the game's mapped pages: the used memory it is told */
 int hos_commit(uint64_t addr, uint64_t size);          /* (mkw_glue.c) guest pages made usable by host APIs: 1, or 0 if refused */
