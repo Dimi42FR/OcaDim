@@ -61,26 +61,10 @@ static PFN_vkGetInstanceProcAddr get_instance_proc;
 
 bool load_global() {
 #ifdef _WIN32   // (longshot: the loader from System32 only, not from the current folder or PATH)
-    // NVIDIA Optimus hybrid laptop architecture (CPU-GPU PCIe bus for display): if no ICD is explicitly set,
-    // locate NVIDIA's nv-vk64.json in DriverStore to bind Vulkan exclusively to the dGPU, bypassing Intel iGPU loader hooking
-    // and preventing PCIe display contention.
-    if (!getenv("VK_ICD_FILENAMES")) {
-        WIN32_FIND_DATAA fd;
-        HANDLE hFind = FindFirstFileA("C:\\Windows\\System32\\DriverStore\\FileRepository\\nv*", &fd);
-        if (hFind != INVALID_HANDLE_VALUE) {
-            do {
-                if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-                    char path[MAX_PATH];
-                    snprintf(path, sizeof(path), "C:\\Windows\\System32\\DriverStore\\FileRepository\\%s\\nv-vk64.json", fd.cFileName);
-                    if (GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES) {
-                        SetEnvironmentVariableA("VK_ICD_FILENAMES", path);
-                        break;
-                    }
-                }
-            } while (FindNextFileA(hFind, &fd));
-            FindClose(hFind);
-        }
-    }
+    // (longshot) The drivers are the loader's to find: it reads the ones in use from the display adapters. Nothing here
+    // sets VK_ICD_FILENAMES or VK_DRIVER_FILES, which make the loader take the named files and no other driver: DriverStore
+    // keeps the packages of drivers no longer in use, and one of those named listed no GPU at all (Longshot #821).
+    // pick_device chooses the GPU; RX_VK_DEVICE or the GPU row choose another
     HMODULE m = LoadLibraryExA("vulkan-1.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
 #else
     HMODULE m = LoadLibraryA("vulkan-1.dll");   // (linux: libvulkan.so.1, host/posix/win32_posix.c)
