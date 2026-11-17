@@ -93,6 +93,24 @@ struct Pool {
     uint64_t direct_write_epoch = 0;   // (the part that last wrote it in guest memory, before it had a mirror)
     uint64_t retired_value = 0;  // (retired: the submission that may still use it)
     bool was_mirrored = false;   // (its mirror was given back: its pages stay in the captures, for the next one)
+    // (longshot) the bytes bound from it, at most 1 MB a binding (RX_VK_MIRROR_HEAT_CAP_KB), decayed every 16 submissions: which
+    // pools the GPU reads most, for mirrors_by_heat. Added to without the lock (__atomic), read under it. Neither the whole bound
+    // ranges nor the bindings alone: on a 4 GB RTX 3050 Ti a 160 MB pool bound ~0.6 times a submission, 57 MB a binding (21 GB of
+    // ranges every 600 submissions), and a 132 MB one bound ~7 times, 1.1 MB a binding (4.7 GB); with the 132 MB one's mirror the
+    // frame ran at 59-60 fps against 55 with the 160 MB one's (the GPU 12.3-13.6 ms against 15.0: a wide binding is not read
+    // whole), and small pools bound a thousand times a frame for a few bytes each held the room by their count
+    uint64_t heat = 0;
+    // (longshot) its mirror's VRAM refused by the driver (a full or cut-up 4 GB card): tried again from this submission on, as the
+    // texture cache gives VRAM back, instead of never (RX_VK_MIRROR_HEAT=0: never, as before)
+    uint64_t retry_epoch = 0;
+    uint8_t refusals = 0;
+    static uint64_t heat_of(uint64_t size) {
+        static const uint64_t cap = [] {
+            const char* e = getenv("RX_VK_MIRROR_HEAT_CAP_KB");
+            return e && atoll(e) > 0 ? (uint64_t)atoll(e) << 10 : 1ull << 20;
+        }();
+        return std::min(size, cap);
+    }
     // (longshot) the GPU wrote it past what is copied back (memory_note_gpu_write: a bare entry's guessed range, the pointer
     // table's, a wide binding's): that is in its mirror alone, so the mirror is never given back (mirrors_give_back)
     bool gpu_only = false;
@@ -3624,9 +3642,11 @@ uint64_t device_vram_bytes() {
     return test_vram_bytes(vram);
 }
 namespace {
+// (longshot) room past the budget for the one hottest pool the full mirrors left out, while VRAM has it (mirrors_by_heat)
+uint64_t mirror_heat_extra = 0;
 uint64_t mirror_budget() {
     // (a quarter of the card, at most 2 GB under 15 GB, else 3 GB; at most 256 MB on cards of 4.5 GB or less: mirror_budget.h.
-    // No menu row or Quality preset sets it; RX_VK_MIRROR_MB=<MB> for a test)
+    // No menu row or Quality preset sets it; RX_VK_MIRROR_MB=<MB> for a test. Plus mirrors_by_heat's room for its hottest pool)
     static const uint64_t b = [] {
         if (const char* e = getenv("RX_VK_MIRROR_MB")) return (uint64_t)atoi(e) << 20;
         const uint64_t vram = device_vram_bytes();
@@ -3634,9 +3654,26 @@ uint64_t mirror_budget() {
         if (vram && vram <= (6ull << 30) + (512ull << 20)) return std::min<uint64_t>(1700ull << 20, vram / 3);
         return mirror_rule::auto_bytes(vram);
     }();
-    return b;
+    return b + mirror_heat_extra;
 }
 uint64_t mirror_bytes = 0, mirror_epoch = 0;
+// (longshot, mirrors_by_heat) the mirrors, past RX_VK_MIRROR_SMALL_PCT (70) % of the budget, only for a pool the GPU binds much
+// (mirror_hot_bytes): the rest stays for a hot pool. First come, first served, a hundred small pools bound at the start filled the
+// 512 MB of a 4 GB card, most of them written by the GPU (never given back), and a 132 MB pool the game's indirect dispatches read
+// stayed in system memory in most starts: the dispatches 4.6 ms a frame against 2.8 with it in VRAM (55 fps against 59.5, standing,
+// Kokiri Forest)
+uint64_t mirror_hot_bytes() {   // (RX_VK_MIRROR_HOT_MB, 64: a pool's heat, bound bytes decayed, from which it is hot)
+    static const uint64_t hot = (uint64_t)(getenv("RX_VK_MIRROR_HOT_MB") ? std::max(1, atoi(getenv("RX_VK_MIRROR_HOT_MB"))) : 64) << 20;
+    return hot;
+}
+uint64_t mirror_small_cap() {
+    static const uint64_t pct = [] {
+        const char* e = getenv("RX_VK_MIRROR_SMALL_PCT");
+        const int v = e ? atoi(e) : 70;
+        return (uint64_t)(v > 0 && v < 100 ? v : 100);
+    }();
+    return pct >= 100 ? UINT64_MAX : mirror_budget() / 100 * pct;
+}
 bool mirror_upload = false;   // (a submission is being recorded: its upload command buffer takes the syncs)
 std::vector<Pool*> mirror_wanted, mirror_synced;
 struct WriteBack {
@@ -4624,6 +4661,7 @@ BufferRef gpu_buffer_bind(uint64_t gpu, uint64_t size, bool written) {
         Pool* p = tl.p;
         const uint64_t off = guest - p->lo;
         if (p->last_value < mem_rec_value) p->last_value = mem_rec_value;
+        __atomic_fetch_add(&p->heat, Pool::heat_of(size), __ATOMIC_RELAXED);   // (longshot: mirrors_by_heat)
         if (!mirror_on() || !mirror_upload || p->mstate == Pool::MIRROR_REFUSED || p->mstate == Pool::MIRROR_WANTED) {
             note_in_place_read(!mirror_upload);
             return remember({p->buffer, off, size, 0});
@@ -4653,6 +4691,7 @@ BufferRef gpu_buffer_bind(uint64_t gpu, uint64_t size, bool written) {
     if (!p) return {};
     tl = {p, pools_gen.load(std::memory_order_relaxed)};
     if (p->last_value < mem_rec_value) p->last_value = mem_rec_value;
+    __atomic_fetch_add(&p->heat, Pool::heat_of(size), __ATOMIC_RELAXED);   // (longshot: mirrors_by_heat)
     const uint64_t off = guest - p->lo;
     if (!mirror_on() || !mirror_upload || p->mstate == Pool::MIRROR_REFUSED) {
         if (written) note_direct_write(*p, off, size);
@@ -5221,6 +5260,91 @@ void trims_settle() {
     }
 }
 
+// (longshot, cards of 4-6 GB) The mirrors by heat. A pool gets its mirror at its first binding while the budget has room, so the
+// pools bound first took it all: on a 4 GB RTX 3050 Ti (256-512 MB of mirrors) 23 small pools held the mirrors, read ~0.4 GB
+// over 600 submissions, while two pools of 160 and 132 MB, 96% of the 21.9 GB the GPU read over PCIe in those submissions,
+// stayed WANTED for good: mirrors_give_back only frees mirrors idle for kIdleEpochs, and the small ones are bound every frame.
+// Here a wanted pool that does not fit takes the room of mirrored pools bound at least four times less (heat), freed as the
+// idle ones are: done on the GPU, not GPU-only or GPU-written data, no inheritance pending (read in system memory after, slower,
+// not wrong). Every 64 submissions, the hottest wanted pool first. On by default on cards of 6.5 GB or less (mirror_budget's rule
+// for them), where the budget is what keeps the hot pools out; measured only on a 4 GB card, so larger cards keep first come, first
+// served: their budget and the last 30 % mirror_small_cap keeps are not measured with it. RX_VK_MIRROR_HEAT=0 / 1: off / on on any card
+bool mirror_heat_on() {
+    static const bool on = [] {
+        if (const char* e = getenv("RX_VK_MIRROR_HEAT")) return !env_value_off(e);
+        const uint64_t vram = device_vram_bytes();
+        return vram && vram <= (6ull << 30) + (512ull << 20);
+    }();
+    return on;
+}
+void mirrors_by_heat() {   // (pools_mu held)
+    std::vector<Pool*> wanted(mirror_wanted.begin(), mirror_wanted.end());
+    std::sort(wanted.begin(), wanted.end(), [](const Pool* a, const Pool* b) { return a->heat > b->heat; });
+    static int64_t logged, freed, made_room;
+    for (Pool* w : wanted) {
+        const uint64_t n = w->hi - w->lo, budget = mirror_budget(), wh = __atomic_load_n(&w->heat, __ATOMIC_RELAXED);
+        if (!wh || n > budget || n > (1ull << 30) || mirror_bytes + n <= budget) continue;   // (fits already: mirror_make makes it)
+        // (not hot: room made up to the budget is past the small cap, which mirror_make keeps from it, and the mirrors freed for
+        // it would be made again at their next binding)
+        if (wh < mirror_hot_bytes() && mirror_small_cap() < budget) continue;
+        // (the room it needs from the mirrored pools that give the most room for the least heat, colder ones first by heat a
+        // MB: a few small pools bound every frame can each be hotter than it, and the 23 of them held the room it needs. They
+        // go only if all of their heat together is at most half of its own: what the GPU then reads over PCIe is less, and
+        // they cannot take the room back from it, which would need twice its heat)
+        std::vector<Pool*> cold;
+        for (auto& [lo, p] : imported)
+            if (p.mstate == Pool::MIRROR_ON && !p.gpu_only && !p.gpu_written && !p.inherit_pending && p.last_value <= mem_completed &&
+                __atomic_load_n(&p.heat, __ATOMIC_RELAXED) < wh / 2)
+                cold.push_back(&p);
+        std::sort(cold.begin(), cold.end(), [](const Pool* a, const Pool* b) {   // (heat per MB of mirror given back)
+            return (double)a->heat / (double)std::max<uint64_t>(1, mirror_size(*a)) <
+                   (double)b->heat / (double)std::max<uint64_t>(1, mirror_size(*b));
+        });
+        uint64_t room = 0, cost = 0;
+        size_t take = 0;
+        while (take < cold.size() && mirror_bytes - std::min(room, mirror_bytes) + n > budget)
+            room += mirror_size(*cold[take]), cost += __atomic_load_n(&cold[take]->heat, __ATOMIC_RELAXED), take++;
+        if (mirror_bytes - std::min(room, mirror_bytes) + n > budget || cost > wh / 2) {   // (not enough colder room: as before)
+            // (longshot) The hottest pool left out, the mirrors full of ones the GPU writes (never given back: what it wrote is only
+            // there): it gets room past the budget, once, while the card has it. On a 4 GB RTX 3050 Ti at 512 MB, a 132 MB pool
+            // bound 7 times a submission was in VRAM in some starts and not in others, first come first served: the GPU 12.4-13.6 ms
+            // a frame against 15.0 (standing, Kokiri Forest), and with a budget of 640 MB for all pools the textures ran short.
+            // RX_VK_MIRROR_HEAT_EXTRA=1 (a test, off: measured on one card only): on
+            static const bool extra_on = env_on("RX_VK_MIRROR_HEAT_EXTRA");
+            uint64_t used = 0, allowed = 0;
+            if (extra_on && !mirror_heat_extra && w == wanted.front() && n <= (256ull << 20) && wh >= (16ull << 20) &&
+                vram_usage(&used, &allowed) && allowed && used + n + (64ull << 20) <= allowed / 100 * 92) {
+                mirror_heat_extra = n;
+                logf("vk: mirrors by heat: pool %#llx (%llu MB, heat %llu KB) given room past the budget (%llu MB more; VRAM %llu of "
+                     "%llu MB used) (RX_VK_MIRROR_HEAT_EXTRA)", (unsigned long long)w->lo, (unsigned long long)(n >> 20),
+                     (unsigned long long)(wh >> 10), (unsigned long long)(n >> 20), (unsigned long long)(used >> 20),
+                     (unsigned long long)(allowed >> 20));
+                continue;
+            }
+            static int told;
+            if (n >= (32ull << 20) && told++ < 24)
+                logf("vk: mirrors by heat: pool %#llx (%llu MB, heat %llu KB) given no room: %zu colder mirrors, %llu MB of them taken "
+                     "(heat %llu KB), the mirrors at %llu MB of %llu", (unsigned long long)w->lo, (unsigned long long)(n >> 20),
+                     (unsigned long long)(wh >> 10), cold.size(), (unsigned long long)(room >> 20), (unsigned long long)(cost >> 10),
+                     (unsigned long long)(mirror_bytes >> 20), (unsigned long long)(budget >> 20));
+            continue;
+        }
+        for (size_t i = 0; i < take; i++) {
+            Pool* p = cold[i];
+            if (logged++ < 40)
+                logf("vk: mirror of pool %#llx (%llu MB, heat %llu KB) given back for pool %#llx (%llu MB, heat %llu KB): the GPU reads "
+                     "that one more (RX_VK_MIRROR_HEAT=0: off)", (unsigned long long)p->lo, (unsigned long long)((p->hi - p->lo) >> 20),
+                     (unsigned long long)(p->heat >> 10), (unsigned long long)w->lo, (unsigned long long)(n >> 20),
+                     (unsigned long long)(wh >> 10));
+            mirror_free(*p);
+            freed++;
+        }
+        made_room++;
+    }
+    if (made_room && made_room % 16 == 1)
+        logf("vk: mirrors by heat: room made %lld times, %lld colder mirrors given back", (long long)made_room, (long long)freed);
+}
+
 void memory_begin_submission() {
     std::lock_guard lk(pools_mu);
     reap_mirrors();
@@ -5234,6 +5358,11 @@ void memory_begin_submission() {
     if (tex_capture_on()) publish_tex_spans(texture_frame_no());
     if (!mirror_on()) return;
     mirrors_trim();
+    if (mirror_heat_on()) {   // (longshot: mirrors_by_heat; the heat decays by a quarter every 16 submissions)
+        if (mirror_epoch % 16 == 0)
+            for (auto& [lo, p] : imported) __atomic_store_n(&p.heat, __atomic_load_n(&p.heat, __ATOMIC_RELAXED) / 4 * 3, __ATOMIC_RELAXED);
+        if (mirror_epoch % 64 == 0 && !mirror_wanted.empty()) mirrors_by_heat();
+    }
     {
         uint64_t want = 0;
         for (Pool* p : mirror_wanted) want += p->hi - p->lo;
@@ -5281,6 +5410,12 @@ void memory_begin_submission() {
         trims_settle();   // (a part's mirror made at its binding since)
         return;
     }
+    // (longshot: the hottest first. Unsorted, the small pools mirrors_by_heat had just given back were made again first, in the room
+    // it made for the hot one, and a 132 MB pool bound 7 times a submission stayed in system memory beside 353 small mirrors)
+    if (mirror_heat_on())
+        std::stable_sort(mirror_wanted.begin(), mirror_wanted.end(), [](const Pool* a, const Pool* b) {
+            return __atomic_load_n(&a->heat, __ATOMIC_RELAXED) > __atomic_load_n(&b->heat, __ATOMIC_RELAXED);
+        });
     for (Pool* p : mirror_wanted) mirror_make(*p);
     trims_settle();   // (the old mirror waits for no more only once every part has its own)
     mirror_wanted.clear();
@@ -5313,6 +5448,10 @@ void memory_sync_mirrors_before_segments() {
 /// given back) or over 1 GB (never)
 bool mirror_make(Pool& pool) {
     Pool* p = &pool;
+    if (mirror_epoch < p->retry_epoch) {   // (longshot: its VRAM refused not long ago; wanted again at a later binding)
+        if (p->mstate == Pool::MIRROR_WANTED) p->mstate = Pool::MIRROR_NONE;
+        return false;
+    }
     {
         const uint64_t n = p->hi - p->lo;
         // (longshot: RX_VK_MIRROR_TIGHT=1, none while VRAM is 90% full. Off: 8 GB cards sit there all the time, and without their mirrors
@@ -5337,7 +5476,12 @@ bool mirror_make(Pool& pool) {
                 take = (uint64_t)std::count(live.begin(), live.end(), (uint8_t)1) * sparse_req.alignment;
             }
         }
-        if (mirror_bytes + take > mirror_budget() || n > (1ull << 30) || tight) {
+        // (longshot) the last RX_VK_MIRROR_SMALL_PCT (70) % of the budget only for a pool the GPU binds much (its heat, at least
+        // RX_VK_MIRROR_HOT_MB (64) MB of bound bytes, decayed: mirror_hot_bytes). Holding only the pools under 32 MB to 70 %, pools of
+        // 44 to 68 MB took the rest before the 132 MB one
+        const bool small_full = mirror_heat_on() && __atomic_load_n(&p->heat, __ATOMIC_RELAXED) < mirror_hot_bytes() &&
+                                mirror_bytes + take > mirror_small_cap();
+        if (mirror_bytes + take > mirror_budget() || n > (1ull << 30) || tight || small_full) {
             if (sparse_buf) sparse_buffer_unused(sparse_buf, n, sparse_req, spare_after);
             p->mstate = n > (1ull << 30) ? Pool::MIRROR_REFUSED : Pool::MIRROR_NONE;
             static int logged;
@@ -5359,7 +5503,14 @@ bool mirror_make(Pool& pool) {
         }
         if (sparse_buf) p->sparse_made = n;   // (what the next mirror of this size may take its buffer by, mirror_free)
         if (!sparse_buf && !create_device_buffer(n, kUsage, p->mirror, p->mirror_alloc)) {
-            p->mstate = Pool::MIRROR_REFUSED;
+            // (longshot: again after 256, 512, ... submissions, eight times at most)
+            const bool again = mirror_heat_on() && p->refusals < 8;
+            p->mstate = again ? Pool::MIRROR_NONE : Pool::MIRROR_REFUSED;
+            if (again) p->retry_epoch = mirror_epoch + (256ull << p->refusals), p->refusals++;
+            static int logged_refused;
+            if (logged_refused++ < 16)
+                logf("vk: pool %#llx (%llu MB): its mirror's VRAM refused by the driver (%s)", (unsigned long long)p->lo,
+                     (unsigned long long)(n >> 20), again ? "tried again later" : "never again");
             return false;
         }
         {   // (longshot) the page table points at the mirror: what the GPU wrote is there, and guest memory has it only after the write-back
