@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 DRIVER = r'''#define _CRT_SECURE_NO_WARNINGS 1
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -30,6 +31,10 @@ DRIVER = r'''#define _CRT_SECURE_NO_WARNINGS 1
 #include <map>
 #include <mutex>
 #include <utility>
+namespace wrote_regions {   // (OcaDim: gpu/vk/wrote_regions.h)
+inline bool any(uint64_t, uint64_t) { return true; }
+inline void mark(uint64_t, uint64_t) {}
+}
 static int fails;
 #define CHECK(x) do { if (!(x)) { std::printf("FAIL line %d: %s\n", __LINE__, #x); fails++; } } while (0)
 static void logf(const char*, ...) {}
@@ -37,6 +42,14 @@ static uint64_t frame_no, rec_value, completed_value, tl_watch_prog;
 struct Texture { uint64_t gpu, guest_size, gpu_wrote_seen; uint32_t id, width, height, nvn_format; };
 std::map<uint64_t, std::pair<uint64_t, uint64_t>> gpu_wrote;
 std::mutex gpu_wrote_mu;
+// (OcaDim: the memo texture_gpu_wrote keeps so a sampled texture need not walk the map)
+static bool env_on(const char* e) { const char* v = getenv(e); return v && atoi(v) != 0; }
+struct GpuWroteSeen { uint64_t lo = 0, hi = 0, value = 0, changes = 0; };
+thread_local GpuWroteSeen gpu_wrote_seen[64];
+std::atomic<uint64_t> gpu_wrote_changes{0};
+bool gpu_wrote_seen_hit(const GpuWroteSeen& s, uint64_t lo, uint64_t hi, uint64_t value, uint64_t changes) {
+    return s.hi && s.lo == lo && s.hi == hi && s.value == value && s.changes == changes;
+}
 /* WRITER */
 /* READER */
 
