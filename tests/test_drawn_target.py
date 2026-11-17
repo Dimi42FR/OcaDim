@@ -75,6 +75,7 @@ void drawn_writeback_note(Texture*) {}
 bool texture_resident(Texture*, uint32_t, uint32_t) { return true; }
 std::mutex gpu_wrote_mu;
 std::map<uint64_t, std::pair<uint64_t, uint64_t>> gpu_wrote;
+static const bool over_drawn = false;   // (OcaDim: a drawn-and-finalized texture ignores buffer writes; RX_VK_GPU_WRITE_OVER_DRAWN=1 for the old way)
 std::map<uint64_t, std::pair<uint64_t, uint32_t>> gpu_owned;
 namespace wrote_regions {   // (OcaDim: the quick "did any GPU write reach here" table, gpu/vk/wrote_regions.h)
 inline bool any(uint64_t, uint64_t) { return true; }
@@ -193,31 +194,30 @@ int main(int argc, char**) {
     draw(over);
     finalize(over);
     Texture* kept = touch(over);
-    expect(old ? !kept && dirty == span(0, 0x8000) : kept == over,
-           old ? "as before: a buffer's write before the pass, all of it" : "a buffer's write of a submission before the pass: kept");
-    // One after the drawing is newer: all of it, as before
+    expect(kept == over, "a buffer's write before the pass: the drawn image kept (OcaDim)");
+    // One after the drawing is newer: the image's texels are the GPU's, guest memory never had them (OcaDim)
     texture_gpu_wrote(over->gpu + 0x2000, 0x1000);
     next_frame();
     completed_value = rec_value;
     kept = touch(over);
-    expect(!kept && dirty == span(0, 0x8000), "a buffer's write after the drawing: all of it, as before");
+    expect(kept == over, "a buffer's write after the drawing: the drawn image kept (OcaDim)");
 
-    // One in the pass's own submission: which came first is not known, so all of it, as before
+    // One in the pass's own submission: which came first is not known, the drawn image kept (OcaDim)
     Texture* same = make(0x90100000, 0x90100000, 0x8000);
     texture_gpu_wrote(same->gpu, 0x1000);
     draw(same);
     finalize(same);
     kept = touch(same);
-    expect(!kept && dirty == span(0, 0x8000), "a buffer's write in the pass's own submission: all of it, as before");
+    expect(kept == same, "a buffer's write in the pass's own submission: the drawn image kept (OcaDim)");
 
-    // One before a copy into the texture (no pass): all of it, as before
+    // One before a copy into the texture (no pass): the image's texels kept (OcaDim)
     Texture* copied = make(0x90300000, 0x90300000, 0x8000);
     texture_gpu_wrote(copied->gpu, 0x1000);
     next_frame();
     texture_written(copied, "a texture-to-texture copy");
     finalize(copied);
     kept = touch(copied);
-    expect(!kept && dirty == span(0, 0x8000), "a buffer's write before a copy into the texture: all of it, as before");
+    expect(kept == copied, "a buffer's write before a copy into the texture: the image kept (OcaDim)");
 
     // Drawn and finalized with no buffer write: kept, as before
     Texture* low = make(0x90200000, 0x90200000, 0x8000);
@@ -284,7 +284,7 @@ def main():
         tmp = Path(tmp)
         (tmp / "f.cpp").write_text(code, encoding="utf-8")
         exe = tmp / ("f.exe" if os.name == "nt" else "f")
-        built = subprocess.run([cxx, "-std=c++20", "-include", str(ENV_ON_H), "-O0", "-Wall", "-Wextra", "-Werror",
+        built = subprocess.run([cxx, "-std=c++20", "-include", str(ENV_ON_H), "-O0", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function",
                                 str(tmp / "f.cpp"), "-o", str(exe)])
         if built.returncode:
             raise SystemExit("FAIL: the code cut out of %s does not build in this test's FIXTURE: if the error names a "

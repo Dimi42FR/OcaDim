@@ -3006,8 +3006,14 @@ Texture* texture_touch(Texture* tex, bool for_sampling) {
     static const bool no_partial = env_on("RX_VK_NO_PARTIAL");   // (A/B: whole re-uploads)
     // (a buffer the GPU wrote over its storage, done since: all of it again; the tiles of MKW's terrain are filled so
     // and stayed the flat placeholder they were made with)
+    // (OcaDim) never for a texture the GPU drew and the game finalized: its texels are the image's, and guest memory never
+    // got them, so a buffer write into that storage is another variable's or the CPU's stale copy, not this image's
+    // content. Uploading over it drew textures, the shield and the sky wrong for a frame or two (RX 9070 XT, #473 2134x1200
+    // and #897 534x300: "upload over a drawn image ... 0 KB dirty in 0 ranges, a GPU buffer wrote it"). Desktop switch:
+    // RX_VK_GPU_WRITE_OVER_DRAWN=1 restores the whole re-upload.
+    static const bool over_drawn = env_on("RX_VK_GPU_WRITE_OVER_DRAWN");
     const uint64_t seen_before = tex->gpu_wrote_seen;   // (put back if the upload fails: the write is still to be taken)
-    const bool gpu_dirty = tex->uploaded && gpu_wrote_into(*tex);
+    const bool gpu_dirty = tex->uploaded && (over_drawn || !(tex->gpu_written && tex->released)) && gpu_wrote_into(*tex);
     const bool partial = !no_partial && !gpu_dirty && tex->uploaded && !tex->gpu_written && !tex->released;
     // (a texture the GPU drew and the game finalized: only what the CPU wrote since then. Its memory never got the
     // GPU's texels, and a write before (another variable in the same page) re-uploaded garbage over a drawn LUT:
