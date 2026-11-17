@@ -182,6 +182,7 @@ SW(HOS_TEST_ALLOC_REFUSE, diag, string, "off", "Refuses every allocation whose l
 SW(HOS_TEXTS, kill, bool, "on: reworded texts served from the game folder's texts", "=0: the game's own texts, not the ones reworded for a PC.")
 SW(HOS_TEXT_SIZE, player, int, "the menu's Text size row", "The dialogue text size choice, over the Insert menu's Text size option.")
 SW(HOS_TEXT_SPEED, player, int, "the menu's Text speed row (0: the game's)", "Text speed 0-3 (the game's, 2x, 4x, instant) over the options file.")
+SW(HOS_TEX_COMPACT_MS, tune, string, "1000: the game's texture manager asks for a compaction round of its texture heap at most once a second", "At least that many milliseconds between two rounds; 0: at every frame none runs, as the game has it; off: never.")
 SW(HOS_THP, kill, bool, "transparent huge pages are off in the guest window (MADV_NOHUGEPAGE)", "=1 allows transparent huge pages in the guest window, as before.")
 SW(HOS_THREAD_TIMES, diag, int, "off (HOS_PROFILE=1 sets it to HOS_PROFILE_EVERY's)", "Logs every <seconds> the threads that used over 5 % of a core, by name.")
 SW(HOS_TICK_CONVERT_192, kill, bool, "tick conversions use the counter's own 31.25 MHz", "=1 converts ticks at the Switch 1's 19.2 MHz, as before (spans 1.63x too long).")
