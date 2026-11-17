@@ -1355,6 +1355,7 @@ and clock inputs; actual Windows/Linux capture and menu rendering still require 
 | Key | Values |
 |---|---|
 | `quality_preset` | 0 Custom, 1 Minimum (4GB), 2 Low (6GB), 3 Balanced (8GB), 4 High (12GB), 5 Ultra (16GB+) |
+| `memory_budget` | No menu row: the preset the settings came from (1 Minimum to 5 Ultra), kept when another row turns the preset to Custom; 0 none. It is the memory tier (`menu_memory_tier`) that Minimum's smaller ASTC mips (`low_vram_texture_mips`) and the Shadow resolution's Auto go by; with 0 and a preset, the preset's; with 0 on Custom, Auto (this PC)'s tier for this PC, Minimum on every integrated GPU and on cards of 4.5 GB or less |
 | `gpu_device` | 0 Auto, n the n-th card with Vulkan 1.3 as the row lists them |
 | `frame_generation` | 0 Off, 2 to 8 the multiplier |
 | `resolution` | 0 Auto, 1 100%, 2 75%, 3 67%, 4 50% |

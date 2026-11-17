@@ -2169,9 +2169,11 @@ bool low_vram_texture_mips() {
     // Windows paged the game out (3-6 fps). With 16 GB of RAM or less it counts as small whatever the driver allows
     static const bool shared = dev.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU && system_ram_bytes() &&
                                system_ram_bytes() <= (16ull << 30);
-    // (Minimum's settings, opts.budget 1: Minimum, Auto (this PC) at Minimum's tier, or Custom after either, which keeps them: the
-    // Debug tab's Set up for a weak laptop leaves the preset on Custom)
-    return !disabled && (small || shared) && (opts.preset == 1 || opts.budget == 1);
+    // (Minimum's settings, memory tier 1: Minimum, Auto (this PC) at Minimum's tier, or Custom after either, which keeps them: the
+    // Debug tab's Set up for a weak laptop leaves the preset on Custom. Custom with no preset behind it goes by Auto's tier for
+    // this PC: a Steam Deck on an options file from before memory_budget drew the terrain's 1365x1365x90 arrays at full size, and
+    // the arrivals that decode them again took twice as long, 1.0 against 2.2-2.4 s at the save's load)
+    return !disabled && (small || shared) && (opts.preset == 1 || menu_memory_tier() == 1);
 }
 
 Texture* create(const Key& key, const nvn_tex* t, VkFormat vf, bool astc, int bw, int bh, int bpb, bool as_target) {
