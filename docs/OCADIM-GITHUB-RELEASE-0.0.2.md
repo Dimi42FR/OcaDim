@@ -10,6 +10,8 @@
 - **Deux réglages de perf dans Debug** : `Write back diff` et `Upscaler notes cache`, gardés dans l'ini.
 - **Plus de flashs** : #51 retiré, une texture finalisée n'est plus ré-uploadée, le cache des notes compare la caméra.
 - **Plus rapide que la 0.0.1** : le diff des write-backs est réactivé par défaut, plus #1242 et #1250.
+- **Un builder réparé et plus rapide** : les dossiers de plus de 260 caractères passent, le lift Windows est
+  ~un tiers plus rapide, 1,2 Go de moins, -O2 découpé en parties.
 - **Petits PC pris en charge, sans rien régler** : budget de VRAM par carte, pool vidé à 90/97 %, uploads ×4 en
   chargement, 539 Mo de RAM en moins (section 2).
 - **Une identité** : icône OcaDim dans l'exe (merci **@444nils**), « OcaDim » dans le FPS Dev et le rapport de bug.
@@ -46,6 +48,25 @@
   écrasait le dessin une frame).
 - **Notes DLSS/FSR** : la caméra (UBO vue/projection) entre dans la comparaison, puis le cache est réactivé.
 - Les **submits ne sont plus copiés à chaque frame** pour `RX_VK_BENCH` quand il n'est pas demandé.
+
+**Le builder et le lift, nettement plus rapides**
+
+C'est le chantier qui répond à « je n'arrive pas à compiler » : sur un petit PC, c'est le lift et la compilation
+qui coûtent, pas le rendu.
+
+- **On peut builder depuis un dossier profond.** Le build tourne **depuis, dans et vers des chemins de plus de
+  260 caractères** (#1132) : c'était le cas d'un launcher portable dans `Téléchargements`, où le builder échouait
+  avec `FileNotFoundError` — et où un dossier trop profond n'était même pas listé, donc ses sources manquaient
+  sans un mot.
+- **Le lift Windows ~un tiers plus rapide**, le même C en sortie (#1116) : les vérifications de flottants lues
+  dans le texte, les recherches de découverte, et les processus d'émission démarrés plus tôt.
+- **1,2 Go de moins dans le processus du lift**, donc **plus de workers d'émission** démarrent : environ un
+  cinquième de mieux, même C (#1128).
+- **La découverte se fait dans des processus séparés** : environ un quart plus rapide sur un PC occupé (#1131).
+- **Les gros morceaux compilent avec leurs fonctions géantes découpées** (#1146) et **les chunks d'un build
+  tout en -O2 sont coupés en parties** (#1431) : moins d'attente devant un seul fichier énorme.
+- **Les chunks à petites fonctions compilent sans les passes de module de -O1** (`LONGSHOT_LIGHT_PASSES`, actif
+  par défaut, #1002) : même code, moins de passe du compilateur.
 
 **Identité et diagnostic**
 - Icône **OcaDim** dans l'exécutable (générée dans `work/longshot_game.res`), « OcaDim » dans le pied du FPS Dev
