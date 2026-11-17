@@ -157,6 +157,14 @@ int64_t texture_frame_ns();           // (texture_frame as a whole: each present
 /// The texture an NVN texture's storage is (made and uploaded at first use, uploaded again when the CPU wrote its
 /// storage since). null for formats and targets that have no image (buffers, unknown formats).
 Texture* texture_get(const nvn_tex* t, bool for_sampling);
+/// (longshot, RX_VK_TEX_AHEAD: texture_ahead.h) Textures made and uploaded before their first draw, while the frames are
+/// light. The host's announcements: a texture the game made, and one it released (any thread)
+void texture_ahead_made(const nvn_tex* t);
+void texture_ahead_gone(const nvn_tex* t);
+/// Once a game frame, with the frame's draws: the next frame's allowance, and the list of textures drawn kept
+void texture_ahead_frame(int64_t draws);
+/// In a submission's recording (its uploads have their command buffer), before its commands: what the allowance lets through
+void texture_ahead_run();
 /// A view of it: the view's levels and layers (all when v is null), as view_type, in the view's format
 /// (attachment: one level, one layer; storage: one level, every layer, in a storage-capable format)
 enum class ViewUse { Sample, Attachment, Storage };

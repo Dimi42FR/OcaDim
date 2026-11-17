@@ -2808,6 +2808,7 @@ bool run_submit(const uint64_t* handles, int n, uint64_t value, uint64_t queue, 
         rec_cur = &first, rec_cur_value = tag, rec_parts = 0, part_work = 0, part_end_wanted = false;
         rec_open(tag);
         if (rb_writers_on()) rb_span_begin(tag, first.part);
+        texture_ahead_run();   // (longshot, RX_VK_TEX_AHEAD: into this recording's uploads, while the frames are light)
     }
     VkCommandBuffer cmd = rec_cur->cmd;
     const uint8_t* stop = nullptr;
@@ -3314,7 +3315,10 @@ bool tex_pages_any(uint64_t gpu, uint64_t size) {
     }
     return false;
 }
-void texture_created_of(const nvn_tex* t) { tex_pages_add(t, +1); }
+void texture_created_of(const nvn_tex* t) {
+    tex_pages_add(t, +1);
+    texture_ahead_made(t);   // (longshot, RX_VK_TEX_AHEAD: it may be made and uploaded before its first draw)
+}
 uint64_t fence();
 // ---- (longshot, diagnostics) RX_VK_LOG_RB_WRITERS=1 (with RX_VK_LOG_READBACK_WAITS=1 for a line a wait) ----
 // What wrote the pages a readback waits for (memory_rb_writers: the op, the program, the part, the draw), where that is in its
@@ -4708,6 +4712,13 @@ void log_frame_stats() {
 /// a look at the driver's allowance, warned of once when the use passes it (again only after it was back under)
 void status_tick() {
     namespace sl = status_line;
+    {   // (longshot, RX_VK_TEX_AHEAD: a light frame, one of few draws, lets the next one prepare textures)
+        static int64_t l_draws = 0;
+        int64_t draws = 0, sk = 0, di = 0, pl = 0;
+        draw_stats(&draws, &sk, &di, &pl);
+        texture_ahead_frame(draws - l_draws);
+        l_draws = draws;
+    }
     static uint64_t frames = 0;
     // (the slowest frame since the last line, present to present: a stall shows here, to be matched with what the log says
     // around it, such as DLSS's feature made again)
@@ -6783,6 +6794,7 @@ void present(const nvn_tex* t, const int crop[4]) {
 void texture_released_of(const nvn_tex* t) {
     if (!t) return;
     tex_pages_add(t, -1);
+    texture_ahead_gone(t);
     if (!async_on()) {
         // (PR 430: after the stopped work that may use it, when it goes on. The lock is held_mu, only while queues are
         // stopped: sync_order_mu, taken on every release, made the thread finalizing textures (OptimizeChangeBank) wait for whole

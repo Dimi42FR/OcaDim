@@ -641,6 +641,8 @@ SW(RX_VK_TEST_ALLOWED_FOLLOW, diag, bool, "off", "With a test allowance set, rep
 SW(RX_VK_TEST_ALLOWED_MB, diag, int, "off: the driver's allowance is used", "Caps the VRAM allowance the renderer sees at n MB, so a big card exercises a small card's eviction paths.")
 SW(RX_VK_TEST_SLOW_MS, diag, int, "off (no hold)", "Holds each full pipeline build this many ms (at most 60000), to imitate a slow driver compiler.")
 SW(RX_VK_TEST_VRAM_MB, diag, int, "the card's real VRAM", "Treats the card's VRAM as at most n MB wherever the renderer sizes something by it, to play a smaller card.")
+SW(RX_VK_TEX_AHEAD, attempt, bool, "off: a texture is made and uploaded at the first draw that samples it", "=1 makes and uploads in light frames, before their first draw, the block-compressed textures an earlier load drew.")
+SW(RX_VK_TEX_AHEAD_MS, tune, float, "12 ms", "The time in ms a light frame may spend preparing textures ahead of their first draw, with RX_VK_TEX_AHEAD=1.")
 SW(RX_VK_TEX_CAPTURE, kill, bool, "on, when the capture is on", "0 keeps the storage of textures uploaded from guest memory out of the submit-time capture.")
 SW(RX_VK_TEX_CAPTURE_MAX_MB, tune, int, "2048 MB, in effect any size", "Sets the largest uploaded texture whose storage joins the submit-time memory capture; it was 8 MB before.")
 SW(RX_VK_TEX_CAPTURE_OFF_FILE, diag, string, "not set: uploads read the captured copies", "A path: while that file exists, texture uploads read live guest memory as before, for A/B runs in one session.")
