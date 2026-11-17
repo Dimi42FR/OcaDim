@@ -1,8 +1,314 @@
 <!-- OCADIM : la présentation du fork. Le manuel de Longshot (amont), en anglais, suit après le trait. -->
 
 <p align="center">
-  <img src="assets/branding/ocadim-banner.png" alt="OcaDim" width="560">
+  <img src="assets/branding/ocadim-banner.png" alt="OcaDim" width="720">
 </p>
+
+<h1 align="center">OcaDim</h1>
+
+<h4 align="center">La récompilation native d'<b>Ocarina of Time</b> sur PC, depuis <b>ta propre copie du jeu</b> — par <b>Dimi42FR</b></h4>
+
+<p align="center">
+  <b>Fork de <a href="https://longshot.magicbean.dev/">Longshot</a></b> ·
+  Windows x64 (Linux hérité de l'amont) ·
+  <a href="CREDITS.md">Crédits et licences</a> ·
+  <a href="docs/OCADIM.md">La carte technique</a> ·
+  GPL-3.0
+</p>
+
+**OcaDim** est un fork personnel de [Longshot](https://longshot.magicbean.dev/) — lui-même un fork de
+[Hookshot](https://github.com/NotRexed/Hookshot). Il repart du meilleur état de l'amont et y ajoute ce qui est décrit
+ci-dessous : la génération d'images d'AMD dans le jeu, des réparations pour jouer au-delà de 60 fps, des leviers CPU
+mesurés, et un Setup qui compile le jeu chez le joueur.
+
+Le jeu **n'est pas** dans ce dépôt et n'y sera jamais. Rien n'est distribué : tout se compile sur ta machine, à partir de
+ton `.nup`.
+
+**27 heures.** C'est le temps qu'il a fallu pour sortir cette première version : du premier commit (14 novembre, 23:53)
+à la version livrée (16 novembre, 03:19). La frame generation d'AMD y est entrée dans la dernière nuit.
+
+**Télécharger :** [OcaDim 0.0.2 — le Setup Windows x64](https://github.com/Dimi42FR/OcaDim/releases/latest). Il compile le
+jeu chez toi, à partir de ton `.nup`.
+
+**Tu viens tester ?** Il y a trois choses à essayer ce soir et quatre façons d'aider sans coder, plus bas, dans
+**À tester chez toi**. Un retour qui dit *où ça casse* vaut dix « c'est bien ».
+
+> [!IMPORTANT]
+> **La règle, sans exception** : le `.nup` et le jeu compilé ne se partagent pas. Chacun compile depuis SA copie.
+> Ce qui se partage : ces sources, ce compilateur.
+
+---
+
+## Ce qu'OcaDim ajoute, et d'où ça vient
+
+Chaque ligne dit **d'où ça vient**. Quatre de ces ajouts sont écrits ici — la base poussée à fond, la frame generation
+d'AMD, le prefetch des descripteurs, les leviers CPU. Deux viennent d'ailleurs, et c'est dit : NX2navi pour les réparations
+au-dessus de 60 fps (et huit optimisations portées), Longshot pour le profil PGO. Le reste est de l'assemblage.
+
+| Ajout | D'où ça vient | Où le voir |
+|---|---|---|
+| **La frame generation d'AMD (FSR)** : branchée dans le jeu, en **FSR 4** sur RDNA 4 | **écrit ici** — `gpu/vk/vk_fg_amd.cpp` n'existe pas chez l'amont ; la FG est une fonction du SDK d'AMD, pas une invention de notre part | Graphics → *Frame generation by* |
+| **Le prefetch des descripteurs** (seqlock, cache négatif, *asks* apprises) | **écrit ici** — zéro occurrence de `prefetch` dans le replay de l'amont | Graphics → *Descriptor prefetch* |
+| **Batched submits, Draw order barriers, CPU affinity (CCX)**, et l'auto-échelle petite config | **écrits ici** — absents de son menu, et `gpu/vk/par_scale.h` n'existe pas chez lui | Graphics |
+| **Deux réparations au-dessus de 60 fps** (sols porteurs, eau à pas fixes) | **portées** de NX2navi (domaine public / MIT) | Graphics → *Above-60 fixes* |
+| **Le Setup, l'identité, le confort** | assemblés ici | `OcaDimSetup.exe`, le menu |
+
+### 1. La base elle-même, poussée à fond — avant d'ajouter
+
+On n'a pas seulement posé des choses sur le dessus : on a repris ce qui était déjà là et on l'a poussé. Ce qui suit
+n'ajoute aucune fonction — ça enlève des millisecondes.
+
+| Ce qui a été poussé | Le chiffre | D'où ça vient |
+|---|---|---|
+| **Les vues de textures** (`texture_view_of`) | **4-5 ms → ~1 ms** par frame : le *stampede* d'évictions est mort, une génération de vue par texture | **écrit ici** |
+| **Le cache frontal des programmes** (ViewFast, trois générations) **fusionné** avec le FlatMap de l'amont au lieu de choisir l'un ou l'autre | moins de recompilations ; un test vérifie que le cache répond comme la carte seule | **écrit ici** |
+| **Le chunk chaud à `-O2`**, piloté par `assets/profiles/hot_funcs.txt` et `hot_order.txt` | le code chaud compilé au maximum, le reste à `-O1` : on ne paie pas le prix d'un `-O2` global | **écrit ici** |
+| **Huit optimisations minées chez NX2navi et portées** : descripteurs gardés entre les draws, updates d'uniforms par buckets de 1 Ko, index buffer par pool, storage buffer non re-noté, pick du programme par slots, layouts partagés, write-backs là où le CPU relit, images détruites sur leur thread | la somme se voit dans le frame time, pas dans une ligne de menu | **portées** (NX2navi) |
+| **La fenêtre d'éviction fermée à la source**, le recyclage borné des tombstones, le budget d'upload revalidé en jeu | le scintillement noir/bonne image/noir, qui revenait toutes les 24 h, est mort | **écrit ici** |
+| **La règle des 90 % de mémoire** (la pression mémoire de l'amont, combinée à la nôtre) | le jeu ne se met plus à doser la mémoire au mauvais moment | **écrit ici** |
+| **Le profil PGO du renderer**, committé dans le dépôt | **-3 à -5 %** de frame time, mesuré sur trois sessions | **de l'amont** (Longshot) |
+
+Et la fusion elle-même : les **91 commits de l'amont** ont été **combinés** aux nôtres au lieu d'être choisis — les deux
+côtés survivent au lieu d'en perdre un.
+
+### 2. La génération d'images d'AMD — le branchement est écrit ici
+
+La **frame generation du SDK FidelityFX d'AMD** est une fonction d'AMD, pas une invention : ce qu'on a écrit ici, c'est
+son **branchement dans le jeu** — alimentée par les vraies données de la scène, et choisissable au menu. L'amont a sa
+propre interpolation et la FG de NVIDIA ; celle d'AMD, non.
+
+**Où on en est, sans enjoliver** : **FSR 4 (RDNA 4) est livré et mesuré**, c'est ce que les chiffres ci-dessous
+mesurent. Le **chemin FSR 3.1 n'est pas encore validé**, donc pas encore livré : sur les autres cartes AMD, `Auto` laisse
+la frame generation maison faire le travail.
+
+**Rien n'a été copié d'une autre build** — ni de NX2navi, ni de Triforce, ni d'un build tiers. L'upscaler FSR 4 est celui
+du socle Longshot ; la sonde des versions (dans `vk_fsr4.cpp`) et **tout le branchement de la frame generation**
+(`vk_fg_amd.cpp`) sont écrits ici, au-dessus des en-têtes MIT d'AMD. Ce qui vient d'AMD, ce sont ses en-têtes et ses DLL,
+pas notre code.
+
+Comment c'est branché, en quatre morceaux :
+
+| Morceau | Ce qu'il fait |
+|---|---|
+| **La swapchain du SDK** | `ffxCreateContextDescFrameGenerationSwapChainVK` prend la place de celle de la fenêtre : `vkGetSwapchainImagesKHR`, `vkAcquireNextImageKHR` et `vkQueuePresentKHR` passent par les pointeurs que le SDK rend. Le SDK exige **trois queues distinctes** de la famille graphique (jeu, présentation, acquisition) : le device les crée. |
+| **Les frames générées** | À chaque frame, `ffxConfigureDescFrameGeneration` + `ffxDispatchDescFrameGenerationPrepareV2` reçoivent la **profondeur (R32F)**, les **vecteurs de mouvement (RG16F)**, le **jitter** et la **caméra** que la chaîne temporelle du renderer calcule déjà pour ses upscalers. La frame generation maison est **coupée** pendant ce temps, pour ne pas empiler deux interpolations. |
+| **Le choix dans le menu** | La ligne *Frame generation by* propose **Auto / Built-in FG / AMD FSR FG**, s'applique immédiatement, et le compteur de FPS dit qui fabrique les frames. Traduite dans les 12 langues du menu. |
+| **Les changements de résolution** | La taille maximale du contexte suit l'image du jeu (`maxRenderSize`) et le contexte est refait s'il grandit ; une bascule vers AMD **retire d'abord** la swapchain simple, donc une seule par surface. |
+
+C'est **opt-in** : sans la ligne du menu (ou sans `RX_VK_FG_AMD=1`), les pointeurs Vulkan réels restent en place et le
+présent est exactement celui d'avant. Si la bibliothèque d'AMD manque, si le device refuse, ou si le SDK ne donne pas son
+accord, le log dit **pourquoi** et le chemin simple reste.
+
+**Mesuré en jeu** (RX 9070 XT, pilote 26.10.2, sauvegarde dans la Place du Château) :
+
+| Ce qui a été mesuré | Résultat |
+|---|---|
+| **Une zone chargée** (la Place du Château, 2765 draws), FSR 4 en 2134x1200 → 2560x1440 | **44,1 fps réels** — c'est le cas difficile — 36 000 présents, **42 130 affichées**, **6 148 générées**, aucun *device lost* |
+| **Les zones normales**, hors des plus chargées | **60 à 76 fps réels selon l'endroit** — **autour de 60 le plus souvent**, 69-76 dans les plus légères |
+| Activé **par le menu seul** (aucune variable) | contexte 4.0.2 en **118 ms**, 10 800 présents, 15 729 affichées, **4 931 générées**, swapchain refaite en place à 2560x1373 et contexte refait en **86 ms**, aucun refus, aucun écran noir |
+
+**Limite connue** : le HUD et les éléments 2D bougent avec les frames générées — c'est la limite de la FG sur un HUD
+dessiné en 2D. Une capture « sans HUD » a été tentée (copie compute, parce qu'`amdvlk` plantait sur `vkCmdCopyImage` et
+`vkCmdBlitImage` de cette cible) : elle tournait sans planter et le SDK générait bien, mais le rendu composé n'a pas été
+jugé bon et a été retiré. Le code n'est pas dans ce dépôt ; la voie reste ouverte.
+
+### 3. Le prefetch des descripteurs — écrit ici
+
+C'est le poste qui coûte le plus cher au replay : pour **chaque** descripteur (uniform buffer, texture), et sur **chaque**
+worker, le replay relit la mémoire du jeu au travers de la capture — le mutex des pools, la recherche de page, le scan
+des updates. Des milliers de fois par frame.
+
+**L'idée** : un thread helper, en priorité `BELOW_NORMAL`, re-marche chaque tronçon du *dry pass* et publie dans une
+table *seqlock* les octets de chaque overlay que le record demandera. Le record fait alors un `memcpy` au lieu de refaire
+le travail.
+
+Trois pièces :
+
+1. **Les octets** : les pages de la capture et les updates du lieu par-dessus, clé `(addr, take, lim, view, rec)`.
+2. **Les asks apprises** (`pf_learned`) : le record note ce qu'il demande ; le helper publie la plus grande demande vue
+   par borne, donc la table apprend au lieu d'être devinée.
+3. **Le négatif** : « pas d'update sur cette borne à ce lieu » — `ub_overlay` **et** `ub_read` sautent leurs scans
+   (~2600 par buffer, deux fois).
+
+**La justesse** : la clé est auto-vérifiante (une demande non couverte = un *miss* = le chemin d'avant, mot pour mot), le
+*seqlock* fait qu'une réécriture sous une copie est vue, et les stamps `view`/`rec` couvrent le helper en retard. Un
+*miss* ne coûte jamais plus que ce que le code coûtait avant.
+
+**En jeu** : 357-682 overlays servis par fenêtre, **~215 000 scans sautés**, zéro artefact. La ligne est en **Auto** (on
+là où le processeur a des threads à donner) et `RX_VK_DESC_PREFETCH` force pour un run.
+
+### 4. Trois leviers CPU et l'auto-échelle — écrits ici
+
+| Ligne du menu | Ce qu'elle fait | Le chiffre |
+|---|---|---|
+| **Batched submits** | Garde les soumissions d'une frame et les envoie en une seule au prochain *wait*, *readback* ou *present* | sur RADV, Kokiri Forest passe de **33-41 à 46-61 fps** |
+| **Draw order barriers** | Une passe de draw après une autre n'attend que dans ses étages de fragment ; un compute après un compute ne prend pas de barrière, comme les barrières du jeu l'ordonnent déjà | Auto sur NVIDIA, où c'est mesuré ; On essaie sur ta carte |
+| **CPU affinity (CCX)** | Garde les workers du replay sur la moitié haute des CPU logiques (le second CCD d'un Ryzen), pour que le thread du jeu garde son cache | Auto à partir de 12 processeurs logiques |
+
+Et **l'auto-échelle petite config** (`gpu/vk/par_scale.h`, écrit ici) : les workers du replay sont un pour quatre CPU
+logiques, bornés à quatre, et **aucun** sous six ; les segments valent 32 ; le prefetch s'allume dès six CPU logiques.
+C'est ce qui fait que ces lignes ne punissent pas un petit PC : elles restent en Auto, et l'Auto regarde ton processeur.
+
+*Pour être exact* : les deux lignes **Replay workers** et **Replay segments** exposent des mécanismes qui existaient déjà
+dans l'amont, mais seulement par variables d'environnement (`RX_VK_PARALLEL`, `RX_VK_PARALLEL_SEG`). Les lignes, les
+valeurs et l'Auto sont de nous.
+
+### 5. Deux réparations du jeu au-dessus de 60 fps — portées de NX2navi
+
+Le jeu suppose 60 fps. L'amont en répare déjà deux endroits — le gestionnaire de son ramené à 60 Hz, et le nombre de
+pas du solveur physique — et prévient que le reste peut dérailler (« certaines cinématiques et certains boss comptent les
+frames »). OcaDim ajoute **deux mécanismes de plus** :
+
+| Ce qui cassait | Ce qu'on voyait | Ce qu'on fait |
+|---|---|---|
+| **Les sols qui portent un personnage** : les trois mises à jour de suivi de surface du contrôleur (`f_8015d490`, `f_80159dc0`, `f_838baa40`) | au-dessus de 100 fps, le dixième de la vitesse du sol conservé s'applique à **chaque** frame : **Link glisse de la plateforme qui le porte** | le seuil de comparaison `100.0` devient `100 / (la frame en frames de 60 fps)` : la coupure retombe exactement là où elle était à 60 |
+| **Les surfaces d'eau à pas fixe** : les deux gestionnaires (`f_83895f20`, `f_838a2660`) | chaque update plus courte que 1/60 s exécutait **zéro pas** : au-dessus de 60 fps, **ces surfaces ne bougeaient plus** | le quotient garde sa fraction par objet : 60 pas par seconde, quel que soit le débit |
+
+**Ces deux correctifs ne sont pas de nous** : ce sont ceux de **NX2navi** (`recomp/patches-v111.txt`, les jeux `ofollow`
+et `owater` : domaine public / MIT, repris dans Triforce). Nous les avons **portés ici**, comme hooks dans le C lifté
+(`nx2/oot_patches.py`, `host/oot_high_fps.*`), et exposés par la ligne **Above-60 fixes** du menu, qui les coupe pour
+retrouver exactement le comportement d'avant. Le troisième de leurs correctifs (`orecord`, l'horloge de l'ocarina) est
+déjà couvert dans cet arbre par `patch_whole_frames`.
+
+### 6. Le Setup, l'identité, le confort — assemblés
+
+`OcaDimSetup.exe` (WinForms, .NET 8 *self-contained*) prend **ton** `.nup`, récupère les outils, compile le jeu, et
+lance. Le paquet ne contient **aucune donnée de jeu** : le programme du Setup (164 Mo) et **19,4 Mo de sources**. Le
+reste — les outils, ~250 Mo — se télécharge au premier lancement, **chaque fichier vérifié par son SHA-256** (`tools.lock`).
+
+- Le `.nup` est **vérifié avant tout** : programme `0400486024DEC000`, build `e0f3ccfa`. Une autre version est refusée
+  avec un message clair, et rien n'est créé.
+- **Un seul build à la fois** (un `.lock`), comme côté jeu, sinon les dossiers de travail se marchent dessus.
+- **Annuler** laisse le dossier **reprenable** ; « Mettre à jour » recompile dans le même dossier en réutilisant les
+  outils ; « Désinstaller » retire le jeu et les raccourcis.
+- La **préparation des shaders n'est jamais tuée** : son cache vaut une demi-heure.
+- **Rien ne sort de la machine** : aucune télémétrie, aucun serveur, aucune mise à jour en ligne.
+- Il faut : ta copie du jeu, **~60 Go** libres, Windows 10/11 x64. Compte **~40 minutes** la première fois.
+
+Et l'identité : le jeu s'appelle **OcaDim 0.0.1** partout (fenêtre, titre, sauvegardes dans `%LOCALAPPDATA%\OcaDim`,
+statut Discord « Playing OcaDim » avec son artwork et le temps joué), un **backdrop** et un blason dessinés pour le
+projet, et le menu traduit en **12 langues**.
+
+---
+
+## Petits PC : on a besoin de tes chiffres
+
+Rien n'est décidé pour les machines modestes, et on ne veut pas coder au hasard. **Ce qui aide déjà** est en place et en
+Auto (preset Minimum/Low, batched submits, prefetch des descripteurs, affinité CCX, workers du replay, correctifs
+au-delà de 60 fps), et le détail est dans **[docs/PETITS-PC.md](docs/PETITS-PC.md)** avec les pistes et l'ordre dans
+lequel on les essaiera.
+
+Si tu joues sur un petit PC, ouvre un **[retour petit PC](https://github.com/Dimi42FR/OcaDim/issues/new?template=retour-petit-pc.yml)** :
+il demande **4 chiffres** (fps, frame time, 1 % low, ce que le Breakdown attribue au GPU et au CPU), **3 noms** (la scène,
+le preset, l'upscaler et les résolutions) et le dossier `bug-reports`. C'est tout — et jamais ton `.nup` ni tes sauvegardes.
+
+---
+
+## À tester chez toi, et comment aider
+
+Pas de palmarès : la liste de ce qu'il y a **en plus** dans cette version, avec son état réel — ce qui est mesuré ici, et
+ce qui a besoin de **ton** PC pour être confirmé. Le but n'est pas qu'on te croie : c'est que tu vérifies.
+
+| Ce qu'il y a en plus | D'où ça vient | Où le voir | L'état |
+|---|---|---|---|
+| **La frame generation d'AMD (FSR)** : une image entre deux des tiennes, nourrie par la vraie profondeur, les vrais vecteurs de mouvement, le jitter et la caméra de la scène, et choisie au menu | **écrit ici** — FSR 4 sur RDNA 4 | Graphics → *Frame generation by* → **AMD FSR FG** | mesuré ici sur RX 9070 XT : 44,1 fps en zone chargée, **autour de 60 à 76** en zone normale. **Pas encore** sur RDNA 2 et 3 : le chemin FSR 3.1 reste à faire |
+| **Le prefetch des descripteurs** : un helper pré-résout les descripteurs, cache négatif et *asks* apprises | **écrit ici** | Graphics → *Descriptor prefetch* | ~215 000 scans sautés, zéro artefact. **À confirmer sur un petit CPU** |
+| **Batched submits, Draw order barriers, CPU affinity (CCX)** et l'auto-échelle petite config | **écrits ici** | Graphics, les lignes signées « Added by Dimi42FR » | batched submits : 33-41 → 46-61 fps sur RADV. **À confirmer sur NVIDIA et Intel** |
+| **Deux réparations du jeu au-dessus de 60 fps** : les sols qui portent un personnage, et les surfaces d'eau en pas fixes | **portées** de NX2navi | Graphics → *Above-60 fixes* | mesuré ici (voir le test de la plateforme, plus bas). **À confirmer chez toi** |
+| **Un Setup qui compile chez le joueur** : ton `.nup` vérifié avant tout, les outils vérifiés par SHA-256, un seul build à la fois, reprise après un abandon, rien qui sorte de la machine | assemblé ici | `OcaDimSetup.exe` | utilisé ici. **À confirmer** : une installation complète sur un PC vierge |
+
+Rien de tout ça n'est une première mondiale, et on ne le prétend pas : c'est ce qu'on a ajouté, avec ses chiffres et ses
+limites. Deux des correctifs viennent de **NX2navi** (domaine public / MIT) et sont portés ici. Le détail complet, avec
+chaque licence, est dans [CREDITS.md](CREDITS.md).
+
+### Trois choses à essayer ce soir
+
+1. **La frame generation, en deux minutes.** Graphics → *Frame generation by* → **AMD FSR FG**, puis va dans une zone
+   chargée. Le compteur doit afficher `Base xx, AMD FSR FG`. Si ça refuse sur ta carte AMD, le log dit pourquoi : envoie-le,
+   c'est exactement ce qu'on veut savoir.
+2. **Le test qui se voit à l'œil nu : une plateforme qui te porte.** Mets le *Game frame rate cap* à 144, tiens-toi sur une
+   plateforme mobile (un ascenseur, un radeau), puis compare *Above-60 fixes* **Off** et **On**. Off : le personnage
+   **glisse**. On : il **reste dessus**. C'est le symptôme de l'issue 1798 ; il faut dépasser 100 fps pour le voir, ce que le
+   jeu d'origine n'avait jamais prévu.
+3. **Un petit PC ?** Preset Minimum (4GB), et donne-nous tes **4 chiffres** : fps, frame time, 1 % low, et ce que le
+   Breakdown met sur le GPU et le CPU. Le formulaire :
+   [Retour sur un petit PC](https://github.com/Dimi42FR/OcaDim/issues/new?template=retour-petit-pc.yml).
+
+### Comment aider, sans coder
+
+| Le temps que ça prend | Ce que ça change |
+|---|---|
+| **1 minute** | Une issue « ça marche / ça ne marche pas », avec ta carte et ton pilote. Deux lignes suffisent |
+| **5 minutes** | Le formulaire petit PC : c'est lui qui décidera des prochains chantiers |
+| **15 minutes** | La FG sur ta carte, avec le log : c'est ce qui dira si elle tient ailleurs que sur RDNA 4 |
+| **1 heure** | Un avant/après sur ta scène habituelle : le meilleur retour qu'on puisse recevoir |
+
+Ce qui nous aide le plus, ce n'est pas « c'est bien » : c'est **où ça casse**, sur quelle carte, et ce que dit le compteur.
+
+---
+
+## Compiler, installer
+
+### Avec le Setup (recommandé)
+
+Le paquet est dans les **[releases](https://github.com/Dimi42FR/OcaDim/releases/latest)** :
+`OcaDimSetup-0.0.1-win64.zip` (81,8 Mo, SHA-256 `c951efaf…36919`). Dézippe-le, lance **`OcaDimSetup.exe`**, choisis ton
+`.nup`, attends. Aux lancements suivants, le même exe propose **Jouer / Mettre à jour / Désinstaller**.
+
+### À la main, depuis les sources
+
+Double-clic sur **`OcaDim - COMPILER.bat`**, ou glisse-dépose ton `.nup` dessus. La première compilation prend de
+10 minutes à plus d'une heure : les outils se téléchargent seuls, le jeu se traduit, se compile, puis prépare ses shaders
+en s'ouvrant tout seul. **Ne le ferme jamais pendant cette préparation.**
+
+Les variables d'environnement utiles (`longshot_env.txt`, dans le dossier du jeu) sont listées dans le manuel plus bas ;
+celles d'OcaDim : `RX_VK_FG_AMD`, `RX_VK_DESC_PREFETCH`, `RX_VK_DEVICE`, `RX_VK_FSR_FG`.
+
+---
+
+## Licence et crédits
+
+**GPL-3.0** ([LICENSE](LICENSE)) — la même que le socle. Le détail complet est dans **[CREDITS.md](CREDITS.md)** :
+la généalogie (Hookshot → Longshot → OcaDim), ce que nous avons écrit fichier par fichier, la liste des composants tiers
+avec leur licence (a64-kit, suyu, Eden, EvilOOT, Lichii, llvm-mingw, AMD FidelityFX, NVIDIA DLSS, Intel XeSS, zbic, Opus,
+SDL, zstd, Dear ImGui, Kenney, Libertinus, les shaders CRT, et les paquets d'outils), et les marques.
+
+Merci en particulier à **NX2navi** ([tangerineturtle1](https://github.com/tangerineturtle1/NX2navi)) : les deux
+correctifs au-dessus de 60 fps et huit optimisations portées viennent de son travail — et à **Triforce**, dont la fusion
+de ces patches a servi de référence.
+
+### Merci à ceux qui ont aidé
+
+<p align="center">
+  <img src="assets/branding/ocadim-banner.png" alt="OcaDim" width="420">
+</p>
+
+| Qui | Ce qu'il a apporté |
+|---|---|
+| **[@mrmimmmme](https://github.com/mrmimmmme)** | la touche **Run** — pouvoir binder une touche pour la course —, l'onglet **NVIDIA** (les réglages du constructeur au même endroit) et le **widescreen** mis en évidence dans Display |
+| **[@444nils](https://github.com/444nils)** | la **bannière** ci-dessus et la **nouvelle icône** du jeu, portée par l'exécutable et par le Setup |
+| **NX2navi** ([tangerineturtle1](https://github.com/tangerineturtle1/NX2navi)) | les deux correctifs au-dessus de 60 fps et huit optimisations portées |
+| **Triforce** | la fusion de ces patches, qui a servi de référence |
+| **MagicBeanDev** et les contributeurs de [Longshot](https://longshot.magicbean.dev/) | le socle : renderer Vulkan, hôte, système recompilé, upscalers, menu, tests, documentation |
+| **NotRexed** | [Hookshot](https://github.com/NotRexed/Hookshot), le point de départ, et les outils `a64-kit` |
+
+<p align="center">
+  <a href="https://longshot.magicbean.dev/"><img src="assets/longshot.png" alt="Longshot" width="96"></a>
+  &nbsp;&nbsp;&nbsp;
+  <a href="https://github.com/NotRexed/Hookshot"><img src="assets/branding/grappling-hook-bean.png" alt="Hookshot" width="96"></a>
+  &nbsp;&nbsp;&nbsp;
+  <img src="assets/branding/ocadim.ico" alt="OcaDim" width="96">
+</p>
+
+OcaDim n'est ni affilié à Nintendo ni approuvé par Nintendo. Le jeu, ses clés et ses données ne sont pas ici.
+
+---
+
+> **La suite de ce document est le manuel de Longshot (l'amont), en anglais.** Il reste la référence pour toutes les
+> options du menu, le build depuis les sources, le dépannage et le rapport de bug — et pour les crédits détaillés de la
+> communauté qui a construit le socle.
+
+---
 
 <h1 align="center">
   <br>
@@ -102,10 +408,6 @@ Longshot's first version will be **v3.0.0**; the launcher's first will be **v1.0
 
 **Your game copy:** program `0400486024DEC000` · update **v131072** · build `e0f3ccfa`.
 Use a `.nup` file, or the `romfs` and `exefs` folders. Other game versions are not supported.
-
-**Check your copy before building:** choose your own game file or folders in the launcher. Its game-file check
-reports whether the build is supported; if it reports another build, compare that message with `e0f3ccfa` above.
-The launcher version (such as `v1.0.0-rc.4`) is separate from the game update and build identifiers.
 
 These are estimates from the [tested configurations catalogue](https://longshot.magicbean.dev/tested-configurations/), not a promise of a particular
 frame rate: the game runs on more than this, and performance depends on the resolution and settings you choose.
@@ -228,7 +530,6 @@ Before updating, copy your saves somewhere safe: the `user` folder in the game f
 | Your saves | The game in `bin` and its files |
 | `longshot_options.ini`: the menu's choices and your controls | `image.bin` and the shader list |
 | `longshot_env.txt` | `language.txt`, written again with the game's language |
-| | `texts`: the texts reworded for a PC, made again |
 | `mods` | |
 
 Without the launcher: from a clone, `git pull`, then `python -I nx2/make_game.py --update <game folder>`; a builder
@@ -264,7 +565,7 @@ The build reads your game and never changes it.
 | Your saves | `user` in the game folder | `~/.local/share/longshot` |
 | The launcher, each version's builder and its tools (`toolchains`), the build files (`work`) | `%LOCALAPPDATA%\LongshotLauncher` (the installed program in `%LOCALAPPDATA%\Programs\LongshotLauncher`; the portable one's data in `LongshotLauncher-data` beside it) | `~/.local/share/longshot/launcher` (the portable AppImage's in `<AppImage>.home` beside it) |
 | A builder without the launcher (`--cli`) and its tools | `%LOCALAPPDATA%\LongshotBuilder` | `~/.local/share/longshot/builder` and `~/.cache/longshot-builder` |
-| The in-game menu's choices and your controls | `longshot_options.ini` in `%APPDATA%\Longshot` when the launcher starts the game, the same for every version (a portable launcher's in `LongshotLauncher-data\user`); in the game folder when you start the game yourself | `longshot_options.ini` in the game folder |
+| The in-game menu's choices | `longshot_options.ini` in the game folder | `longshot_options.ini` in the game folder |
 | The shader and pipeline caches, and the logs | `cache` and `logs` in the game folder | `cache` and `logs` in the game folder |
 
 - **Caches and logs:** the game keeps its shader and pipeline caches in the game folder's `cache` folder (several GB, made
@@ -321,7 +622,7 @@ line with the video memory in use against what the driver allows, and DLSS's det
 | "Your antivirus removed part of the build tools" | A false alarm on unsigned programs. Restore the files from Windows Security's Protection history, and add `%LOCALAPPDATA%\LongshotLauncher` and `%LOCALAPPDATA%\Programs\LongshotLauncher` to its exclusions, then build again ([common problems](docs/common-issues.md#your-antivirus-removed-part-of-the-build-tools)). |
 | **Starting** | |
 | The game opens and closes, or the log says "device lost" | Update your graphics driver. AMD cards have known crashes ([#708](https://github.com/NotRexed/Hookshot/issues/708), [#614](https://github.com/NotRexed/Hookshot/issues/614)). |
-| Windows, Intel: the game closes in the first scene, and the log names `igvk64.dll` | Set the Debug tab's **Intel shader compiles** row to **One at a time** (it is what **Auto**, the default, means on every Intel GPU but the Arc B-series) and update the graphics driver. See [Intel laptops](#intel-laptops). |
+| Windows, Intel: the game closes in the first scene, and the log names `igvk64.dll` | Keep the Debug tab's **Intel shader compiles** row on **One at a time** (the default) and update the graphics driver. See [Intel laptops](#intel-laptops). |
 | The build said "the GPU driver stopped responding", or the log says `the shaders' preparation was skipped at the build` | The game then builds every shader when it is first drawn, and stutters or leaves things out for a long time. Delete `longshot_prepare_skipped` from the game folder's `cache` folder so that the next start prepares them, or build again with **Prepare shaders now** ticked. |
 | Linux: the game doesn't start, or the picture is broken | The game needs a Vulkan 1.3 driver, ideally with mesh shaders: `vulkaninfo \| grep mesh` should list `VK_EXT_mesh_shader`. Update Mesa or the NVIDIA driver. |
 | Linux: low-memory warning, or the whole desktop becomes unresponsive while loading | Close other programs and check `free -h`: the `Mem` and `Swap` rows are separate. Below 10 GiB of physical RAM the game warns even with plenty of swap; absence of that warning does not mean a run will fit. Do not keep retrying a load that locks up the PC. After restarting, keep the failed session's log before launching again, and check `journalctl -k -b -1` for an out-of-memory kill or a GPU reset (if the previous boot's journal was saved). |
@@ -338,9 +639,7 @@ line with the video memory in use against what the driver allows, and DLSS's det
 | **Other** | |
 | The game is in the wrong language | Change the code in `language.txt` in the game folder. The file lists them all, and an update keeps the one you set. |
 
-After a crash, at the start or in play, a window says what happened; its **Report** button copies a report (no saves or
-game files, your home folder and user name taken out) and opens the issue form, for you to paste it into. Still stuck?
-[Report it](https://git.magicbean.dev/MagicBeanDev/Longshot/issues/new) with the version, where you were in
+Still stuck? [Report it](https://git.magicbean.dev/MagicBeanDev/Longshot/issues/new) with the version, where you were in
 the game, your graphics card, `longshot_log.txt` and a screenshot or video, and never game files. **Gameplay → Bug
 report** in the [in-game menu](#in-game-menu) gathers all of it in one press.
 
@@ -370,8 +669,8 @@ It has not been tested on an Intel GPU yet. On such a PC:
 
 1. Build with **Prepare shaders now** ticked. If the game folder's `cache` folder has a `longshot_prepare_skipped` file
    from an earlier build, delete it first.
-2. Keep the Debug tab's **Intel shader compiles** row on **Auto** (the default: one at a time on these laptops) or **One
-   at a time**. Side by side builds faster on a CPU with many cores, but Intel's driver can crash the game then.
+2. Keep the Debug tab's **Intel shader compiles** row on **One at a time** (the default). Side by side builds faster on a
+   CPU with many cores, but Intel's driver can crash the game then.
 3. A shader the driver faulted on is listed in `longshot_driver_faults.txt` (in the `cache` folder) and left out, with
    its draws, on later starts on the same driver. After a driver update the list starts again; delete the file to try
    them all again sooner.
@@ -412,8 +711,7 @@ Controls, the Teleport list, the inventory), and B goes back or closes the menu:
 on (with the Nintendo layout, A is the right face button). The mouse is free while the menu is open: click a tab, click a row's name to choose it (its
 value stays), click the left or right half of a value to lower or raise it, drag a slider, turn the wheel to scroll the rows (it never changes a value), and right-click to go back. The
 button prompts at the bottom show the keys or the controller's buttons, whichever you used last. Your choices are saved
-in `longshot_options.ini`: with your saves when the launcher starts the game on Windows, so every version keeps them, else in
-the game folder ([Where the files go](#where-the-files-go)).
+in `longshot_options.ini` in the game folder.
 
 The menu, the FPS counter and the start-up screen are drawn in the style of the game's own menus. They use the game's
 own menu font, read into memory from your game files (the romfs folder the game runs from) the first time one of them is
@@ -429,72 +727,70 @@ A row for something this PC cannot use is not shown: NVIDIA Reflex and AMD Anti-
 have them, the DLSS model where DLSS does not run. HDR paper white and
 HDR peak brightness and HDR contrast show only while HDR is on, the HDR tone mapper only with HDR set to Native.
 
-The Display tab groups the picture's rows under section titles: Picture (its shape and size), Frame rate, Screen, and HDR.
-The Graphics tab groups its rows under: Resolution and upscaling, Frame generation and latency, Detail, and GPU and memory
-(last: the rows to change when something is wrong). The NVIDIA tab gathers DLSS's model and NVIDIA Reflex, and is not
-shown on a PC where neither runs. The table lists each tab's rows in that order.
+The Graphics tab groups its rows under section titles: Resolution and upscaling, Frame generation and latency, Screen,
+HDR, Detail, and GPU and memory (last: the rows to change when something is wrong). The table lists them in that order.
 
 | Tab | Option | Choices | Default |
 |---|---|---|---|
-| Display | Aspect ratio | The shapes your screen's resolutions have, narrowest first (5:4, 4:3, 16:10, 16:9, 21:9, 32:9, ...), your monitor's own marked "(monitor's)" (after a restart) | Your monitor's |
+| Graphics | Quality preset | Custom, Minimum (4GB), Low (6GB), Balanced (8GB), High (12GB), Ultra (16GB+), Auto (this PC) | Auto (this PC) on a first start; Custom in an options file from before it |
+| | Aspect ratio | The shapes your screen's resolutions have, narrowest first (5:4, 4:3, 16:10, 16:9, 21:9, 32:9, ...), your monitor's own marked "(monitor's)" (after a restart) | Your monitor's |
 | | Output resolution | The Aspect ratio's sizes: your screen's resolutions and the common ones (1440p, 4K, 5K at 16:9; 1920x1200, 2560x1600 at 16:10; 3440x1440 at 21:9; ...), and 2048x1152 (the game's own reduced size, 80% of its 2560x1440, marked "(reduced)") at 16:9; your screen's own size is marked "(native)" (after a restart) | 2560x1440, the game's own picture, or your screen's size where it is smaller (a Steam Deck's 1280x800, a 1080p monitor), at its own shape (a 2560x1080 ultrawide starts at 2560x1080, a 2256x1504 laptop at 2256x1504); Auto (this PC) leaves it as it is |
 | | Custom output size | A size of your own, typed as `<width>x<height>` (after a restart) | None |
+| | Profile | Docked, Handheld (after a restart) | Docked; a quality preset sets it |
+| | Upscaler | Game's own, NVIDIA DLSS (only in builds with NVIDIA's DLSS SDK, below, on NVIDIA RTX GPUs), AMD FSR 3.1 (every build, on GPUs it runs on, below), AMD FSR 4 (only in builds with FSR 4, below, on GPUs AMD's files cover), Off (no upscaling). NVIDIA DLAA and AMD FSR 4 Native AA are DLSS's and FSR 4's Native, chosen on the Render resolution row | Game's own; Auto (this PC) chooses DLSS or FSR 4 where they run |
+| | DLSS model | Transformer (K), Transformer 2 (M), Transformer 2 (L), NVIDIA default (shown where DLSS runs; used by DLSS and DLAA) | Transformer (K) |
+| | Render resolution | Auto (the game's own dynamic resolution), 100%, 75%, 67%, 50% (each with its size). With DLSS or FSR 4: Auto, Native (DLAA or FSR 4 Native AA: the 3D at full size), 92%, 83%, 75%, Quality (67%), Balanced (58%), Performance (50%), Ultra Performance (33%). With FSR 3.1: Auto, 100% (its native AA), then the same as DLSS from 92%. With Off: Auto, 100%, 75%, 67%, 50%, 33% | Auto; a quality preset sets it |
+| | Sharpness | 0 to 100%, in steps of 10 | 0%; a quality preset sets it |
+| | Frame generation | Off, Auto, 2x to 8x | Off |
+| | Frame generation by | Auto (NVIDIA DLSS Frame Generation where it runs: RTX 40 and newer, with a temporal Upscaler; else the built-in one; with frame generation on, the row shows who makes the frames, as Auto: DLSS FG, and why not DLSS FG when another does), Built-in FG, AMD FSR FG (OcaDim: AMD's FidelityFX frame generation, 4.x on RDNA 4 and 3.1.x on the other AMD GPUs, Windows only, with AMD's runtime beside the game). Changes at once | Auto |
+| | Frame pacing | Off, On | Off; a quality preset turns it on |
 | | Game frame rate cap | 60 (the console's), 90, 120, 144, 165, 240, Uncapped (changes at once) | 60 |
+| | NVIDIA Reflex | Off, On, On + Boost (shown only on NVIDIA GPUs with `VK_NV_low_latency2`) | Off |
+| | AMD Anti-Lag 2 | Off, On (shown only on AMD GPUs with `VK_AMD_anti_lag`) | Off |
 | | Fullscreen | Off, On (the same as <kbd>F11</kbd>) | Off |
 | | V-Sync | Auto, On, Off | Auto |
 | | Window scaling filter | Off, Catmull-Rom, Lanczos (shows "Not needed (window = output)" while the window is the Output resolution's size) | Off; a quality preset sets it |
-| | CRT filter | Off, Lottes aperture grille, Lottes consumer TV, Hyllian Fast, zfast CRT (changes at once; Native HDR bypasses it) | Off |
-| | CRT lines | 240, 480, 720 virtual lines (changes at once; capped at half the destination height) | 240 |
+| | CRT filter | Off, Lottes aperture grille, Lottes consumer TV, Hyllian Fast, zfast CRT (the finished SDR picture, the game's HUD included; the menu and overlays stay clean) | Off |
+| | CRT lines | 240, 480, 720 (the virtual raster: at most half the destination's height) | 240 |
 | | Ultrawide menus | Full width; Centred, blurred sides; Centred, black bars (with the Aspect ratio at the monitor's shape) | Centred, blurred sides |
 | | HDR | Off, Expanded, Native (the game's) | Off |
 | | HDR paper white | 80 to 400 nits, in steps of 10 (while HDR is on) | 200 nits |
 | | HDR peak brightness | 400 to 4000 nits, in steps of 100 (while HDR is on) | 1000 nits |
 | | HDR contrast | 50% to 200% around mid grey, in steps of 5 (while HDR is on) | 100% |
-| | HDR tone mapper | Vanilla (the game's curve), PsychoV35 (RenoDX's; with HDR set to Native). Compatible DLSS/DLAA, FSR 4/native AA and shared-chain FSR 3.1 upscaling run automatically; `RX_VK_PSYCHOV35_DLSS=0` disables that compatibility route. Off and the spatial/FXAA TAAU replacement support PsychoV35 directly. FSR 3.1 FG remains separately opt-in and 2x only; legacy own-input FSR upscaling remains unsupported | Vanilla |
-| Graphics | Quality preset | Custom, Minimum (4GB), Low (6GB), Balanced (8GB), High (12GB), Ultra (16GB+), Auto (this PC) | Auto (this PC) on a first start; Custom in an options file from before it |
-| | Profile | Docked, Handheld (after a restart) | Docked; a quality preset sets it |
-| | Upscaler | Game's own, NVIDIA DLSS (only in builds with NVIDIA's DLSS SDK, below, on NVIDIA RTX GPUs), AMD FSR 3.1 (every build, on GPUs it runs on, below), AMD FSR 4 (only in builds with FSR 4, below, on GPUs AMD's files cover), Off (no upscaling), Intel XeSS (Windows, with Intel's `libxess.dll` beside the game, below). NVIDIA DLAA, AMD FSR 4 Native AA and Intel XeSS Native AA are DLSS's, FSR 4's and XeSS's Native, chosen on the Render resolution row | Game's own; Auto (this PC) chooses DLSS or FSR 4 where they run, never XeSS |
-| | Render resolution | Auto (the game's own dynamic resolution), 100%, 75%, 67%, 50% (each with its size). With DLSS or FSR 4: Auto, Native (DLAA or FSR 4 Native AA: the 3D at full size), 92%, 83%, 75%, Quality (67%), Balanced (58%), Performance (50%), Ultra Performance (33%). With Intel XeSS the same stops, named by the XeSS mode each runs under: Native (XeSS Native AA), Ultra Quality Plus (92%, 83%), 75%, Ultra Quality (67%), Balanced (58%, 50%), Ultra Performance (33%). With FSR 3.1: Auto, 100% (its native AA), then the same as DLSS from 92%. With Off: Auto, 100%, 75%, 67%, 50%, 33% | Auto; a quality preset sets it |
-| | Sharpness | 0 to 100%, in steps of 10 | 0%; a quality preset sets it |
-| | Frame generation | Off, Auto, 2x to 8x | Off |
-| | Frame generation by | Auto (NVIDIA DLSS Frame Generation where it runs: RTX 40 and newer, with a temporal Upscaler; else the built-in one; with frame generation on, the row shows who makes the frames, as Auto: DLSS FG, and why not DLSS FG when another does), Built-in FG. Changes at once | Auto |
-| | AMD Anti-Lag 2 | Off, On (shown only on AMD GPUs with `VK_AMD_anti_lag`) | Off |
-| | Texture detail | Auto, Full, Medium, Low | Auto; a quality preset sets it |
+| | HDR tone mapper | Vanilla (the game's curve), PsychoV35 (RenoDX's; with HDR set to Native. DLSS/DLAA with their NVIDIA frame-generation inputs, and AMD FSR 4, can be tried with `RX_VK_PSYCHOV35_DLSS=1`; FSR 3.1, TAAU and Upscaler Off still fall back to the game's network) | Vanilla |
+| | Texture detail | Auto, Full, Medium, Low | Auto |
 | | Anisotropic filtering | Game's, 2x, 4x, 8x, 16x | 16x |
 | | GPU device | Auto, or each graphics card by name (after a restart) | Auto |
+| | Threaded rendering | Auto, On, Off (after a restart). Auto is On with 12 or more processor threads for the game | Auto |
 | | Replay workers | Auto, 1, 2, 3, 4 (the replay's threads; Auto is one for every four the game may use, at most four, none under six) | Auto |
 | | Descriptor prefetch | Auto, On, Off (descriptors read ahead on a helper thread; Auto is on where the processor has threads to spare) | Auto |
 | | Replay segments | 32, 64, 160 (the draws and dispatches a replay worker takes at a time) | 32 |
 | | Above-60 fixes | Off, On (the floors that carry a character and the height-field surfaces' fixed steps, mended above 60 fps) | On |
-| | CPU affinity (CCX) | Auto, On, Off (the replay's workers on the upper half of the logical CPUs; Auto from 12) | Auto |
-| | Draw order barriers | Auto, On, Off (a draw pass after another waits in its fragment stages only; Auto on NVIDIA) | Auto |
-| | Batched submits | Auto, On, Off (a frame's submissions sent as one; Auto on Mesa's RADV) | Auto |
+| | CPU affinity (CCX) | Auto, On, Off (the replay's workers on the upper half of the logical CPUs, so the game's own thread keeps its cache; Auto from 12) | Auto |
+| | Draw order barriers | Auto, On, Off (a draw pass after another waits in its fragment stages only; Auto on NVIDIA, where it was measured) | Auto |
+| | Batched submits | Auto, On, Off (a frame's submissions sent as one; Auto on Mesa's RADV, where it was measured) | Auto |
 | Audio | Volume | 0 to 100%, in steps of 5 | 100% |
 | | Mute in background | Off, On | Off |
-| | Output device | Default or a named Windows playback device; applies live | Default |
-| | Speaker layout | Auto, Stereo, 5.1, Mono (layout changes after a restart; Mono/Stereo live on stereo output) | Auto |
-| | Microphone | Off, Default, or each microphone by name | Default |
+| | Audio output | Auto, Stereo, 5.1, Mono (layout changes after a restart; Mono/Stereo live on stereo output) | Auto |
 | Gameplay | FPS counter | Off, FPS, Frame time, Graph, Breakdown, Dev | Off |
 | | FPS counter position | Top right, Top left, Bottom right, Bottom left | Top right |
-| | FPS counter size | Auto, Small, Medium, Large | Auto |
-| | FPS counter details | Opens the FPS counter details page: Version and hardware at every level (Off, On; Off), then a line each of the Dev level (VRAM, Textures, Draws, Dispatches, Render passes, Draws skipped, Texture uploads, Pipelines built, GPU slot waits, Queue submits, Write-backs) and the CPU and GPU lines (Off, On; On) | Version and hardware off, every line on |
 | | Menu size | Small, Medium, Large | Medium |
 | | Game speed | Per frame, Real time | Real time |
 | | Field of view | 50% to 150%, in steps of 5; applies immediately during gameplay | 100% (original) |
 | | Text speed | Normal, 2x, 4x, Instant | Normal |
 | | Text size | Original, 110%, 125%, 150%, 175% (dialogue, Navi and signs) | Original |
 | | Skip title screen | Off, On (after a restart) | Off |
+| | Microphone | Off, Default, or each microphone by name | Default |
 | | Game language | The game's 16 languages, each by its own name (after a restart) | `language.txt`'s, else English (US) |
 | | Menu language | Auto (the game's language), or English, Português (Brasil), Español (Latinoamérica), Español (España), Français, Deutsch, Italiano, Nederlands, Polski, Русский, 日本語, 한국어, 简体中文, 繁體中文 | Auto |
 | | Discord status | Off, On ("Playing Longshot" and the time played in your Discord status, while Discord runs on this PC) | On |
 | | Skip opening | Off, On (skips the new-game opening: the story movie and Navi waking Link; later cutscenes and the title screen stay) | Off |
-| | Bug report | Saves a report into a new folder in `bug-reports` (below) |  |
+| | Bug report | Saves a report into a new folder in `bug-reports` (below) | |
 | Controls | Controller in background | Off, On | Off |
 | | Mouse camera | As the stick, Native, Off | As the stick |
 | | Disable camera centering | Off, On | Off |
 | | Mouse sensitivity | 0.10 to 5.00, in steps of 0.10 | 1.00 |
 | | Invert mouse vertical | Off, On | Off |
-| | Invert mouse horizontal | Off, On | Off |
 | | Invert camera X | Off, On | Off |
 | | Invert camera Y | Off, On | Off |
 | | Camera speed | 50% to 400%, in steps of 25 | 100% |
@@ -503,31 +799,25 @@ shown on a PC where neither runs. The table lists each tab's rows in that order.
 | | Rumble strength | Off, 25% to 150%, in steps of 25 | 100% |
 | | Layout preset | Nintendo (Def), Xbox / PC, Swap Face; Custom once you bind a button yourself (on the Controls page) | Nintendo (Def) |
 | | Button prompts | Auto, Switch, Xbox, PlayStation 4, PlayStation 5, Steam Deck, Keyboard (on the Controls page; changes at once where the game allows it, else after a restart) | Auto |
-| | Motion | Opens the Motion page: Motion controls (Off, On; On), Motion sensitivity X (10% to 600%) and Y (10% to 300%, in steps of 10; 100%), Invert motion X and Y (Off, On; Off), Motion deadzone (Low, Standard, High; Standard) |  |
+| | Motion | Opens the Motion page: Motion controls (Off, On; On), Motion sensitivity X (10% to 600%) and Y (10% to 300%, in steps of 10; 100%), Invert motion X and Y (Off, On; Off), Motion deadzone (Low, Standard, High; Standard) | |
 | | Walk mode | Hold, Toggle | Hold |
 | | Walk speed | 15% to 90%, in steps of 5 | 45% |
-| | Run mode | Hold, Toggle | Hold |
-| | Controls | Opens the Controls page |  |
+| | Controls | Opens the Controls page | |
 | | Menu shortcut | Insert or F1; F1 only; Insert, F1 or Esc | Insert, F1 or Esc |
 | | Compact menu key | Right Shift, Right Ctrl | Right Shift |
-| NVIDIA | DLSS model | Transformer (K), Transformer 2 (M), Transformer 2 (L), NVIDIA default (shown where DLSS runs; used by DLSS and DLAA) | Transformer (K) |
-| | NVIDIA Reflex | Off, On, On + Boost (shown only on NVIDIA GPUs with `VK_NV_low_latency2`) | Off |
 | Debug | Debug tools | Off, On (while on, the tools below it: Heart protection, No-clip flight, Mark position, Return to mark, Set time, Inventory item, Change quantity, Free camera, Teleport, Switch age, Inventory, Movement speed) | Off |
-| | Autosave: | On or Off, available with Debug tools off. Enabling Debug tools switches Autosave to Off. Off skips supported autosaves, including the verified map transitions. You can still save manually. | On |
 | | Player: Damage taken | Half, Normal, Double, Quadruple (live, while Debug tools is on; Half rounds damage up to a quarter heart; Heart protection wins) | Normal |
-| | Frame pacing | Off, On | Off; a quality preset turns it on |
-| | Threaded rendering | Auto, On, Off (after a restart). Auto is On with 12 or more processor threads for the game | Auto |
 | | Developer: Save my pipeline list | Saves a zip of the pipelines your play built into Downloads ([below](#send-your-pipeline-list)) | |
 | | Developer: Descriptor reuse | Off, On (changes at once) | On |
 | | Developer: Sampler cache | Off, On (changes at once) | Off |
 | | Developer: Robust buffers | Auto, Off, On (after a restart) | Auto |
 | | Developer: ASTC as RGBA8 | Off, On (after a restart) | Off |
-| | Developer: Intel shader compiles | Auto, Side by side, One at a time (after a restart; Intel graphics on Windows only) | Auto |
+| | Developer: Intel shader compiles | One at a time, Side by side (after a restart; Intel graphics on Windows only) | One at a time |
 
-- **Quality preset** sets Render resolution, Window scaling filter, Sharpness, Frame pacing, Game speed and Profile for a
-  card with that much memory; how much video memory the textures use comes from the card itself.
-  It leaves the Upscaler and Frame generation as you chose them: with DLSS, FSR 3.1 or FSR 4, the preset's resolution
-  becomes their nearest mode. Changing most other rows yourself sets it back to Custom.
+- **Quality preset** sets Render resolution, Window scaling filter, Sharpness, Frame pacing, Game speed, Profile
+  and the video memory limits for a card with that much memory. It leaves the Upscaler and Frame generation as
+  you chose them: with DLSS, FSR 3.1 or FSR 4, the preset's resolution becomes their nearest mode. Changing most other
+  rows yourself sets it back to Custom.
 - **Auto (this PC)**, which a first start begins on, chooses for the PC it runs on: the memory tier from the card's
   video memory (an integrated GPU, a Steam Deck or a card without mesh shaders at Minimum), DLSS on an NVIDIA RTX card
   or FSR 4 on an AMD RX 9000 where the build has them (else the game's own upscaler). It leaves the Output resolution as
@@ -546,14 +836,18 @@ shown on a PC where neither runs. The table lists each tab's rows in that order.
   file list as soon as the game has a save. Until you have saved once, it leaves the title screen alone, so a new game can
   still be started. It applies after a restart; turn it off to watch the intro and use the title.
 - **GPU device** matters on a PC with more than one graphics card (a laptop's integrated and dedicated GPUs, or a
-  second card for Lossless Scaling). Auto prefers a dedicated one, and only cards with Vulkan 1.3 are listed. The card
-  you choose is saved as that card (`gpu_device_id=` in `longshot_options.ini`), not its place in the list, so it stays
-  chosen when the list's order changes (a driver update, a card added, an update into a new folder). A chosen card that
-  is not there (an eGPU unplugged) is Auto until it is back. `longshot_log.txt` lists every card as `vk: device <n>`;
-  `RX_VK_DEVICE=<n>` chooses one for a single run and wins over the menu.
+  second card for Lossless Scaling). Auto prefers a dedicated one, and only cards with Vulkan 1.3 are listed.
+  `longshot_log.txt` lists every card as `vk: device <n>`; `RX_VK_DEVICE=<n>` chooses one for a single run and wins
+  over the menu.
 - **Frame generation** makes extra frames between the game's own. It adds a little input delay, and fast motion can
   show artifacts. The renderer's own interpolation makes the frames; at 2x, AMD FSR 3.1's frame interpolation can make
-  it instead with `RX_VK_FSR_FG=1` (below: it moves the HUD with the scene, so it is not the default). **Frame pacing** shows frames at an even interval: less stutter, up to one frame of delay. It paces
+  it instead with `RX_VK_FSR_FG=1` (below: it moves the HUD with the scene, so it is not the default).
+  **Frame generation by: AMD FSR FG** (OcaDim) makes them with AMD's FidelityFX SDK instead: one frame between each two of
+  the game's, from the scene's own depth, motion vectors, jitter and camera, **FSR 4 on RDNA 4 today** (the FSR 3.1 path is
+  not shipped yet; other AMD cards keep the built-in frames),
+  Windows and AMD GPUs only, with AMD's runtime beside the game; it needs a temporal Upscaler and the built-in frames are
+  cut off while it runs. The row applies at once, and `RX_VK_FG_AMD=1` asks for it for one run. Its frames move the HUD
+  with the scene, as FSR 3.1's do. **Frame pacing** shows frames at an even interval: less stutter, up to one frame of delay. It paces
   the frames that frame generation shows, so it has no effect while Frame generation is Off.
 - **Game frame rate cap** limits the frames the game renders. With a cap of 60 and Frame generation at 2x, the output
   can reach 120 FPS. Choose **Auto** in Frame generation to target the display's refresh rate instead of a fixed multiplier.
@@ -632,21 +926,9 @@ shown on a PC where neither runs. The table lists each tab's rows in that order.
 - **Window scaling filter** matters only when your window's size differs from the Output resolution: for the sharpest
   picture, set the Output resolution to your screen's, and the row shows "Not needed (window = output)". It and
   **Sharpness** also work when Frame generation is Off.
-- **CRT filter** adds scanlines and a phosphor mask to the finished SDR picture, including the game's HUD, after
-  window scaling and sharpening. Longshot's menu and overlays stay clean. Lottes aperture grille is a flat PVM-style
-  look, not a calibrated Sony model; Lottes consumer TV adds curved glass, a shadow mask and beam bloom. Hyllian Fast
-  uses cubic reconstruction and a magenta/green mask; zfast CRT has softer scanlines and a monochrome aperture mask.
-  **CRT lines** chooses a virtual raster, independent of Render resolution: 240, 480 or 720 lines, capped at half the
-  destination height (at least one line), with width following its aspect. Exact integer multiples give the most regular
-  lines; non-integer scaling can cause moire. Neither option forces 4:3 or integer scaling. Both apply at once and
-  quality presets, including Auto, preserve them. Expanded HDR expands the filtered SDR picture; Native HDR (PQ)
-  bypasses CRT and keeps the choice for SDR. **Off**, the default, adds no CRT passes or GPU images.
 - **Anisotropic filtering** keeps textures sharp on surfaces seen at a slant: the paths and floors ahead of Link. The game
   asks for 1x or 2x, which at a PC's resolutions smears the ground a few metres off; 16x costs little on most cards, and
   Game's is the console's own. `RX_VK_ANISO=<n>` sets it for one run (0: the game's).
-- **Shadow resolution** is not a setting here: the sun's shadow maps stay at the game's own 1600 pixels a side. The game's
-  larger sizes (2200 and 3072) cost Castle Town 6-7 fps on a 16 GB card, so OcaDim pins the console's size. An options file
-  that still carries `shadow_resolution` is read and ignored.
 - **Upscaler Off** (`dlss=6` in `longshot_options.ini`) is for slow GPUs and for measuring: no DLSS, no FSR, and not the
   game's own network either, which otherwise runs on every frame (at the game's usual 3/4 share it scales the 3D up and
   smooths its edges; at 100% a pass of the same kind still smooths them). In its place the 3D is stretched to the output
@@ -671,6 +953,9 @@ shown on a PC where neither runs. The table lists each tab's rows in that order.
   in `longshot_env.txt` uses the compute path on every GPU (try it if your card crashes or leaves objects out; usually a
   little slower), and `RX_VK_MESH_SHADERS=native` the GPU's own for every draw. A `mesh_shaders=` line left in
   `longshot_options.ini` is no longer read.
+- **CRT filter** draws the finished picture through a CRT shader (Lottes' aperture grille or consumer TV, Hyllian Fast,
+  zfast CRT), the game's HUD included; the menu and the overlays stay clean. **CRT lines** picks the virtual raster
+  (240, 480 or 720 lines, at most half the destination's height).
 - **Ultrawide menus:** with the Aspect ratio at the monitor's shape, the pause, item and map menus stay in the middle
   16:9, with what the game draws beside them out of focus, or black; Full width stretches them over the whole screen,
   as before. Loading screens and pre-rendered movies get the same sides. It changes at once.
@@ -684,63 +969,59 @@ shown on a PC where neither runs. The table lists each tab's rows in that order.
   (On with 12 or more threads for the game, Off with fewer, and Off wherever the mode is not safe). It applies after
   a restart. `RX_VK_ASYNC` and `RX_VK_RECORDER`, when set, choose for
   one run.
+- **Replay workers**, **Replay segments**, **Descriptor prefetch**, **CPU affinity (CCX)**, **Draw order barriers** and
+  **Batched submits** (OcaDim) are the replay's own levers: how many threads record the picture's command buffers, how
+  many draws and dispatches each takes at a time (32 suits this game's buffers; 64 and 160 are for longer ones), whether
+  a helper thread reads each buffer's descriptors ahead of the replay, whether the workers stay on the upper half of the
+  processor's logical CPUs (the second CCD of a Ryzen, so the game's own thread keeps its cache), whether a draw pass
+  right after another waits only in its fragment stages, and whether a frame's submissions go out as one. Each row says
+  Auto, On or Off, what Auto does and where it was measured, and applies after a restart. Measured on this project:
+  Batched submits took Kokiri Forest from 33-41 to 46-61 fps on RADV, and Descriptor prefetch served 357-682 overlays per
+  window with about 215,000 list scans skipped, with no artifact. `RX_VK_PARALLEL`, `RX_VK_PARALLEL_SEG` and
+  `RX_VK_DESC_PREFETCH` choose for one run.
+- **Above-60 fixes** (OcaDim) mends two more of the game's 60 fps assumptions: the floors that carry a character (the
+  game's own 100.0 cut, which made Link slide off a moving platform above 100 fps) and the height-field surfaces' fixed
+  steps (the water managers, which stood still above 60 fps). Those two are **NX2navi's** patches (public domain / MIT,
+  its patches-v111's `ofollow` and `owater`), ported here. Off keeps the game's behaviour, as it was before them. It
+  applies after a restart.
 - **Robust buffers** (Debug tab, Developer): a read past a buffer's end is dropped instead of stopping the GPU. Auto is
   on, on every card; Off can be faster on some NVIDIA cards.
 - **ASTC as RGBA8** (Debug tab, Developer): the AMD texture workaround below.
-- **Intel shader compiles** (Debug tab, Developer; Intel graphics on Windows only): One at a time lets one thread at a
-  time into Intel's shader compiler; Side by side is faster on many cores but can crash in the driver. Auto, the default,
-  is side by side on the Arc B-series with driver 101.9154 or newer, where it was measured, and one at a time elsewhere. See
+- **Intel shader compiles** (Debug tab, Developer; Intel graphics on Windows only): One at a time, the default, lets one
+  thread at a time into Intel's shader compiler; Side by side is faster on many cores but can crash in the driver. See
   [Intel laptops](#intel-laptops). It applies after a restart.
 - **Game speed:** with Per frame, the game runs slower whenever it is below 60 fps. Real time keeps it at normal speed
   down to 15 fps.
-- **FPS counter** shows in a corner (**FPS counter position**; at the top right while the menu is open), as large as
-  **FPS counter size** says (Auto grows with the window, as the menu does; Small, Medium and Large keep the size Auto has
-  in a 720p, 1080p and 1440p window, whatever the window), at one of
+- **FPS counter** shows in a corner (**FPS counter position**; at the top right while the menu is open), at one of
   five levels. **FPS** is the number alone (an options file's old On); with frame generation on, it also shows the
-  game's own rate and who makes the frames: `Base 60, DLSS FG` (NVIDIA DLSS Frame Generation), `FSR 3.1 FG` or `Built-in FG`. **Frame time** adds the game's frame time and its 1% low (the mean time of the slowest 1% of frames
-  over the last 10 seconds). From this level on, the number and the frame time are green at the Game frame rate cap's rate,
+  game's own rate and who makes the frames: `Base 60, DLSS FG` (NVIDIA DLSS Frame Generation), `FSR 3.1 FG`, `AMD FSR FG`
+  (OcaDim: AMD's FidelityFX frame generation) or `Built-in FG`. **Frame time** adds the game's frame time and its 1% low (the rate of the slowest 1% of frames over
+  the last 10 seconds). From this level on, the number and the frame time are green at the Game frame rate cap's rate,
   amber under it and red under two thirds of it. (The cap's rate is the display's refresh instead with V-Sync On when
   that is slower; with Uncapped and V-Sync not On there is no line, and the colours are against 60.) **Graph** adds
   the frame times of the last 4 seconds (each point the slowest frame of its span, so no stutter is missed), with a
   dashed line at the Game frame rate cap's frame time and a red mark over frames that took more than twice it; its
-  scale follows the usual frame, so a spike is drawn at the top rather than flattening the rest. **Breakdown** draws
-  each of the graph's frames as the parts its time went to, stacked, with their values under the graph; the values add up
-  to the frame time: the game's own code (Game), the renderer's part on the game's thread (Renderer: handing
-  over the frame's work, or all of its recording with Threaded rendering off), then the waits under
-  Waiting on: with Threaded rendering, for the game's main thread to finish writing the frame (Game's main thread), for
-  the render thread (Render thread: work it had not recorded yet, or the frame before it had not replayed), for the GPU to
-  finish work the game waits on (GPU fence) and for the GPU at the present (GPU present), and last the frame's turn (Pacing: the frame rate cap,
-  vsync, Reflex). The colours keep one meaning: blue the game's work, red the GPU, purple the render thread, grey pacing
-  and idle. With Threaded rendering on, a second lane under the graph shows the render thread's own frame in parallel,
-  on the same scale: recording, waiting for the parallel replay's workers and for a GPU slot, and idle. Then the GPU's
-  own time per frame and its share of the frame (it runs in parallel too), and the shaders built and draws left out in
-  the last 4 seconds (red marks on the graph where they happened, the usual cause of a stutter). **Dev** adds the
+  scale follows the usual frame, so a spike is drawn at the top rather than flattening the rest. **Breakdown** adds
+  where the frame's time went on the game's presenting thread, as a bar and in numbers: the game's own code (Game),
+  recording and submitting the GPU's work (Renderer), waiting for the GPU (GPU wait), and waiting for the frame's turn
+  (Pacing: the frame rate cap, vsync, Reflex); then the GPU's own time per frame, and the shaders built and draws left
+  out in the last 4 seconds (red marks on the graph where they happened, the usual cause of a stutter). **Dev** adds the
   renderer's own numbers, for debugging and bug reports: video memory used of what the driver allows (red past it), the
   textures held and their memory, draws, dispatches and render passes a frame, draws skipped a frame (red when any),
-  texture uploads a second, the pipelines built since the start, and the renderer's pressure a frame: its waits for a
-  recording slot (the GPU behind), its queue submits (the driver's and the kernel's time) and the GPU's results written
-  back to the game's memory (VRAM on a line of its own, the rest two to a line while they fit, else on a line of
-  their own); at the counter's foot four lines: the
-  version (as the menu's banner shows it), the CPU, the GPU and its driver, at every level too with **FPS counter details**'
-  Version and hardware at every level. The details page turns each of the Dev level's lines on or off.
+  texture uploads a second and the pipelines built since the start.
 - **Volume** scales the game's whole sound, on top of the game's own sound settings and Windows' volume. Its steps
   follow a curve so they sound about even: 50% is a quarter of the level (-12 dB). **Mute in background** silences the
   game while another window has the focus; an overlay such as Steam's or Discord's does not count as another window
   while the game was in front.
-- **Output device**, under Audio, selects the Windows playback endpoint by its persistent ID, with Default following
-  the system output. Changes briefly restart the audio stream. A missing endpoint falls back to Default and is retried;
-  its saved choice is retained. `HOS_AUDIO_DEVICE` overrides selection for that run without changing the saved choice.
-  Named playback selection is Windows-only; Linux retains the default output.
-- **Speaker layout** is the speakers the game mixes its sound for. Auto is 5.1 when the selected/default output device has 5.1
+- **Audio output** is the speakers the game mixes its sound for. Auto is 5.1 when your default output device has 5.1
   or more speakers, else stereo; Stereo or 5.1 chooses one whatever the device has (5.1 on stereo speakers is mixed
   down). Mono averages the stereo channels into both ears, for one-sided hearing or one earbud. Mono/Stereo
   changes apply live while output is stereo; changing the channel layout (from or to 5.1) needs a restart.
   Auto never applies the mono average. Saved `audio_output` values remain 0 Auto, 1 Stereo, 2 5.1; Mono is 3.
   For one run, `HOS_AUDIO_CHANNELS=2` or `6` chooses the channel layout over the menu (6 leaves Mono inactive).
-- **Microphone**, also under Audio, is what the ocarina hears when the game's own microphone option is on (an instrument, or humming).
-  Default follows Windows' default recording device; the list shows up to 64 recording devices by name, and a change
-  applies at once. Physical and virtual inputs share that limit; devices after the first 64 reported by the audio backend
-  are not listed. A chosen microphone that is unplugged stays chosen (shown as not connected): Default stands in until it is
+- **Microphone** is what the ocarina hears when the game's own microphone option is on (an instrument, or humming).
+  Default follows Windows' default recording device; the list shows each microphone by name, and a change applies at
+  once. A chosen microphone that is unplugged stays chosen (shown as not connected): Default stands in until it is
   back. On Linux (SDL2) two microphones with the same name cannot be told apart: the first is used. Windows must allow desktop apps to use the microphone
   (Settings, Privacy & security, Microphone). `HOS_MIC_LOG=1` logs what the game reads, a line a second.
 - **Game language** is the game's own text, `language.txt` in the game folder: the row writes it once you leave the row,
@@ -768,6 +1049,11 @@ shown on a PC where neither runs. The table lists each tab's rows in that order.
   game's own camera speed option still picks the speed this multiplies.
 - **Stick dead zone:** how far a stick moves from center in any direction before it counts. Default is about 24%. Use
   a lower value for a precise stick or a higher one for a stick that drifts. The game also applies its own dead zone.
+- **Auto run:** the sprint goes on after the run button (A) is let go. Hold A for 0.4 s while moving (the roll, then
+  the sprint, as usual), let go, and A stays held for the game while the stick stays pushed; a short press (a roll on
+  its own) is not kept. Letting go of the stick or pressing A again stops it (a long hold keeps it again). Only while
+  Link is yours to move: an event (a talk, a cutscene), the pause menu, the map, the Insert menu and the ocarina's notes
+  end it, so A never picks an entry, skips text or plays a note there.
 - **Rumble strength** scales the controller's rumble: 100% is the game's own, Off turns it off. The game's HD rumble
   goes to a controller's heavy and light motors by its frequency.
 - **Motion controls** (Controls tab, Motion page): the controller's gyroscope aims where the game uses motion, as on the Switch. It works with
@@ -781,15 +1067,9 @@ shown on a PC where neither runs. The table lists each tab's rows in that order.
   a button yourself sets it to Custom.
 - **Button prompts** (on the Controls page): the button icons in the game's texts, hints and menus. Auto shows the first
   controller's; with no controller connected, the keyboard's. Keyboard shows the key or mouse button your controls put each
-  action on (the first of its two), and your movement keys and the mouse for the sticks; the ocarina's notes and the pause
-  menu's controller keep the Switch's buttons. A prompt for several directions at once shows W A S D while those are the
-  movement keys, and the stick's own icon with other keys.
+  action on (the first of its two), and WASD and the mouse for the sticks; the ocarina's notes and the pause menu's
+  controller keep the Switch's buttons.
 - **Save my pipeline list** (Debug tab, under Developer): see [Send your pipeline list](#send-your-pipeline-list).
-- **Auto run:** sprint without holding A (or its key). Hold it until Link sprints, then let go: he keeps going. Let go of
-  the stick or the movement keys, or tap A again, to stop.
-- **Run mode** and **Run:** the Run key makes Link run on demand, the Walk key's mirror. While it is held (unbound until
-  the Controls page gives it a key), the movement keys push the left stick all the way; on Toggle, one press runs and the
-  next walks again. Useful for a controller whose stick no longer reaches its edge. It never overrides Walk.
 - **Walk mode** and **Walk speed:** on the keyboard the movement keys push the stick all the way, so Link runs. While the
   Walk key is held (<kbd>Caps Lock</kbd> unless you change it on the Controls page), they tilt it only Walk speed of the
   way, and he walks; with Walk mode on Toggle, one press walks and the next runs again. 15% is his slowest walk, 45% to
@@ -834,8 +1114,8 @@ puts them all back. A gamepad button taken from another Switch button swaps with
 with the next. Both gamepad inputs, bound keys and mouse buttons share the latch. Every Toggle starts Off.
 Plus, Minus, stick directions, Walk and ocarina note rows have no Toggle. Opening Insert, pressing Plus or Minus,
 losing focus, rebinding or Reset to defaults releases latched buttons. With Controller in background On, a new
-press can latch again behind another window. On Linux, any menu screen receiving pane focus also clears the latch,
-not only the pause page. Insert always releases it. There is no separate on-screen latch indicator.
+press can latch again behind another window. On Linux, other game dialogs do not necessarily clear the latch;
+press Insert to release it. There is no separate on-screen latch indicator.
 
 **Ocarina notes:** the page gains five rows, `Ocarina note (L)`, `(R)`, `(A)`, `(Y)`, `(X)`, unset by default: the game's own
 buttons play until you bind a note to a key or gamepad input of your own, and a bound note then answers only that input while
@@ -872,11 +1152,6 @@ layout emulators use: `mods/<name>/romfs/...` holds files that replace or add to
 `mods/contents/<title id>/<name>/romfs` work too. A folder whose name starts with `-` or `_` is off. When two mods
 have the same file, the one whose whole path relative to `mods` sorts last (ignoring case) wins. Use `01-...`, `02-...`
 at the same level to set the order. Stop the game before changing mods, then restart.
-
-One of the game's texts names the console: the hint for playing the ocarina by microphone says to use its built-in one.
-The build rewords it for a PC ("your microphone") in your own text files, in each of the game's languages, into the game
-folder's `texts` folder, and the game reads those instead. A mod's own text file wins, and `HOS_TEXTS=0` in
-`longshot_env.txt` shows the game's own.
 
 Only RomFS mods are loaded. `exefs` patches (`.pchtxt`, `.ips`) are left out: Longshot compiles the game's code ahead
 of time, so patching its instructions would need a rebuild. The log (`longshot_log.txt`) names each mod and the files
@@ -931,6 +1206,7 @@ You need:
   - `tools\cpm`: the Vulkan headers and FFmpeg. Set `RX_CPM` to this folder. Without it (and without system
     Vulkan / SPIR-V / VMA headers or `LONGSHOT_*_HEADERS`), the standalone build stops instead of shipping a
     game with no renderer.
+  - `tools\wgpu-native`: set `WGPU_NATIVE` to this folder.
   - `tools\third_party`: the prebuilt files a clone lacks (`a64emit`, `lld-link`, `zbic` and SDL2). Copy its `.dll`,
     `.exe`, `.lib` and `.sha1` files to the same places under `third_party\`.
   - `tools\work`: copy it to `work\`. It holds the hot-function list, the link order, the profile and the icon;
@@ -1058,8 +1334,8 @@ license. Never share a game folder built with them, and do not post builds made 
   run the build with `LONGSHOT_NGX_SDK=<sdk folder>` set: `make_game.py` puts both runtimes in the game folder's `ngx`
   folder. NGX's core comes with NVIDIA's Linux driver.
 - **Linux, a game folder with other than plain English letters in its path:** NVIDIA's NGX on Linux loads DLSS's
-  runtimes only from a folder whose whole path is ASCII. A game in `~/Games/Longshot` needs nothing more. A game in a
-  folder such as `~/Games/Longshot-Café` (the `é` is not ASCII) cannot use the runtimes in its own `ngx` folder, and the
+  runtimes only from a folder whose whole path is ASCII. A game in `~/Games/Zelda` needs nothing more. A game in a
+  folder such as `~/Games/Zelda-Café` (the `é` is not ASCII) cannot use the runtimes in its own `ngx` folder, and the
   log and the Insert menu say so: copy `libnvidia-ngx-dlss.so.*` and `libnvidia-ngx-dlssg.so.*` from there into
   `$XDG_DATA_HOME/longshot/ngx`
   (`~/.local/share/longshot/ngx`), which the game also looks in, or into any other folder with an ASCII path and name
@@ -1126,49 +1402,6 @@ in `longshot_options.ini`, `RX_VK_FSR4=1` or `2` for one run, `RX_VK_FSR4=0` to 
 
 The log's `vk: AMD FSR 4:` lines say which of AMD's upscalers it found for the card and which it uses (the newest FSR 4;
 never an older FSR in its place), and why not when it did not start. Tested on an RX 6700 XT (RDNA 2).
-
-</details>
-
-<details>
-<summary>Intel XeSS (optional, Windows, Intel's DLL not included)</summary>
-
-Every Windows build offers **Intel XeSS** and **Intel XeSS Native AA** in the Graphics tab's **Upscaler** row once Intel's
-`libxess.dll` is beside the game: XeSS Super Resolution, Intel's machine-learned temporal upscaler, through its Vulkan
-API, in place of the game's own, on the same inputs as DLSS and FSR 4 (the scene's colour and depth, the camera's and the
-characters' motion, and the camera jitter). Native AA draws the 3D at full size and smooths its edges. It runs on Intel
-Arc and Iris Xe GPUs, and on other GPUs whose Vulkan driver has what XeSS asks for (storage image writes without a format,
-`VK_EXT_mutable_descriptor_type`). With HDR on **Native**, it takes the game's HDR colour as linear light, with XeSS's own
-exposure (`RX_VK_XESS_HDR=0`: cut at the paper white, as with the other upscalers before).
-Choose it in the menu (`dlss=7` or `8` in `longshot_options.ini`, `RX_VK_XESS=1` or `2` for one run, `RX_VK_XESS=0` to
-leave it out: then the library is not even loaded). The Auto (this PC) preset never chooses it; it says in the log when
-the DLL is there.
-
-- **Intel's file:** Longshot includes only Intel's MIT-licensed XeSS API headers (`third_party/xess`). `libxess.dll` is
-  Intel's, under the Intel Simplified Software License, and Longshot does not ship it. Take it from the
-  `bin` folder of a recent [Intel XeSS SDK](https://github.com/intel/xess/releases) release (one whose `inc` folder has
-  `xess_vk.h`: the Vulkan path), or from a game that ships it, and put it beside the game's exe (`bin\longshot.exe`) or in the game folder.
-  (`RX_VK_XESS_DIR` names another folder, for testing: set it in the environment or a `HOS_ENV_FILE` file;
-  `longshot_env.txt` takes no paths.) Without it the Upscaler row does not offer XeSS and its hint says why.
-- **Or fetched for you:** RecompLauncher's **Intel XeSS** tick (Windows; off until you accept Intel's license, which it
-  shows), or `make_game.py --fetch-xess-runtime --accept-intel-license`, downloads `libxess.dll` 2.0.2.68 (78 MB, signed
-  by Intel) with Intel's license and third-party notices from Intel's XeSS SDK repository, at the commit
-  `third_party/xess`'s headers come from, checks each against its SHA-256, and puts them in the game folder
-  (`LONGSHOT_XESS_SDK=<folder>` keeps them between builds, default `work/xess-sdk`).
-  `python -I scripts/xess_sdk.py --accept-intel-license --game <game folder>` does the same for a game built already.
-  Without `--accept-intel-license` nothing is downloaded (the script asks when run by hand), as with AMD's and NVIDIA's
-  licenses. A `libxess.dll` already in the game folder that is not this one (a newer SDK's, put there by hand) is left
-  alone, and the build says so. It is Intel's, under the
-  [Intel Simplified Software License](https://github.com/intel/xess/blob/de0fb9c1c510661c571164e1418ceca8101dab69/LICENSE.txt)
-  (`LICENSE-INTEL-XESS-SDK.txt` beside it). On Linux the flag does nothing but say so.
-- **Windows only.** Intel makes no XeSS library for Linux, so a Linux build has no XeSS, and the row says so. XeSS Frame
-  Generation and Intel's latency reduction (XeLL) are Direct3D 12 only and are not in Longshot.
-
-The Render resolution row's stops run under the XeSS mode whose range holds them (since XeSS 1.3 each mode takes any size
-from its own ratio up to the output: Ultra Quality Plus 1.3x, Ultra Quality 1.5x, Quality 1.7x, Balanced 2x, Performance
-2.3x, Ultra Performance 3x), so the game's dynamic resolution at Auto runs under one mode too. The log's
-`vk: Intel XeSS:` lines say which DLL it loaded and its version, the extensions and features it asked of the Vulkan
-driver, the mode it was made with, and why not when it did not start. Not yet run in the game: reports from Intel GPUs
-are welcome.
 
 </details>
 
@@ -1255,11 +1488,9 @@ the build. If a build's preparation stopped ("the GPU driver stopped responding"
 `longshot_prepare_skipped` file in its `cache` folder and every start after that builds shaders only when first drawn.
 Build again with **Prepare shaders now** ticked, or delete that file, to prepare them with this fix.
 The Debug tab's **Intel shader compiles** row (Developer section, shown on Intel graphics on Windows) chooses: **One at
-a time**, the safe choice on a CPU with 4 cores or fewer; **Side by side**, faster builds on a CPU with many cores, but
-Intel's driver can crash the game while building them; or **Auto**, the default: side by side on the Arc B-series with
-driver 101.9154 or newer (on a B580 a new area's first visit froze the picture for four to seven minutes one at a time,
-and not at all side by side, with no fault in ten areas), one at a time on every other Intel GPU. It applies after a
-restart. `RX_VK_NO_INTEL_SERIAL=1` is Side by side for a run and `=0` One at a time, whatever the row says. NVIDIA, AMD, and Intel on other systems are
+a time**, the default and the safe choice on a CPU with 4 cores or fewer, or **Side by side**, faster builds on a CPU
+with many cores, but Intel's driver can crash the game while building them. It applies after a restart.
+`RX_VK_NO_INTEL_SERIAL=1` is Side by side for a run, whatever the row says. NVIDIA, AMD, and Intel on other systems are
 unchanged.
 
 `RX_VK_SKIP_CODE=<prefix,...>` leaves out the draws of every program with a stage whose native code key starts with one
@@ -1273,7 +1504,7 @@ The switches for scripted test runs, screenshots, frame dumps and profiles are i
 [development guide](docs/development.md#switches-for-testing-and-debugging).
 
 `RX_VK_WB_MAX_KB=<KB>` (off by default; 1024 is the tested value) is the size from which a written GPU binding may go
-without most of its write-back. The game
+without most of its write-back. OoT
 writes tens of MB of culling lists and per-frame buffers through the GPU that the CPU never reads, and copying them back
 sat on every submit's memory sync: in Hyrule Field on a 10 GB RTX 3080, about 66 MB and 4.4 ms a submit, holding the
 scene at 45-48 fps. The CPU does read and write parts of some large ones, so a binding over the size is written back
@@ -1375,7 +1606,7 @@ people:
 - **[kinnay/zbic](https://github.com/kinnay/zbic)**, **Opus** and **SDL**: decompression, audio and controllers.
 - **[sostenesfreitas/ocarina-recomp](https://github.com/sostenesfreitas/ocarina-recomp)**: this README's layout, and its notes
   confirmed the mesh stage's control section.
-- **[MythosOfs/Orchid](https://github.com/MythosOfs/Orchid)**: the fog and exposure workaround the game used before
+- **[MythosOfs/Orchid](https://github.com/MythosOfs/Orchid)**: the fog and exposure workaround Ocarina of Time used before
   its fog and lighting were fixed.
 - **Mesa (NAK)**: the reference for Ampere's instruction encoding.
 - Everyone who sent fixes: SkippySteve (Linux and the AppImage, and many more), monsterlag, klimovich008, hckrman101 (NVIDIA
