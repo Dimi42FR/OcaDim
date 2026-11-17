@@ -1223,13 +1223,20 @@ static void put_settings(Buf *b, const Shown *s, char *mic, size_t mic_cap) {
 /* The run's log again, from its file, for the crash's lines as they are (the ring of read_log is cut to fit the menu's
    report): the 150 lines before the crash's first and its own (at most 80). 0 when the log has no crash */
 typedef struct Lines { char **at; int n, cap; } Lines;
+/* (a line's copy, by the name each C runtime links it by: the Windows build for the MSVC target links without oldnames.lib,
+   issue 439, so plain strdup stopped it at "undefined symbol: strdup" after the whole game had been compiled) */
+#ifdef _WIN32
+#define line_copy _strdup
+#else
+#define line_copy strdup
+#endif
 static void lines_add(Lines *l, const char *line) {
     if (l->n == l->cap) {
         char **more = (char **)realloc(l->at, sizeof *more * (size_t)(l->cap ? l->cap * 2 : 256));
         if (!more) return;
         l->at = more, l->cap = l->cap ? l->cap * 2 : 256;
     }
-    l->at[l->n] = strdup(line);
+    l->at[l->n] = line_copy(line);
     if (l->at[l->n]) l->n++;
 }
 static void lines_free(Lines *l) {
@@ -1252,7 +1259,7 @@ static int crash_lines(const Shown *s, Lines *tail, Lines *crash) {
             else {
                 free(ring.at[0]);
                 memmove(ring.at, ring.at + 1, sizeof *ring.at * (HOS_CRASH_TAIL_LINES - 1));
-                ring.at[HOS_CRASH_TAIL_LINES - 1] = strdup(line);
+                ring.at[HOS_CRASH_TAIL_LINES - 1] = line_copy(line);
                 if (!ring.at[HOS_CRASH_TAIL_LINES - 1]) ring.n--;
             }
         } else if (crash->n < HOS_CRASH_CRASH_LINES && hos_crash_report_line(one, sizeof one, line)) {
