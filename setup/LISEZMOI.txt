@@ -1,4 +1,4 @@
-OCADIM 0.0.1 — LE SETUP
+OCADIM 0.0.2 — LE SETUP
 =======================
 
 Il vous faut VOTRE copie du jeu (le fichier .nup ; programme 0400486024DEC000, build e0f3ccfa),

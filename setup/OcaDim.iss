@@ -2,13 +2,13 @@
 ; Build the payload first (the game folder as packaged: longshot.exe, longshot_vk.dll, SDL*.dll,
 ; wgpu_native.dll, romfs + .hookshot_exefs, the caches, prompts, the FSR DLLs), then:
 ;   iscc setup\OcaDim.iss /DPayload="D:\Emulateur\Longshot-main"
-; It writes setup\dist\OcaDim-Setup-0.0.1.exe
+; It writes setup\dist\OcaDim-Setup-0.0.2.exe
 ;
 ; The name the player sees is OcaDim 0.0.1; the files keep the longshot_* names on purpose (the game, its
 ; options, its logs and its caches are named that way inside, and renaming them would lose a player's settings).
 
 #define AppName "OcaDim"
-#define AppVersion "0.0.1"
+#define AppVersion "0.0.2"
 #define AppExe "longshot.exe"
 #define AppPublisher "Dimi42FR"
 #ifndef Payload

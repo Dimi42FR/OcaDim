@@ -95,7 +95,7 @@ sealed class ToolInstaller
     public async Task InstallAsync(Action<double, string> progress, CancellationToken cancel)
     {
         using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(60) };
-        http.DefaultRequestHeaders.UserAgent.ParseAdd("OcaDimSetup/0.0.1");
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("OcaDimSetup/0.0.2");
         var todo = tools.Where(t => !Present(t)).ToList();
         if (todo.Count == 0)
         {

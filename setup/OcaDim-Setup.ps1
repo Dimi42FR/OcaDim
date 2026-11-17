@@ -11,7 +11,7 @@ param([switch]$Install, [switch]$Play, [switch]$Uninstall, [string]$From)
 
 $ErrorActionPreference = 'Stop'
 $name = 'OcaDim'
-$version = '0.0.1'
+$version = '0.0.2'
 $exe = 'longshot.exe'
 $root = Join-Path $env:LOCALAPPDATA $name
 
