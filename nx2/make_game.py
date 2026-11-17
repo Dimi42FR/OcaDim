@@ -53,6 +53,8 @@ PY = [sys.executable, "-I", "-u", "-X", "utf8"]   # (utf8: every step's output i
 BUILD_ID = "e0f3ccfa"   # (the version the patches, the hot list and the profile were made from)
 STARTED = time.time()   # (the build's total time, kept in build_times.json and said as @@times)
 sys.path[:0] = [HERE, os.path.join(ROOT, "third_party", "a64-kit", "tools")]   # (python -I leaves the script folder off)
+import long_paths  # noqa: E402
+long_paths.install()   # (paths past 260 characters on Windows, before anything reads a file: #1115)
 import toolchain as _toolchain
 import disk as _disk
 import object_store as _object_store
