@@ -6883,14 +6883,10 @@ void program_released_locked(const nvn_prog* p) {
 // dynamic-resolution step), had the frame being recorded sample the next ones' textures, of another size: its
 // picture went to pieces below or above a line (edges clamped into stripes, the sky's or fog's colour, the shadows
 // dark) for a frame, with the size changes (every few frames when the resolution swung). Now they are jobs, applied
-// where the game made them among its submits, as finalized textures already were. RX_VK_REGISTER_AT_ONCE=1: as before.
-bool register_at_once() {
-    static const bool v = env_on("RX_VK_REGISTER_AT_ONCE");
-    return v;
-}
+// where the game made them among its submits, as finalized textures already were.
 // doc: docs/design.md#4-the-lessons-from-mkw-as-rules-here (rule 3: registrations are queued in order with the submits)
 void register_texture_queued(int id, const nvn_tex* t, const nvn_view* v) {
-    if (!async_on() || register_at_once()) return register_texture_locked(id, t, v);
+    if (!async_on()) return register_texture_locked(id, t, v);
     if (id < 0 || id >= (1 << 20) || !t) return;
     t = (const nvn_tex*)descriptor_ok(t, sizeof(nvn_tex));
     if (!t) return;
@@ -6921,7 +6917,7 @@ void event_signal_queued(uint64_t gpu, uint32_t value) {
     bh_signal_cv.notify_all();
 }
 void register_sampler_queued(int id, const nvn_samp_par* p) {
-    if (!async_on() || register_at_once()) return register_sampler(id, p);
+    if (!async_on()) return register_sampler(id, p);
     if (id < 0 || id >= (1 << 12) || !p) return;
     p = (const nvn_samp_par*)descriptor_ok(p, sizeof(nvn_samp_par));
     if (!p) return;

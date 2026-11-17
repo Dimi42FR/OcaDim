@@ -677,21 +677,6 @@ bool create_device() {
     dev.eds3_clamp = dev.dynamic_state3 && eds3.extendedDynamicState3DepthClampEnable;
     dev.eds3_blend = dev.dynamic_state3 && eds3.extendedDynamicState3ColorBlendEnable &&
                      eds3.extendedDynamicState3ColorBlendEquation && eds3.extendedDynamicState3ColorWriteMask;
-    {   // (longshot) the vendor and driver workarounds this device needs: vk_vendor.h, each forced by its RX_VK_ switch
-        VkPhysicalDeviceDriverProperties drv{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
-        VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
-        p2.pNext = &drv;
-        vkGetPhysicalDeviceProperties2(dev.physical, &p2);
-        VendorFacts facts;
-        facts.vendor_id = p2.properties.vendorID;
-        facts.driver_id = drv.driverID;
-        facts.device_type = p2.properties.deviceType;
-        facts.driver_info = drv.driverInfo;
-        dev.fixes = vendor_fixes(facts);
-        vendor_fixes_env(dev.fixes, [](const char* name) -> const char* { return getenv(name); });
-        logf("vk: vendor fixes for %s (%s): out-of-bounds texel fetches 0 %d, NaN tests by bits %d, gather offset %d",
-             drv.driverName, drv.driverInfo, (int)dev.fixes.fetch_bounds, (int)dev.fixes.nan_bits, (int)dev.fixes.gather_offset);
-    }
     dev.eds3_a2c = dev.dynamic_state3 && eds3.extendedDynamicState3AlphaToCoverageEnable;
     dev.vk12 = f12;
     dev.vk13 = f13;
@@ -820,6 +805,12 @@ bool create_device() {
         dev.policy = device_policy(pf);
         // (and the switches over them, read once, by one rule: device_policy_env)
         device_policy_env(dev.policy, pf, [](const char* name) -> const char* { return getenv(name); });
+        // (longshot) the translation's vendor and driver workarounds (device_policy.h fetch_bounds, nan_bits, gather_offset),
+        // each forced by its RX_VK_ switch
+        device_policy_fixes_env(dev.policy, [](const char* name) -> const char* { return getenv(name); });
+        logf("vk: vendor fixes for %s (%s): out-of-bounds texel fetches 0 %d, NaN tests by bits %d, gather offset %d",
+             dev.driver.driverName, dev.driver.driverInfo, (int)dev.policy.fetch_bounds, (int)dev.policy.nan_bits,
+             (int)dev.policy.gather_offset);
     }
     // (longshot) Intel XeSS's features (vk_xess.cpp), last, into the chain as it will be made: the library sets what it needs in
     // the renderer's structures and adds what it lacks (VK_EXT_mutable_descriptor_type's); nothing without its library, and a
@@ -1903,7 +1894,7 @@ const MkwVkRenderer* mkwvk_init(const MkwVkHost* h) {
          dev.graphics_pipeline_library ? "yes" : "no");
     logf("vk: driver: %s", driver_text().c_str());   // (the builders' Save my pipeline list reads it: nx2/pipeline_share.py)
     // (what this PC is, what it gets for it, and which of those a switch set: device_policy.h)
-    device_policy_log(dev.policy, dev.facts, dev.fixes, [](const char* line) { logf("%s", line); });
+    device_policy_log(dev.policy, dev.facts, [](const char* line) { logf("%s", line); });
     // (the crash report's facts, as the bug report words them: host/hos_crash_dialog.h reads the last of each)
     logf("report: gpu %s", device_report_text().c_str());
     logf("report: cpu %s", mkwvk::bug_report::cpu_text().c_str());

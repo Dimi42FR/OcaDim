@@ -13,7 +13,6 @@
 #ifndef LONGSHOT_ENV_H   // (env_on: the switches' one rule)
 #include "compat/longshot_env.h"
 #endif
-#include "vk_vendor.h"
 #include "device_policy.h"
 #include "gpu_choice.h"
 
@@ -86,7 +85,6 @@ struct Device {
     uint32_t subgroup_size = 32, subgroup_max = 32;   // (the lanes a stage not pinned runs at, and the most it can have)
     VkDriverId driver_id{};
     bool radv_gcn = false;   // (longshot) RADV on a GCN 1-4 card (GFX6-8: RX 400/500, R9 2xx/3xx/Fury): fallback_size_policy.h
-    VendorFixes fixes{};   // (longshot) the vendor and driver workarounds this device needs (vk_vendor.h; vk_main.cpp create_device)
     // (longshot) what create_device learnt of this PC and the defaults it gets by it (device_policy.h); driver is what facts'
     // driver_info points into. Here and not in vk_state.h, which is part of the translator's stamp
     VkPhysicalDeviceDriverProperties driver{};

@@ -707,9 +707,8 @@ void EmitMeshPrologue(EmitContext& ctx) {
     // RX 7700S the foliage drawn into the 2400 x 2400 shadow map around Link came out with hundreds of long thin triangles
     // across the whole map (vertices from other meshlets' leftovers), dark lines on the ground, the water and Link that
     // changed every frame. Zeroed, such a primitive is (0,0,0): no area. Straight-line stores, each clamped into its array
-    // (no branch: see below). RX_VK_MESH_NO_ZERO=1: as before
-    static const bool no_zero{env_on("RX_VK_MESH_NO_ZERO")};
-    if (!no_zero && ctx.mesh_threads) {
+    // (no branch: see below)
+    if (ctx.mesh_threads) {
         const Id invocation{LocalInvocation(ctx)};
         const auto zero_all = [&](Id array, u32 count) {
             if (!Sirit::ValidId(array) || count == 0) {

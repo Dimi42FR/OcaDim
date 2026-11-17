@@ -766,11 +766,8 @@ void ensure_layout(Program& p) {
     for (const Stage& st : p.stages) p.uses_render_area |= st.info.uses_render_area;
     p.uses_push = p.uses_render_area;
     for (const Stage& st : p.stages) p.uses_push |= st.info.uses_rescaling_uniform;
-    static const bool follow_graphics = !getenv("RX_VK_FOLLOW_GRAPHICS") || atoi(getenv("RX_VK_FOLLOW_GRAPHICS")) != 0;
-    for (const Stage& st : p.stages)   // (the page table; EvilOOT: and graphics stages with RX_VK_FOLLOW_GRAPHICS)
-        p.uses_push |= ((st.vk_stage & (VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT)) ||
-                        follow_graphics) &&
-                       st.info.uses_global_memory;
+    // (the page table: compute, and (EvilOOT) the graphics stages, which follow global memory as the fallback)
+    for (const Stage& st : p.stages) p.uses_push |= st.info.uses_global_memory;
     for (const Stage& st : p.stages) p.uses_push |= (st.vk_stage & VK_SHADER_STAGE_TASK_BIT_EXT) != 0;   // (its first workgroup)
     if (p.fallback) p.uses_push = true;   // (its records' and payloads' addresses)
     std::atomic_thread_fence(std::memory_order_release);   // (the layout last: a thread that sees it sees the rest)

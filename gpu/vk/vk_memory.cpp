@@ -616,7 +616,7 @@ uint64_t memory_guest_pages() {
     static bool tried = false;
     if (tried) return guest_pages_address;
     tried = true;
-    if (env_on("RX_VK_NO_FOLLOW")) return 0;   // (on: Kokiri's lighting. The menus' blank text was the rule in graphics stages, now compute only)
+    // (the table is for Kokiri's lighting. The menus' blank text was the pointer rule in graphics stages, now compute only)
     VkBuffer b = VK_NULL_HANDLE;
     VmaAllocation a = nullptr;
     void* mapped = nullptr;

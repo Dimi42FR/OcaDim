@@ -2053,8 +2053,7 @@ LIFT_ENV_NOT_OUTPUT = {   # (read by the lift's sources, and no change to what i
     "LONGSHOT_LIFT_JOBS": "how many processes", "LONGSHOT_LIFT_NO_FORK": "how they are started", "RX_JOBS": "how many processes",
     "EMSDK": "where the compiler is", "LONGSHOT_MINGW": "where the compiler is",
     "A64_SITE_PROFILE": "the game's runtime (a64_rt.c), at play", "RX_VK_NAN_GUARD": "nx2/bake_ds's own run",
-    "RX_VK_NO_DRAW_PARAMS": "nx2/bake_ds's own run", "RX_VK_NO_F16": "nx2/bake_ds's own run",
-    "RX_VK_SHARED_48K": "nx2/bake_ds's own run",
+    "RX_VK_NO_F16": "nx2/bake_ds's own run",
     "HOS_NO_FASTFP": "the game's runtime (FASTFP_HEADER in nx2/fastfp.py, read by the lifted C at play)",
 }
 
