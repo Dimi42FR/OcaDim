@@ -350,6 +350,8 @@ rate. `tests/test_framegen_fixed_pace.py` runs the timing functions through a mo
    come free (`copy_up_to`), never all or none.
 5. **A present waits on the queue it is made on.** On the replay's graphics queue it waits behind the game's next frame (3 to
    12 ms at 5120x2160), and a second queue of the graphics family takes turns with it on the GPU. A compute family's queue
-   runs beside it (`RX_VK_PRESENT_QUEUE=1`, `vk_main.cpp` `create_device`): 0.1% of the frames under 2 ms, on the screen 4.9
-   to 6.9 ms apart at 3x (p10 to p90). It is off by default since Hookshot issue 1161, before the fork (a black screen on an RTX 4090 with NVIDIA's 621
-   driver); turning it on for everyone needs that fault found first.
+   runs beside it (`RX_VK_PRESENT_QUEUE`, `vk_main.cpp` `create_device`): 0.1% of the frames under 2 ms, on the screen 4.9
+   to 6.9 ms apart at 3x (p10 to p90), each present's call to the screen 1.3 ms instead of 6.6. It is on by default
+   with NVIDIA's driver 621.24 and newer on Windows, where it was measured; Hookshot issue 1161, before the fork (an
+   RTX 4090 on NVIDIA's 621.14 had a black screen with it on), was never placed, so older drivers, other drivers and
+   Linux keep the replay's queue until they are measured, and `=0` is the way back.

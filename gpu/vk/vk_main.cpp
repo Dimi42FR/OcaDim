@@ -488,7 +488,7 @@ bool create_device() {
     q.queueCount = 1;
     q.pQueuePriorities = &priority;
     // (longshot) The presents on a queue of a compute family of their own, beside the replay's (RX_VK_PRESENT_QUEUE=1 / 0: on /
-    // off; off by default since v2.0.9: below). On the replay's queue vkQueuePresentKHR blocked
+    // off; on by default with NVIDIA's driver on Windows, below). On the replay's queue vkQueuePresentKHR blocked
     // with dev.present_mu held, ~0.8 ms a present with frame interpolation at 4x and up to 8, and the game's main and presentation
     // threads waited there to submit. A second queue of the graphics family took that lock off the presents, but its presents
     // blocked longer (~2-4 ms: the graphics work of the two queues takes turns on the GPU) and the made frames were shown late
@@ -499,21 +499,31 @@ bool create_device() {
     uint32_t compute_family = UINT32_MAX;
     {
         bool want = false;
+        bool old_nvidia = false;   // (NVIDIA's driver older than 621.24: logged below when the switch is unset)
 #ifdef _WIN32
         VkPhysicalDeviceDriverProperties dp{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
         VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
         p2.pNext = &dp;
         vkGetPhysicalDeviceProperties2(dev.physical, &p2);
-        // (v2.0.9: off by default; was: NVIDIA's driver on Windows. Issue 1161's reporter, an RTX 4090 on NVIDIA's 621.14,
-        // had a black screen with it on, the write-back diff off too (4e24bd4d). On: a present no longer waits behind the
-        // game's work on the replay's queue, so a fixed frame generation multiplier's frames reach the screen at their times
-        // while the GPU is busy (vk_framegen.cpp display_main): DLSS Frame Gen 3x, V-Sync On, 165 Hz G-Sync, an RTX 5090 on
-        // 621.24 at ~48 fps GPU-bound, the shown frames' animation error went from 2.98 to 1.65 ms and the latency from 11.8
-        // to 8.7 ms)
-        want = false;
-        (void)dp;
+        // (On by default with NVIDIA's driver 621.24 and newer on Windows. On the replay's queue a present waits behind the
+        // game's next frame, 3 to 12 ms at 5120x2160: frame generation's frames, each presented at its own time since #1362,
+        // reach the screen together. An RTX 5090 on 621.24, 165 Hz G-Sync, DLSS Frame Gen 3x, V-Sync Off, main 415a8944
+        // against this (PresentMon): frames on the screen under 2 ms after the one before from 33% to 0.1% or less, the sd of
+        // their times on the screen from 4.7 to 1.1-1.3 ms, each present's call to the screen from 6.6 to 1.3 ms. With V-Sync
+        // On (#1442), ~48 fps GPU-bound: the shown frames' animation error from 2.98 to 1.65 ms, the latency from 11.8 to 8.7
+        // ms. Off since v2.0.9 for Hookshot issue 1161, before the fork: an RTX 4090 on NVIDIA's 621.14, whose GPU v2.0.8 lost
+        // in the write-back diff (b784c68a), had a black screen with the present queue alone (4e24bd4d), a fault never placed.
+        // 621.24 ran it in the 12 recorded runs (docs/tested: fg-pacing-*present-queue*, present-queue-default-*) and a
+        // tester's play: from it on, by default. Older drivers, other drivers and Linux keep the replay's queue)
+        constexpr uint32_t kPresentQueueNvidia = (621u << 22) | (24u << 14);   // (NVIDIA's version: major << 22, minor << 14)
+        want = dp.driverID == VK_DRIVER_ID_NVIDIA_PROPRIETARY && dev.props.driverVersion >= kPresentQueueNvidia;
+        old_nvidia = dp.driverID == VK_DRIVER_ID_NVIDIA_PROPRIETARY && !want;
 #endif
-        if (const char* e = getenv("RX_VK_PRESENT_QUEUE")) want = atoi(e) != 0;
+        // (the switches' yes/no rule, longshot_env.h: unset or empty, the default above; 0, false, off or no, off; else on)
+        if (const char* e = getenv("RX_VK_PRESENT_QUEUE"); e && *e) want = !env_value_off(e);
+        else if (old_nvidia)
+            logf("vk: presents on the replay's queue: NVIDIA's driver %u.%02u is older than 621.24, where their own queue was "
+                 "measured (RX_VK_PRESENT_QUEUE=1: on)", dev.props.driverVersion >> 22, (dev.props.driverVersion >> 14) & 0xff);
         for (uint32_t i = 0; want && i < n && compute_family == UINT32_MAX; i++)
             if ((families[i].queueFlags & VK_QUEUE_COMPUTE_BIT) && !(families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT))
                 compute_family = i;
