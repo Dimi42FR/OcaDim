@@ -99,10 +99,8 @@ bool sampler_of(int id, nvn_samp_par* p) {
     return true;
 }
 const char* getenv(const char* name) {
-    if (!std::strcmp(name, "RX_VK_PUSH_STATE_OLD") && descriptor_policy == "descriptor-old") return "1";
     if (!std::strcmp(name, "RX_VK_PUSH_ALL") && descriptor_policy == "descriptor-whole") return "1";
     if (!std::strcmp(name, "RX_VK_SAMPLER_CACHE") && cache_off) return "0";
-    if (!std::strcmp(name, "RX_VK_SHADOW_PCF") && policy == "compare-pcf-off") return "0";
     if (!std::strcmp(name, "RX_VK_ANISO") && policy == "anisotropy") return "16";
     if (!std::strcmp(name, "RX_VK_ANISO") && policy == "anisotropy-env-off") return "0";
     if (!std::strcmp(name, "RX_VK_FORCE_LINEAR") && policy == "force-linear") return "1";
@@ -328,7 +326,7 @@ void run(const std::string& test) {
         assert(!bind_descriptors(cmd, bp, p));
         assert(descriptor_allocs == allocs && descriptor_updates == updates && descriptor_binds == binds && descriptor_pushes == pushes);
         const auto& after = pushed()[bp == VK_PIPELINE_BIND_POINT_COMPUTE];
-        assert(after.cmd == before.cmd && after.layout == before.layout && after.n == before.n && after.words == before.words && after.writes == before.writes && after.at == before.at);
+        assert(after.cmd == before.cmd && after.layout == before.layout && after.n == before.n && after.words == before.words && after.at == before.at);
         create_result = VK_SUCCESS; frame_no++; images[1].sampler = get(2); valid(images[1].sampler);
         assert(bind_descriptors(cmd, bp, p));
         assert(p.push ? descriptor_pushes == pushes + 1 : descriptor_updates == updates + 1 && descriptor_binds == binds + 1);
@@ -417,7 +415,7 @@ void run(const std::string& test) {
     if (test == "upscale-bias-plain") assert(ci.mipLodBias == 0);   // (a sampler the game does not bias: as it asks)
     if (compare) {
         assert(ci.compareEnable && ci.compareOp == (test == "compare-explicit" ? VK_COMPARE_OP_NEVER : VK_COMPARE_OP_LESS_OR_EQUAL));
-        assert(ci.minFilter == (test == "compare-pcf-off" ? VK_FILTER_NEAREST : VK_FILTER_LINEAR));
+        assert(ci.minFilter == VK_FILTER_LINEAR);
     }
     if (test == "custom-border" || test == "custom-reduction") assert(saved.custom && ci.borderColor == VK_BORDER_COLOR_FLOAT_CUSTOM_EXT && saved.border[0] == 0.25f && saved.border[3] == 1);
     if (test == "standard-border") assert(!saved.custom && ci.borderColor == VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE);

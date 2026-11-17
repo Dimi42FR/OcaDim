@@ -103,7 +103,7 @@ second game.
 
 1. **Cross-queue `nvnCommandBufferWaitEvent` is honoured.** MKW's queues pass stages back and forth with events;
    replaying them in arrival order on one Vulkan queue flashed. `gpu/vk/vk_replay.cpp` `submit_job` replays each
-   submission as far as its waits allow, with per-queue state (`RX_VK_EVENT_WAITS=0` turns it off, for A/B only).
+   submission as far as its waits allow, with per-queue state (always on: the `RX_VK_EVENT_WAITS` switch is gone).
    *Check early:* log the game's queues and event waits on the first boot (which queues, how many waits per frame).
 2. **Nothing the replay reads comes from live guest memory.** Games write per-frame data ahead of the GPU: every
    read is from submit-time captures, and pools are captured from their creation, not their first GPU use
@@ -278,8 +278,8 @@ dump, the runtime made game-neutral, the stage-1 tools checked on MKW's dump as 
 - Dark frames, open: lit surfaces come out black for one frame, geometry and depth intact. 5% with `RX_VK_FRAMEGEN=0`, 2.9% with the menu's Off, about 0.1% at 4x.
   Not the cause: render conditions, clear flags, ClearBuffer order, GPU lag, write-back, the real-time step, the ambient cubemap.
   `HOS_COND_RECORD` and `RX_VK_COND_ALWAYS` look like fixes by count and are not: the picture goes white. Tools: the frame log's dark trap dumps probes, passes and conditions; `RX_VK_PROBE_MIN`, `RX_VK_PROBE_UBO_HEX`.
-  Also not the cause: colour write masks (`wm` in the pass trace: f on every lit pass), constants (`RX_VK_PROBE_UBO_HEX`), queue order (`RX_VK_EVENT_WAITS=0`), and the capture in
-  synchronous mode (`RX_VK_SYNC_CAPTURE=1`, which does take 380,000 pages per 600 submits). `RX_VK_QUEUE_STATE=0` stops the game at the Load menu, and `RX_VK_MIRROR=0` is 8 fps: neither says anything.
+  Also not the cause: colour write masks (`wm` in the pass trace: f on every lit pass), constants (`RX_VK_PROBE_UBO_HEX`), queue order, and the capture in
+  synchronous mode (which does take 380,000 pages per 600 submits). `RX_VK_MIRROR=0` is 8 fps, which says nothing.
   What holds: geometry and depth are right (black shapes against the fog), the prepass and the lit passes run with the same draw counts, and the lit passes output black.
   The lit materials' four storage buffers (c0+0x510..0x540) keep their addresses, sizes and non-zero counts in dark frames as seen in guest memory; the 720 KB one is all zeros in good
   frames too, so it is no cause, though its compute shader (4b03b304) runs every frame. Guest memory is not what the GPU reads, so these need comparing on the GPU's side.

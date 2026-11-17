@@ -104,8 +104,9 @@ def check_source():
     if replay.count("if (memory_sparse_wait(&sparse_wait)) si.waitSemaphoreInfoCount = 1, si.pWaitSemaphoreInfos = &sparse_wait;") != 3:
         raise SystemExit("vk_replay.cpp: a submission of recordings (the flush, a submit, a parallel segment) does not wait for the sparse binds")
     binds = block(mem, "bool sparse_bind_infos(")
-    need(binds, ["si.pSignalSemaphores = &sparse_tl;", "vkQueueBindSparse(dev.queue, 1, &si, VK_NULL_HANDLE)",
-                 'env_on("RX_VK_SPARSE_WAIT")'], "sparse_bind_infos()")
+    need(binds, ["si.pSignalSemaphores = &sparse_tl;", "vkQueueBindSparse(dev.queue, 1, &si, VK_NULL_HANDLE)"], "sparse_bind_infos()")
+    if "vkWaitSemaphores(" in binds:
+        raise SystemExit("vk_memory.cpp: sparse_bind_infos() waits for the binds on the CPU again")
     # (the binds' semaphore is made under dev.present_mu, which memory_sparse_wait reads it under)
     if not binds.index("std::lock_guard qk(dev.present_mu);") < binds.index("vkCreateSemaphore(") < binds.index("vkQueueBindSparse("):
         raise SystemExit("vk_memory.cpp: sparse_bind_infos() makes the binds' semaphore outside dev.present_mu")

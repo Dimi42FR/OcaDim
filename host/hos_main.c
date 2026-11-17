@@ -583,13 +583,11 @@ static void load_longshot_env(void) {
 }
 
 /* Switches this build no longer reads, still set (in the environment or longshot_env.txt, as older issues told players):
-   one log line each, naming what took its place, so a bug report shows the switch did nothing. The host's own: the
-   renderer's removed switches (RX_) are the GONE rows of gpu/vk/switches.def, said by its start (switches.h) */
+   one log line each, naming what took its place, so a bug report shows the switch did nothing. Only the names of
+   another family are left here: a removed RX_ or HOS_ switch is a GONE row of gpu/vk/switches.def, said by the
+   renderer's start (switches.h) */
 static void removed_switch_notes(void) {
     static const char *const gone[][2] = {
-        {"HOS_FIX_RES", NULL},
-        {"HOS_RECORD_STUTTERS", "HOS_PROFILE=1 (the profiling mode: docs/development.md#the-profiling-mode)"},
-        {"HOS_SCENE_NATIVE", NULL},
         {"TOTK_MINIMAL_LAYOUT", NULL},
     };
     for (size_t i = 0; i < sizeof gone / sizeof *gone; i++)

@@ -52,18 +52,18 @@ def main():
     enums = "enum { " + ", ".join(name + "=" + str(i + 1) for i, name in enumerate(symbols)) + " };"
     fixture = (ROOT / "tests/sampler_admission_test.cpp").read_text(encoding="utf-8")
     descriptors = block(source, "struct Pushed {") + ";\n" + "\n".join(block(source, marker) for marker in [
-        "void write_words(", "void words_append(", "int words_same_store(", "bool bind_descriptors("])
+        "void words_append(", "int words_same_store(", "bool bind_descriptors("])
     fixture = fixture.replace("/* DESCRIPTORS */", descriptors)
     fixture = fixture.replace("/* PARAMS */", params).replace("/* ENUMS */", enums).replace("/* ACTUAL */", actual)
     cases = ["healthy", "host-oom", "device-oom", "unknown", "error-output", "generation-retry", "thread-retry",
              "independent", "valid-after-failure", "owner-commit", "seen-commit", "mine-commit", "failure-commit",
              "registration", "shared-thread", "concurrent", "nearest", "linear", "compare", "compare-explicit",
-             "compare-pcf-off", "custom-border", "standard-border", "reduction", "compare-reduction", "anisotropy",
+             "custom-border", "standard-border", "reduction", "compare-reduction", "anisotropy",
              "anisotropy-row", "anisotropy-game", "anisotropy-env-off", "anisotropy-change",
              "anisotropy-no-mips", "anisotropy-nearest-mip",
              "upscale-bias", "upscale-bias-plain", "upscale-bias-change",
              "unknown-id", "force-linear", "wrap", "lod-clamp", "custom-reduction",
-             "descriptor-push", "descriptor-pool", "descriptor-compute", "descriptor-old", "descriptor-whole",
+             "descriptor-push", "descriptor-pool", "descriptor-compute", "descriptor-whole",
              "limit", "limit-full", "limit-reuse", "limit-alias-commit", "limit-retire-commit"]
     failed = []
     with tempfile.TemporaryDirectory(prefix="sampler-admission-") as temp:

@@ -351,11 +351,7 @@ bool pick_device() {
 /// until runs on them say otherwise
 static bool native_fadd_wanted(const char* env, VkDriverId driver, uint32_t device, uint32_t version) {
     if (env) return !env_value_off(env);
-    if (driver == VK_DRIVER_ID_NVIDIA_PROPRIETARY) return true;
-    if (driver != VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS) return false;
-    return ((device & 0xFF00u) == 0x7D00u && version >= (101u << 14 | 9175u)) ||   // (Meteor Lake, Arrow Lake)
-           ((device & 0xFF00u) == 0xE200u && version >= (101u << 14 | 9154u)) ||   // (Battlemage)
-           ((device & 0xFF00u) == 0xB000u && version >= (101u << 14 | 9150u));     // (Panther Lake)
+    return policy_rule::native_fadd_listed(driver, device, version);   // (device_policy.h: the one list of drivers and families)
 }
 
 bool create_device() {
@@ -368,6 +364,13 @@ bool create_device() {
         flag = has_extension(exts, name);
         if (flag) want.push_back(name);
     };
+    // (the driver, asked once before anything is decided by it: the mesh mode and the float add below, and the facts)
+    VkPhysicalDeviceDriverProperties fadd_driver{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+    {
+        VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+        p2.pNext = &fadd_driver;
+        vkGetPhysicalDeviceProperties2(dev.physical, &p2);
+    }
     // (#1001: how task and mesh programs run, mesh_mode.h: RX_VK_MESH_SHADERS=native or compute, a launch switch; unset,
     // Automatic. RX_VK_FORCE_MESH_FALLBACK=1, a test, is Compute over it: mesh shaders not used where they are, so the no-mesh
     // fallback the GTX 10xx and RX 5000 cards run (issue 640) can be tried on any GPU. The Graphics tab's row it was, and its
@@ -391,8 +394,9 @@ bool create_device() {
     // end up waiting on each other, and a mesh-only draw hangs with the compute queue empty (devcoredumps on an
     // RX 6800: no VM fault; waves stuck on gfx in the second). Task + mesh draws alone on the fallback still crash, so
     // only full Compute is stable there, and the reports span Navi 2x (RX 6800, RX 6600 XT) and the RDNA3 APUs (Steam
-    // Deck OLED, Rog Xbox Ally X). On Linux, where AMD's Vulkan driver is RADV, Automatic picks Compute; Native stays
-    // a choice (RX_VK_MESH_SHADERS=native). RDNA1 and older have no mesh shaders on RADV: for them a no-op.
+    // Deck OLED, Rog Xbox Ally X). With RADV, Automatic picks Compute; Native stays a choice (RX_VK_MESH_SHADERS=native).
+    // RDNA1 and older have no mesh shaders on RADV: for them a no-op. (By the driver, device_policy.h mesh_mode: it was
+    // "AMD off Windows", which took AMDVLK too, a driver the issue does not name; AMDVLK's Automatic is native now)
     // (the card's own, before the mode below: whether it has task and mesh shaders, for the Quality preset Auto (this PC), which
     // must not put a card that has them on Minimum because this run uses Compute)
     if (has_extension(exts, VK_EXT_MESH_SHADER_EXTENSION_NAME)) {
@@ -402,9 +406,7 @@ bool create_device() {
         dev.mesh_capable = m.meshShader && m.taskShader;
     }
     int mesh_mode_used = mesh_mode;
-#ifndef _WIN32
-    if (mesh_mode_used == 0 && dev.props.vendorID == 0x1002) mesh_mode_used = 2;   // (Linux AMD is RADV)
-#endif
+    if (mesh_mode_used == 0 && fadd_driver.driverID == VK_DRIVER_ID_MESA_RADV) mesh_mode_used = 2;
     if (mesh_mode_used == 2) dev.mesh_shader = false;
     else optional(VK_EXT_MESH_SHADER_EXTENSION_NAME, dev.mesh_shader);
     optional(VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME, dev.external_memory_host);
@@ -443,12 +445,6 @@ bool create_device() {
     // Meteor Lake, Arrow Lake and Panther Lake iGPUs and the Arc B-series (native_fadd_wanted); RX_VK_NATIVE_FADD=1 asks for it on any GPU, =0 keeps the loop
     // on every one, the extension not even enabled
     const char* const fadd_env = getenv("RX_VK_NATIVE_FADD");
-    VkPhysicalDeviceDriverProperties fadd_driver{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
-    {
-        VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
-        p2.pNext = &fadd_driver;
-        vkGetPhysicalDeviceProperties2(dev.physical, &p2);
-    }
     const bool fadd_wanted = native_fadd_wanted(fadd_env, fadd_driver.driverID, dev.props.deviceID, dev.props.driverVersion);
     bool atomic_float = false;
     if (fadd_wanted) optional(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME, atomic_float);
@@ -729,6 +725,76 @@ bool create_device() {
     dev.sparse_images = (families[dev.queue_family].queueFlags & VK_QUEUE_SPARSE_BINDING_BIT) && f.features.sparseBinding &&
                         f.features.sparseResidencyImage2D && !(getenv("RX_VK_SPARSE") && !atoi(getenv("RX_VK_SPARSE")));
     dev.sparse_buffers = (families[dev.queue_family].queueFlags & VK_QUEUE_SPARSE_BINDING_BIT) && f.features.sparseBinding;
+    {   // (longshot) what this PC is, learnt once, and the defaults it gets by it: device_policy.h. Most sites still ask the
+        // device their own way and decide for themselves; the log's "vk: policy:" lines show what the rules give this PC
+        dev.driver = fadd_driver;   // (asked above; kept, as the facts point at its driverInfo)
+        dev.driver.pNext = nullptr;
+        DeviceFacts& pf = dev.facts;
+        pf.vendor_id = dev.props.vendorID, pf.device_id = dev.props.deviceID, pf.driver_version = dev.props.driverVersion;
+        pf.driver_id = dev.driver.driverID;
+        pf.device_type = dev.props.deviceType;
+        pf.driver_info = dev.driver.driverInfo;
+        pf.device_name = dev.props.deviceName;
+        const char* const deck = getenv("SteamDeck");
+        pf.steam_deck_env = deck && atoi(deck) == 1;
+        pf.vram_heap = device_vram_bytes();
+        uint32_t vram_heap_index = UINT32_MAX;
+        for (uint32_t h = 0; h < dev.memory.memoryHeapCount; h++)
+            if ((dev.memory.memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) &&
+                (vram_heap_index == UINT32_MAX || dev.memory.memoryHeaps[h].size > dev.memory.memoryHeaps[vram_heap_index].size))
+                vram_heap_index = h;
+        for (uint32_t t = 0; t < dev.memory.memoryTypeCount; t++) {
+            const VkMemoryPropertyFlags both = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+            if (dev.memory.memoryTypes[t].heapIndex == vram_heap_index && (dev.memory.memoryTypes[t].propertyFlags & both) == both)
+                pf.rebar = dev.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+        }
+        {   // (the allowance as vram_usage will answer once VMA is there: the driver's budgets, or VMA's 80% of each heap)
+            VkPhysicalDeviceMemoryBudgetPropertiesEXT budget{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT};
+            VkPhysicalDeviceMemoryProperties2 m2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2};
+            m2.pNext = &budget;
+            const auto ask = !dev.memory_budget ? nullptr
+                             : (PFN_vkGetPhysicalDeviceMemoryProperties2)instance_proc()(dev.instance, "vkGetPhysicalDeviceMemoryProperties2");
+            if (ask) ask(dev.physical, &m2);
+            uint64_t allowed = 0;
+            for (uint32_t h = 0; h < dev.memory.memoryHeapCount; h++)
+                if (dev.memory.memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+                    allowed += ask ? std::min<uint64_t>(budget.heapBudget[h], dev.memory.memoryHeaps[h].size)
+                                   : dev.memory.memoryHeaps[h].size * 8 / 10;
+            // (RX_VK_TEST_ALLOWED_MB, as vram_usage has it)
+            const uint64_t test_allowed = getenv("RX_VK_TEST_ALLOWED_MB") ? (uint64_t)atoi(getenv("RX_VK_TEST_ALLOWED_MB")) << 20 : 0;
+            pf.allowed_at_start = test_allowed && allowed > test_allowed ? test_allowed : allowed;
+        }
+#ifdef _WIN32
+        pf.windows = true;
+        MEMORYSTATUSEX ram{};
+        ram.dwLength = sizeof ram;
+        if (GlobalMemoryStatusEx(&ram)) pf.ram = ram.ullTotalPhys;
+#else
+        const long pages = sysconf(_SC_PHYS_PAGES), page = sysconf(_SC_PAGE_SIZE);
+        if (pages > 0 && page > 0) pf.ram = (uint64_t)pages * (uint64_t)page;
+#endif
+        pf.cpus_all = std::thread::hardware_concurrency();
+        pf.cpus_usable = usable_cpus();
+        pf.mesh_shader = dev.mesh_capable;
+        pf.mesh_queries = dev.mesh_queries;
+        pf.buffer_device_address = f12.bufferDeviceAddress;
+        if (has_extension(exts, VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME)) {   // (the card's, whether this run asks for it or not)
+            VkPhysicalDeviceShaderAtomicFloatFeaturesEXT af{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT};
+            VkPhysicalDeviceFeatures2 card{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &af};
+            vkGetPhysicalDeviceFeatures2(dev.physical, &card);
+            pf.float32_atomic_add = af.shaderBufferFloat32AtomicAdd;
+        }
+        pf.coop_matrix_ext = has_extension(exts, VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
+        pf.nv_checkpoints_ext = has_extension(exts, VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME);
+        pf.storage_io16 = f11.storageInputOutput16;
+        pf.storage_buffer_array_dynamic_indexing = f.features.shaderStorageBufferArrayDynamicIndexing;
+        pf.robust_image_access = f13.robustImageAccess;
+        pf.subgroup_size = dev.subgroup_size, pf.subgroup_max = dev.subgroup_max;
+        pf.sg32_stages = dev.sg32_stages;
+        dev.policy = device_policy(pf);
+        // (and the switches over them, read once, by one rule: device_policy_env)
+        device_policy_env(dev.policy, pf, [](const char* name) -> const char* { return getenv(name); });
+    }
     // (longshot) Intel XeSS's features (vk_xess.cpp), last, into the chain as it will be made: the library sets what it needs in
     // the renderer's structures and adds what it lacks (VK_EXT_mutable_descriptor_type's); nothing without its library, and a
     // refusal leaves the chain as it was and XeSS out for the run
@@ -1220,8 +1286,8 @@ void prepare_watchdog() {
 // (precompile_run): a minute and more, before the game's first frame. They run on a thread of their own while this one, the
 // renderer's start, shows the window at once with what they are doing on it, and keeps it shown and sized; on Windows it is also
 // the window's thread, and handles its messages meanwhile (it would not answer otherwise). Closing the window stops them
-// (mkwvk_close_asked): what was made is kept, the next start goes on from there. RX_VK_STARTUP_SCREEN=0: as before, all
-// of it before the window shows anything (and a console with the count on Windows)
+// (mkwvk_close_asked): what was made is kept, the next start goes on from there. A start without a window
+// (offscreen) prepares all of it before anything else (and a console with the count on Windows)
 std::atomic<int> prep_stage{0};   // 0 the programs, 1 the pipelines the notes predict (a first start), 2 the noted pipelines
 std::atomic<size_t> prep_done{0}, prep_total{0};
 // (the parts' guesses before they run, and the parts that do not run: the one bar's total, PrepareBar)
@@ -1235,10 +1301,6 @@ const MkwVkWindow* prep_window = nullptr;   // (its size)
 void prep_progress(size_t done, size_t total) {
     prep_done.store(done, std::memory_order_relaxed);
     prep_total.store(total, std::memory_order_relaxed);
-}
-bool screen_wanted() {
-    const char* e = getenv("RX_VK_STARTUP_SCREEN");
-    return !e || atoi(e) != 0;
 }
 /// The window's size now (0x0: minimized, or unknown)
 void window_size(uint32_t* w, uint32_t* h) {
@@ -1433,7 +1495,7 @@ bool started_up() {
         return true;
     }
     if (precompile_wanted()) {   // (a release build, before the game: nothing to build during play)
-        if (!dev.offscreen && screen_wanted()) {
+        if (!dev.offscreen) {
             prepare_with_screen();
             return true;
         }
@@ -1732,11 +1794,13 @@ const MkwVkRenderer* mkwvk_init(const MkwVkHost* h) {
          dev.props.driverVersion, dev.mesh_shader ? "yes" : "no", dev.external_memory_host ? "yes" : "no",
          dev.graphics_pipeline_library ? "yes" : "no");
     logf("vk: driver: %s", driver_text().c_str());   // (the builders' Save my pipeline list reads it: nx2/pipeline_share.py)
+    // (what this PC is, what it gets for it, and which of those a switch set: device_policy.h)
+    device_policy_log(dev.policy, dev.facts, dev.fixes, [](const char* line) { logf("%s", line); });
     // (the crash report's facts, as the bug report words them: host/hos_crash_dialog.h reads the last of each)
     logf("report: gpu %s", device_report_text().c_str());
     logf("report: cpu %s", mkwvk::bug_report::cpu_text().c_str());
     logf("report: os %s", mkwvk::bug_report::os_text().c_str());
-    if (!dev.mesh_shader && !dev.mesh_fallback && !env_on("RX_VK_NO_MESH_WARNING")) {
+    if (!dev.mesh_shader && !dev.mesh_fallback) {
         // (the game draws its foliage, grass and many effects with mesh shaders: without them those draws are left out and the
         // picture is broken (an RX 580's "static"-like scenes, 2026-11-08). Said once, on its own thread, and the game goes on.)
         // (a GPU with no buffer device addresses has no fallback to run either)
