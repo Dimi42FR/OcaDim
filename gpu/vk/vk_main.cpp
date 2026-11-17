@@ -919,6 +919,7 @@ void retire_swapchain() {
     dev.swap_rendered.clear();
     dev.swap_images.clear();
     dev.swap_spare = 0;
+    dev.swap_slots = 3;
 }
 
 bool invalidate_lost_surface(VkResult result) {
@@ -1048,11 +1049,27 @@ bool create_swapchain(uint32_t width, uint32_t height) {
     VkSwapchainCreateInfoKHR ci{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
     ci.surface = dev.surface;
     ci.minImageCount = std::max(caps.minImageCount, 4u);   // (longshot: mailbox with frame interpolation: an image always free)
+    // doc: docs/design.md#13-frame-generations-presents-at-v-sync-off-as-rules (rule 4: two sets' spare images at V-Sync Off)
     // (longshot) A fixed frame generation multiplier's set is presented ahead (vk_framegen.cpp present_ahead_wanted): each
     // of its frames holds an image from the copy to its present, so the set needs as many spare images as it has frames. 3x
     // and 4x ask for that many over the surface's least (an NVIDIA surface: 5 and 6 images); a set the chain cannot hold is
-    // shown one at a time as before
-    if (swapchain_framegen() >= 3) ci.minImageCount = std::max(ci.minImageCount, caps.minImageCount + (uint32_t)swapchain_framegen());
+    // shown one at a time as before. Where the swapchain does not wait for a refresh (V-Sync Off; mailbox) two sets' worth:
+    // the next set's copies go to the GPU as soon as it comes, while this one is still shown (display_main's take_early; an
+    // NVIDIA surface: 6 images at 2x, its most, 8, from 3x up; at 4x, under two sets, the next set's later copies wait for
+    // images). RX_VK_FG_TIMELINE=0 (the sets as before, display_main): one set's
+    static const char* timeline_env = getenv("RX_VK_FG_TIMELINE");
+    const bool timeline = !(timeline_env && env_value_off(timeline_env));
+    const uint32_t fg_sets = mode == VK_PRESENT_MODE_FIFO_KHR || !timeline ? 1 : 2;
+    // (at most kPresentSlotsMax over the least, present_image's frame slots: an image past them would share a slot with
+    // the set still shown (docs/design.md section 13, rule 4) and cost video memory for nothing. swapchain_framegen stops at
+    // 4, so two sets ask for 8 today; the cap keeps that so if it changes: HumanBean's review of #1362)
+    if (swapchain_framegen() >= 3 || (swapchain_framegen() >= 2 && fg_sets == 2))
+        ci.minImageCount = std::max(ci.minImageCount, caps.minImageCount + std::min<uint32_t>(fg_sets * (uint32_t)swapchain_framegen(),
+                                                                                           (uint32_t)kPresentSlotsMax));
+    // (present_image's frame slots for the same sets: a slot per frame of two where the next set is taken early, else 3 as
+    // before. The chain is made again when the multiplier, V-Sync or RX_VK_FG_TIMELINE change, so the count changes only
+    // with it. Stored with the chain below: retire_swapchain sets 3 for the old one)
+    const uint32_t slots_made = (uint32_t)present_slots_for(swapchain_framegen(), fg_sets == 2);
     if (caps.maxImageCount) ci.minImageCount = std::min(ci.minImageCount, caps.maxImageCount);
     ci.imageFormat = fmt.format;
     ci.imageColorSpace = fmt.colorSpace;
@@ -1140,6 +1157,7 @@ bool create_swapchain(uint32_t width, uint32_t height) {
     dev.swap_extent = {width, height};
     dev.swap_images = std::move(images);
     dev.swap_spare = n > caps.minImageCount ? n - caps.minImageCount : 0;
+    dev.swap_slots = slots_made;
     logf("vk: swapchain %ux%u, %u images, %s (V-Sync %s)", width, height, n,
          mode == VK_PRESENT_MODE_MAILBOX_KHR ? "mailbox" : mode == VK_PRESENT_MODE_IMMEDIATE_KHR ? "immediate" : "fifo",
          vsync == 1 ? "On" : vsync == 2 ? "Off" : "Auto");

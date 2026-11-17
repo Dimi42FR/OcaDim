@@ -4145,7 +4145,7 @@ struct Frame {
     VkFence done = VK_NULL_HANDLE;
     VkSemaphore acquired = VK_NULL_HANDLE;
 };
-Frame frames[3];
+Frame frames[kPresentSlotsMax];   // (present_image uses present_slots_for of them)
 uint32_t frame_index = 0;
 int64_t presents = 0;
 
@@ -5359,7 +5359,7 @@ struct LogSlot {
     int64_t at = 0;
     uint32_t seq = 0, kind = 0;
 };
-LogSlot log_slots[3];
+LogSlot log_slots[kPresentSlotsMax];   // (by present_image's frame slot)
 VkImage log_image = VK_NULL_HANDLE;
 VmaAllocation log_image_alloc = nullptr;
 std::mutex log_mu;
@@ -5538,6 +5538,19 @@ void present_hand_off(uint32_t index, VkFence done);
 void present_finish(VkResult res, bool on_presenter);
 std::atomic<bool> presenter_surface_lost{false};   // (the presenter thread's present: VK_ERROR_SURFACE_LOST_KHR, for present_image)
 }  // namespace
+// doc: docs/design.md#13-frame-generations-presents-at-v-sync-off-as-rules (rule 4: a frame slot per frame of both sets)
+/// (longshot) The frame slots present_image uses while frame generation runs, for the sets a swapchain is made for
+/// (vk_main.cpp create_swapchain: framegen is swapchain_framegen's multiplier, 0 none; two_sets where the swapchain does not
+/// wait for a refresh and RX_VK_FG_TIMELINE is on). Each present waits for the copy last made in its slot, so the slots are
+/// also how many presents can be on the GPU at once: 3, and a slot per frame of two sets where the next set is taken while
+/// one is shown (2 x the multiplier, at most kPresentSlotsMax). A set presented ahead (vk_framegen.cpp display_main) submits
+/// its copies at once: with fewer slots than its frames its 4th copy waited in its own first copy's slot, and with a slot per
+/// frame of one set the next set's copy k waited in the slot of the shown set's copy k (the review, 2026-11-17), each until
+/// the GPU had done that copy and so the game's work queued before it, which held the frames of the set still being shown.
+/// FIFO and RX_VK_FG_TIMELINE=0 keep 3, as before
+int present_slots_for(int framegen, bool two_sets) {
+    return two_sets && framegen >= 2 ? std::min(2 * framegen, kPresentSlotsMax) : 3;
+}
 void present_image(VkImage src, uint32_t sw, uint32_t sh, const int crop[4], VkImageView view) {
     std::lock_guard lk(present_image_mu);
     static int hdr_was = -1;   // (the Insert menu's HDR as the swapchain was made for it; -1: not yet looked at)
@@ -5582,9 +5595,19 @@ void present_image(VkImage src, uint32_t sw, uint32_t sh, const int crop[4], VkI
                                 dev.swap_extent.height);
     }
     menu_tick();
-    Frame& f = frames[frame_index];
-    const int log_slot = frame_index;
-    frame_index = (frame_index + 1) % 3;
+    // (the slots in turn: the swapchain's count while frame generation runs (create_swapchain: present_slots_for), else 3; a
+    // slot past them waits with its fence signalled. Where the count went down, the frame log's pictures in the slots past it
+    // are dropped (RX_VK_FRAMELOG, at most kPresentSlotsMax - 3 of them): read only once the count came back up, they went
+    // in late and out of order)
+    const uint32_t slots = framegen_on() ? std::clamp<uint32_t>(dev.swap_slots.load(std::memory_order_relaxed), 3u,
+                                                                 (uint32_t)kPresentSlotsMax) : 3u;
+    static uint32_t slots_was = 3;
+    for (uint32_t k = slots; k < slots_was; k++) log_slots[k].used = false;
+    slots_was = slots;
+    const uint32_t slot = frame_index % slots;
+    Frame& f = frames[slot];
+    const int log_slot = (int)slot;
+    frame_index = (slot + 1) % slots;
     const int64_t fence_t0 = fps_breakdown_on() ? fps_clock() : 0;   // (the FPS counter's Breakdown: this frame slot's last copy)
     if (vkWaitForFences(dev.device, 1, &f.done, VK_TRUE, UINT64_MAX) == VK_ERROR_DEVICE_LOST) device_lost();
     framelog_collect(log_slot);
