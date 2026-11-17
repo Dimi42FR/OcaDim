@@ -43,6 +43,10 @@ static_assert(mkwvk::kQueueGraphics == VK_QUEUE_GRAPHICS_BIT && mkwvk::kQueueCom
 #ifndef LONGSHOT_ENV_H   // (env_on: the switches' one rule)
 #include "longshot_env.h"
 #endif
+#include "switches.h"   // (the switches' table: what the run has set, said at the start)
+#ifndef _WIN32
+extern char** environ;
+#endif
 
 namespace vkx {
 #define VKX_DEFINE(f) PFN_##f f;
@@ -1599,6 +1603,14 @@ void auto_profile() {
 
 int start(void* hwnd) {
     main_window = (HWND)hwnd;
+    {   // (which switches the run has set, and any RX_ name set that is none: switches.h)
+#ifdef _WIN32
+        const char* const* env = _environ;
+#else
+        const char* const* env = environ;
+#endif
+        switches::report(env, [](const char* line) { logf("%s", line); });
+    }
     auto_profile();   // (the Quality preset Auto (this PC): before the game first asks its mode, which reads the options)
     if (!hwnd) {   // (HOS_HEADLESS: no window; the frames are rendered all the same, RX_VK_SHOTS writes them out)
         dev.offscreen = true;

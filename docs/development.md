@@ -176,6 +176,16 @@ when those hooks are needed. SIGKILL always bypasses them.
 
 ## Switches for testing and debugging
 
+**Every renderer switch (`RX_`) has a row in `gpu/vk/switches.def`:** its name, its kind, what the renderer does with
+it unset and what setting it does. The kinds are `diag` (logs, dumps, checks), `tune` (a number with one default),
+`kill` (turns off something that is on for everyone), `attempt` (turns on something nobody ships), `hw` (unset, it
+follows the PC) and `player` (a setting the player has). A new switch needs a row, and a switch that is done with
+goes: delete its reads and make its row `GONE(name, date, what became of it)`. `tests/test_switch_table.py` fails on
+a name the source reads without a row, a row nothing reads and a removed name still read. At its start the renderer
+logs `vk: switches set (n): ...` with every switch the run has set, and a line for each `RX_` name set that is none
+(misspelt, removed, or from another build). The table below describes the switches people use most; the table in
+the source has all of them.
+
 Set `HOS_OOT_TRACE_SAVES=1` to log save requests and report when the transition autosave is suppressed. The trace defaults to off.
 
 The running game reads its switches from the environment or from `longshot_env.txt` beside `image.bin` (one
