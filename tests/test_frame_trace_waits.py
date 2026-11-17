@@ -14,7 +14,9 @@ BEFORE = ("frame,ms,pipe_waits,pipe_wait_ms,left_out,translate_ms,uploads,upload
 NEW = ["late_wait_ms", "readback_wait_ms", "tex_frame_ms",
        # (the Breakdown's parts, and the game's main thread: on the CPU, blocked, waiting for a virtual core)
        "game_ms", "render_ms", "gpu_wait_ms", "pace_ms", "wait_render_ms", "wait_gpu_ms", "wait_main_ms",
-       "main_cpu_ms", "main_blocked_ms", "main_vcore_ms"]
+       "main_cpu_ms", "main_blocked_ms", "main_vcore_ms",
+       # (the present on the host's clock: HOS_PROFILE=1's samples, presents.csv and events.txt share it)
+       "at_ns"]
 
 
 def block(text, marker):

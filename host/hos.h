@@ -113,6 +113,14 @@ int hos_slow_frames_every_ms(void);
 void hos_slow_frame_present(void);
 void hos_slow_sample(int64_t sweep_ns, const char *text);
 void hos_slow_sweep_done(void);
+/* (longshot) the profiling mode (host/profiling.c, HOS_PROFILE=1): its folder (NULL: off), its switches set (after
+   longshot_env.txt), its threads started (hos_prof_start), a timed event into its events.txt, and a sampler's line written
+   (packed with HOS_SAMPLE_PACKED) */
+const char *hos_profiling_dir(void);
+void hos_profiling_env(void);
+void hos_profiling_start(void);
+void hos_profiling_event(const char *fmt, ...);
+void hos_sample_write(void *file, const char *line);   /* (a FILE *: hos.h reads no stdio.h) */
 #define HOS_TRACE_CALL(name) do { if (hos_trace) hos_log_at(HOS_LOG_TRACE, "%s(%#llx, %#llx, %#llx, %#llx) lr %#llx", name, \
     (unsigned long long)c->x[0], (unsigned long long)c->x[1], (unsigned long long)c->x[2], \
     (unsigned long long)c->x[3], (unsigned long long)c->x[30]); } while (0)

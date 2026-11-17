@@ -357,8 +357,8 @@ report** in the [in-game menu](#in-game-menu) gathers all of it in one press.
 4. If the GPU time stays high, run once more with `RX_VK_PASS_TIMING=1` in `longshot_env.txt`: every 600 presents it
    reports which GPU passes take the time. That timing adds work itself, so keep the first log for the FPS comparison,
    and remove the switch afterwards. The [development guide](docs/development.md#time-and-profiles) has more switches.
-5. For short freezes or hitches, add `HOS_RECORD_STUTTERS=1` to `longshot_env.txt`: it writes what the game did during
-   each frame of 50 ms or more to the `logs` folder ([report slow performance](docs/performance-report.md#if-it-stutters)).
+5. To find out why, add `HOS_PROFILE=1` to `longshot_env.txt`: the game records where its time goes and what each stutter
+   was into a folder in `logs` ([report slow performance](docs/performance-report.md#1-turn-on-the-profiling-mode)).
 
 #### Intel laptops
 

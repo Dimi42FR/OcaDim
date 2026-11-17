@@ -109,6 +109,7 @@ def sources():
         need("const int64_t sweep_ns = hos_now_ns();" in sampler and "hos_slow_sample(sweep_ns," in sampler,
              path + ": the ring's samples do not share their sweep's time")
         need("if (ring) hos_slow_sweep_done();" in sampler, path + ": a sweep's end is not told to the recorder")
+        need("else hos_sample_write(out, line);" in sampler, path + ": the sampler's lines are not written through hos_sample_write")
         need("CreateThread(NULL, 0, sample_all_thread, (void *)slow, 0, NULL);" in block(src, "void hos_prof_start(void)"),
              path + ": HOS_SLOW_FRAMES starts no sampler")
     need("hos_slow_frame_present();" in block((ROOT / "host/rx_backend.c").read_text(encoding="utf-8"),
@@ -126,15 +127,8 @@ def sources():
     need("host_main_thread_times" in (ROOT / "host/rx_backend.c").read_text(encoding="utf-8"), "the host does not give the main thread's times")
     need("host->main_thread_times(mt)" in (ROOT / "gpu/vk/vk_replay.cpp").read_text(encoding="utf-8"),
          "the frame trace does not read the main thread's times")
-    main = (ROOT / "host/hos_main.c").read_text(encoding="utf-8")
-    record = block(main, "static void record_stutters_env(void)")
-    need('env_on("HOS_RECORD_STUTTERS")' in record and '"logs" SEP_S "slow_frame"' in record,
-         "HOS_RECORD_STUTTERS does not point the recorder at logs/slow_frame")
-    need('if (!getenv("HOS_SLOW_FRAMES"))' in record and 'if (!getenv("RX_VK_FRAME_TRACE"))' in record,
-         "HOS_RECORD_STUTTERS replaces a switch already set")
-    need(main.count("load_longshot_env();\n    record_stutters_env();") == 2,
-         "HOS_RECORD_STUTTERS is not read after longshot_env.txt in both mains")
-    need('"HOS_SLOW_FRAMES"' in block(main, "static int env_line_allowed(const char *name, const char *value)"),
+    need('"HOS_SLOW_FRAMES"' in block((ROOT / "host/hos_main.c").read_text(encoding="utf-8"),
+                                      "static int env_line_allowed(const char *name, const char *value)"),
          "longshot_env.txt takes HOS_SLOW_FRAMES, a path")
 
 

@@ -1776,8 +1776,9 @@ static int64_t vc_log_ns(void) {
 static void vc_long_wait(HosThread *t, int64_t waited, int how, unsigned m) {
     vc_st.long_waits++;
     static int logged;
-    if (logged >= 200) return;
-    logged++;
+    if (logged >= 200 && !hos_profiling_dir()) return;   /* (the profiling mode's events.txt takes them all) */
+    const int log = logged < 200;
+    logged += log;
     const int64_t now = hos_now_ns();
     char by[160] = "", who[320] = "";
     if (how == 0 && t->vc_by[0])
@@ -1796,8 +1797,12 @@ static void vc_long_wait(HosThread *t, int64_t waited, int how, unsigned m) {
                                           h->vc_held_at ? (now - h->vc_held_at) / 1e6 : 0.0, h->vc_kick ? ", asked" : "")
                  : snprintf(who + len, sizeof who - len, " core %d: %s;", k, h ? "it" : "-");
         }
-    hos_log("vcores: %s (priority %d) waited %.1f ms for a core: %s; the cores it may use now:%s", t->name, t->priority,
-            waited / 1e6, by, who);
+    if (log)
+        hos_log("vcores: %s (priority %d) waited %.1f ms for a core: %s; the cores it may use now:%s", t->name, t->priority,
+                waited / 1e6, by, who);
+    /* (HOS_PROFILE=1: at its time, and when the wait began, for scripts/profile_report.py to put it in its frame) */
+    hos_profiling_event("vcore_wait %.1f ms from %lld: %s (priority %d) waited for a core: %s; the cores it may use now:%s",
+                        waited / 1e6, (long long)(now - waited), t->name, t->priority, by, who);
 }
 static void vc_acquire(HosThread *t) {
     static int64_t esc_better = -1, esc_eq, slice, starve;

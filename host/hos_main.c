@@ -558,40 +558,6 @@ static void load_longshot_env(void) {
     fclose(f);
 }
 
-/* (longshot) HOS_RECORD_STUTTERS=1: the stutter tools in one switch, the one players are asked to set (docs/performance-report.md),
-   allowed in longshot_env.txt where HOS_SLOW_FRAMES=<path> is not (a path). It sets, for this run, what is not set already:
-   HOS_SLOW_FRAMES to the game folder's logs/slow_frame (the slow-frame recorder, host/slow_frames.c: logs/slow_frame-<n>.txt)
-   and RX_VK_FRAME_TRACE=1 (logs/longshot_frames.csv with the main thread's columns). HOS_VCORE_LOG_MS is on by default
-   already. After load_longshot_env and hos_game_layout (logs/ made), before the samplers and the renderer read them */
-static void record_stutters_env(void) {
-    if (!env_on("HOS_RECORD_STUTTERS")) return;
-    if (!getenv("HOS_SLOW_FRAMES")) {
-        char path[MAX_PATH + 32];
-        DWORD n = hos_game_path_a(path, MAX_PATH);
-        while (n && path[n - 1] != 92 && path[n - 1] != 47) n--;
-        if (n) {
-            memcpy(path + n, "logs" SEP_S "slow_frame", sizeof("logs" SEP_S "slow_frame"));
-#ifdef _WIN32
-            char put[MAX_PATH + 64];
-            snprintf(put, sizeof put, "HOS_SLOW_FRAMES=%s", path);
-            _putenv(put);
-#else
-            setenv("HOS_SLOW_FRAMES", path, 1);
-#endif
-        }
-    }
-    if (!getenv("RX_VK_FRAME_TRACE")) {
-#ifdef _WIN32
-        _putenv("RX_VK_FRAME_TRACE=1");
-#else
-        setenv("RX_VK_FRAME_TRACE", "1", 1);
-#endif
-    }
-    fprintf(stderr, "env: HOS_RECORD_STUTTERS: the slow-frame recorder in %s, the frame trace %s\n",
-            getenv("HOS_SLOW_FRAMES") ? getenv("HOS_SLOW_FRAMES") : "(no game folder: off)",
-            env_on("RX_VK_FRAME_TRACE") ? "on" : "off (RX_VK_FRAME_TRACE set to 0)");
-}
-
 /* Switches this build no longer reads, still set (in the environment or longshot_env.txt, as older issues told players):
    one log line each, naming what took its place, so a bug report shows the switch did nothing */
 static void removed_switch_notes(void) {
@@ -606,6 +572,7 @@ static void removed_switch_notes(void) {
         {"RX_VK_OOT_FOG", NULL},
         {"RX_VK_OOT_VISUAL", NULL},
         {"HOS_FIX_RES", NULL},
+        {"HOS_RECORD_STUTTERS", "HOS_PROFILE=1 (the profiling mode: docs/development.md#the-profiling-mode)"},
         {"HOS_SCENE_NATIVE", NULL},
         {"TOTK_MINIMAL_LAYOUT", NULL},
     };
@@ -1918,7 +1885,7 @@ static int game_main(int argc, char **argv) {
         hos_relaunch_keep_env();
     }
     load_longshot_env();
-    record_stutters_env();   /* (HOS_RECORD_STUTTERS: after the file, which may set it) */
+    hos_profiling_env();   /* (HOS_PROFILE=1, host/profiling.c: after the file, which may set it) */
 #endif
     /* (the settings file, in the user folder: chosen before the crash window's helper, the Discord status and the renderer read
        it, and after longshot_env.txt, which may set HOS_OPTIONS_FILE; Linux's main chose it already: host/options_path.c) */
@@ -2175,7 +2142,7 @@ static int game_main(int argc, char **argv) {
     Ctx *c = hos_boot_main_thread(hos_main_stack_size);
     uint64_t sp = c->x[31];
     void hos_prof_start(void);
-    hos_prof_start();   /* HOS_PROFILE=<seconds> */
+    hos_prof_start();   /* HOS_PROFILE_EVERY=<seconds>, the samplers, HOS_PROFILE=1 */
     void hos_chain_start(void);
     hos_chain_start();  /* HOS_CHAIN=<path> */
 #ifdef _WIN32
@@ -2304,7 +2271,7 @@ int main(int argc, char **argv) {
     void hos_display_loop(void);
     hos_game_layout();   /* (the game folder's cache/ and logs/, before anything writes there, --prepare-shaders too: host/game_layout.c) */
     load_longshot_env();
-    record_stutters_env();   /* (HOS_RECORD_STUTTERS: after the file, which may set it) */
+    hos_profiling_env();   /* (HOS_PROFILE=1, host/profiling.c: after the file, which may set it) */
     hos_options_choose(argc, argv);   /* (before the Discord status reads it, below: host/options_path.c) */
     driver_cache_room();
     driver_cache_folder();

@@ -58,7 +58,8 @@ Run everything with `python -I` from this folder.
 | `python -I nx2/lift.py --standalone --write` then `python -I nx2/build.py --standalone --jobs 4` | the standalone game: `work/sa/build/longshot.exe` + `longshot_vk.dll` |
 | `powershell -File scripts/run-vk.ps1 [-Window] [-Seconds 120] [-Name x]` | a muted test run on Vulkan, with screenshots in `work/runs/<name>/shots` |
 | `python -I scripts/memtour.py <game folder> --save <save folder> [--dests 13,1,2 \| all] [--dwell 40]` | a memory tour (Linux): the game folder started headless through the control bridge, the save loaded, a teleport through areas with a walk in each, and the game's resident + swapped memory, `MemAvailable` and swap sampled every 2 s: `mem.csv`, `marks.csv` and `summary.md` (peaks and each area's numbers) in a new folder. For "the game outgrows my RAM" reports, and for A/B runs of a change that should move it ([control.md](control.md)) |
-| `python -I scripts/prof.py <stacks file>` | a profile sampled with `HOS_PROFILE=<seconds>` + `HOS_SAMPLE=<thread>` + `HOS_SAMPLE_FILE=<stacks file>` (the sampler runs only with `HOS_PROFILE` set), named from the linker maps |
+| `python -I scripts/profile_report.py <profile folder>` | the [profiling mode](#the-profiling-mode)'s folder (`HOS_PROFILE=1`) read into `report.md` (frame times, what limits the frame, the hottest code by thread, each stutter's causes), `trace.json.gz` for Perfetto (each thread's stack over time, frames, waits, counters) and `speedscope.json` (flame graphs) |
+| `python -I scripts/prof.py <stacks file>` | a profile sampled with `HOS_PROFILE_EVERY=<seconds>` + `HOS_SAMPLE=<thread>` + `HOS_SAMPLE_FILE=<stacks file>` (the sampler runs only with `HOS_PROFILE_EVERY` set), named from the linker maps |
 | `python -I scripts/coverage/cover.py run <game folder> [--gen <lifted C folder>]` | which lifted functions a play session runs, and when each first ran (Windows; a DLL loaded into the built game marks each `f_` function once; Ctrl+Alt+M marks the title screen, being in play and later moments): `report` (their share of the lifted C and its compile cost, how many had run by each mark, a hot list's cover) and `compare` (one session's functions as a list, another session played against it) read the run folder on any OS. Results go to `%LOCALAPPDATA%\LongshotCover`: offsets, names and times, nothing from the game |
 | `python -I scripts/tested_configurations.py [--output work/tested-configurations.md]` | Read the [tested configurations](tested-configurations.md), combining new run files with the frozen table; UTF-8 stdout by default, or a local Markdown file that is not committed |
 
@@ -499,39 +500,84 @@ case-sensitive, and an unknown one is ignored.
 
 ### Time and profiles
 
-#### Recording a stutter
+#### The profiling mode
 
-A stutter is a rare frame, so it is recorded as it happens rather than looked for in a whole-run profile afterwards.
-`HOS_RECORD_STUTTERS=1` (in the environment or `longshot_env.txt`; it is the line [Report slow
-performance](performance-report.md#if-it-stutters) gives players) turns on, for one run, everything below at once:
+`HOS_PROFILE=1` (in the environment or `longshot_env.txt`; it is the line [Report slow
+performance](performance-report.md#1-turn-on-the-profiling-mode) gives players) turns on every profiling tool below for
+one run, and records them into a folder of its own, `logs/profile-<date>-<time>/` in the game folder
+(`host/profiling.c`). It's for finding where the time goes and what each stutter was, all in one run:
 
-- **The slow-frame recorder** (`HOS_SLOW_FRAMES`) into the game folder's `logs/slow_frame-<n>.txt`: each frame of 50 ms
-  or more, with the 250 ms before it, sampled on every game and renderer thread. Read one with
-  `python -I scripts/crit.py logs/slow_frame-1.txt` (the critical path: what ran, and what the main thread waited in
-  while nothing did) or `scripts/cpu_report.py`. They name the frames from the same build's linker maps
-  (`RX_MAPS=<folder>`; on Linux the game folder, its `longshot` and `longshot_vk.so`), so read a player's files against
-  the build they played.
-- **The frame trace** (`RX_VK_FRAME_TRACE=1`), `logs/longshot_frames.csv`: a line a present. A slow frame's line says
-  whether the game's main thread was on the CPU (`main_cpu_ms`), blocked (`main_blocked_ms`), or waiting for a virtual
-  core (`main_vcore_ms`), and what the renderer waited for in it.
-- **The long waits for a virtual core** (`HOS_VCORE_LOG_MS`, on by default anyway): a log line for each wait of 50 ms or
-  more, naming the thread whose release ended it.
+| File | What it holds |
+|---|---|
+| `all.txt` | Every game and renderer thread's stack every 2 ms for the whole run (`HOS_SAMPLE_ALL`; delete `all.txt.go` to pause it, make it again to go on), packed: each distinct stack once, about a tenth of the plain format's size (`HOS_SAMPLE_PACKED`; `scripts/samples.py` reads both, and so do `crit.py`, `hotlist.py`, `vkprof.py`, `chain.py` and `cpu_report.py`) |
+| `frames.csv` | The frame trace (`RX_VK_FRAME_TRACE`, below): each frame's waits, the Breakdown's parts and the main thread's CPU, blocked and virtual-core time, and `at_ns`, the present on the host's clock |
+| `presents.csv` | The game's presents (`HOS_PRESENT_TRACE`) |
+| `cpu.csv` | Every second: the process's CPU time and memory, and the system's available memory |
+| `events.txt` | Each wait of `HOS_VCORE_LOG_MS` (50) or more for a virtual core, with its time and cause (the log keeps the first 200 without a time) |
+| `process.json`, `longshot_options.ini` | The run's switches, and its settings as it started |
 
-What it sets, it sets only where the switch's own name is not set already (`HOS_SLOW_FRAMES=<path>` from the environment
-goes first, `RX_VK_FRAME_TRACE=0` leaves the trace off), and the log's `env: HOS_RECORD_STUTTERS:` line says what it
-turned on. It costs frame rate (the recorder samples every 4 ms): a diagnostic, off by default, not for fps numbers. A
-stutter that follows a pattern (one per load, the same place each time) is also worth a run of `HOS_CHAIN` there, for each
-frame's waits and wake-ups.
+And in the log: every 5 s the busiest threads (`HOS_PROFILE_EVERY`) and each thread's CPU (`HOS_THREAD_TIMES`), the
+frame limiter (`HOS_FPS_LOG`), the GPU time of each pass every 600 presents (`RX_VK_PASS_TIMING=1`) and the replay's
+times for each frame over 50 ms (`RX_VK_SLOW_LOG=50`). A switch already set keeps its value (`RX_VK_PASS_TIMING=0`
+leaves the pass timing out, `HOS_PROFILE_EVERY=10` makes the log's lines 10 s apart). All the files' times are the
+host's clock (`hos_now_ns`), so samples, frames, presents and events line up. The log's
+`env: HOS_PROFILE=1: a profile of this run in ...` line names the folder.
+
+Read it with:
+
+```sh
+python -I scripts/profile_report.py <game folder>/logs/profile-<date>-<time> [--from-s 60] [--to-s 300]
+```
+
+It writes `report.md` into the folder:
+- **At a glance:** the frame rate and frame times, what limits the frame (the Breakdown's largest part), the hottest code
+  on the main and Presentation threads in ms a frame, what the stutters are spent on and what runs far more in them than
+  in steady frames, the long virtual-core waits inside stutters, and the memory over the run. Start here.
+- **Over time:** fps, the worst frames, stutters, cores and memory for each part of the run, for a slowdown that builds up.
+- **Frame parts:** each frame trace column, for every frame, the steady ones and the stutters.
+- **Threads:** each thread's CPU and its running share.
+- **CPU:** each thread's hottest functions, by the leaf and by the innermost frame of Longshot's code, the main and
+  Presentation threads' inclusive time, and where the main thread waits (overall and in stutters).
+- **Stutters:** the slowest frames one by one: their trace columns, what each thread ran in them, where the main thread
+  waited, and the virtual-core waits in them.
+- **GPU:** the log's last pass timing block.
+
+It also writes the profile for a profiler's own viewer (`scripts/profile_trace.py`, which makes them alone too; both
+viewers read the file in the browser, nothing is uploaded):
+
+- **`trace.json.gz` in [Perfetto](https://ui.perfetto.dev)** ("Open trace file"): the run as a timeline. Each thread's
+  stack over time as a flame chart (a stack that stays the same from one 2 ms sample to the next is one slice, a blocked
+  thread's under "(waiting)"), a Frames track with every frame and its trace columns (stutters named `STUTTER`), the
+  long virtual-core waits, and counters for frame time, CPU cores and memory. Select a stutter's span to see what every
+  thread ran in it; select a span of a thread for the functions in it. `--no-waiting` leaves blocked samples out.
+- **`speedscope.json` in [speedscope](https://www.speedscope.app)**: a flame graph a thread ("Left Heavy"), and every
+  function's self and total time ("Sandwich"), with one profile of every thread's running samples together. Its stacks
+  are added up, so its "Time Order" is not the run's: Perfetto has that.
+
+A long run makes a big trace (several MB a minute, compressed): `--from-s`/`--to-s` keep the part that matters.
+
+The frames are named from the same build's symbols: by default the game folder the profile is in (on Linux its
+`longshot` and `longshot_vk.so`), else `--maps <folder>` (on Windows a folder with that build's `longshot.map` and
+`longshot_vk.map`). The report names lifted functions by their guest address, so keep it on this PC. For the publishable
+view (lifted code as one row), `scripts/cpu_report.py <folder> --maps <maps>` reads the same folder (Windows captures; the
+report writes the `load.json` it needs). `--from-s` leaves out the loading and the first shader preparation, which the
+run starts with.
+
+The mode costs frame rate: the sampler stops or signals each thread every 2 ms, and the pass timing makes the GPU finish
+each pass before the next (its GPU numbers are shares, not an unprofiled frame's time). Use it to find what to optimize,
+then measure the change without it ([measure skill](../.claude/skills/measure/SKILL.md)). Off by default. An older
+`HOS_PROFILE=<seconds>` (the busiest threads' log alone, before the mode) turns the whole mode on now, with its seconds
+for the log's lines.
 
 #### The switches
 
 | Switch | What it does |
 |---|---|
-| `HOS_RECORD_STUTTERS=1` | [Recording a stutter](#recording-a-stutter): the slow-frame recorder into `logs/slow_frame-<n>.txt` and the frame trace, in one switch that `longshot_env.txt` takes. Off by default |
-| `HOS_PROFILE=<seconds>` | Every interval, the busiest threads in the log; it also starts the samplers below |
-| `HOS_SAMPLE=<thread>` + `HOS_SAMPLE_FILE=<file>` | One thread's stacks, sampled every millisecond (needs `HOS_PROFILE`); `python -I scripts/prof.py <file>` reads them |
-| `HOS_SAMPLE_ALL=<file>` | Every game and renderer thread every 2 ms while `<file>.go` exists (needs `HOS_PROFILE`); `scripts/crit.py`, `scripts/vkprof.py`, `scripts/hotlist.py` and `scripts/cpu_report.py` (the [CPU profile](cpu-profile.md): CPU time by category, thread and function, and what limits the frame) read it (on Linux with `RX_MAPS=<game folder>`: they name frames from its `longshot` and `longshot_vk.so`) |
-| `HOS_SLOW_FRAMES=<path>`, `HOS_SLOW_FRAME_MS=<ms>`, `HOS_SLOW_FRAMES_EVERY_MS=<ms>`, `HOS_SLOW_FRAMES_MAX=<n>` | The slow-frame recorder (`host/slow_frames.c`): every game and renderer thread sampled every 4 ms for the whole run into a ring in memory, and when a present comes 50 ms or more after the one before, that frame's samples and the 250 ms before it written to `<path>-<n>.txt` in `HOS_SAMPLE_ALL`'s format (`scripts/hotlist.py`, `scripts/crit.py`, `scripts/cpu_report.py` read it); at most 40 files a run, a second apart, each named in the log. It costs frame rate; not with `HOS_SAMPLE_ALL`. A path, so from the environment only, not `longshot_env.txt`: `HOS_RECORD_STUTTERS=1` sets it to `logs/slow_frame` |
+| `HOS_PROFILE=1` | [The profiling mode](#the-profiling-mode): all of the switches below that profile, for one run, into `logs/profile-<date>-<time>/`. Off by default |
+| `HOS_PROFILE_EVERY=<seconds>` | Every interval, the busiest threads in the log (5 with `HOS_PROFILE=1`); `HOS_SAMPLE` needs it |
+| `HOS_SAMPLE=<thread>` + `HOS_SAMPLE_FILE=<file>` | One thread's stacks, sampled every millisecond (needs `HOS_PROFILE_EVERY`, or `HOS_PROFILE=1`); `python -I scripts/prof.py <file>` reads them |
+| `HOS_SAMPLE_ALL=<file>`, `HOS_SAMPLE_PACKED=1` | Every game and renderer thread every 2 ms while `<file>.go` exists; packed, each distinct stack written once (`scripts/samples.py`); `scripts/crit.py`, `scripts/vkprof.py`, `scripts/hotlist.py` and `scripts/cpu_report.py` (the [CPU profile](cpu-profile.md): CPU time by category, thread and function, and what limits the frame) read it (on Linux with `RX_MAPS=<game folder>`: they name frames from its `longshot` and `longshot_vk.so`) |
+| `HOS_SLOW_FRAMES=<path>`, `HOS_SLOW_FRAME_MS=<ms>`, `HOS_SLOW_FRAMES_EVERY_MS=<ms>`, `HOS_SLOW_FRAMES_MAX=<n>` | The slow-frame recorder (`host/slow_frames.c`): every game and renderer thread sampled every 4 ms for the whole run into a ring in memory, and when a present comes 50 ms or more after the one before, that frame's samples and the 250 ms before it written to `<path>-<n>.txt` in `HOS_SAMPLE_ALL`'s format (`scripts/hotlist.py`, `scripts/crit.py`, `scripts/cpu_report.py` read it); at most 40 files a run, a second apart, each named in the log. It costs frame rate; not with `HOS_SAMPLE_ALL`. A path, so from the environment only, not `longshot_env.txt`. Not with `HOS_PROFILE=1`, whose samples cover the whole run |
 | `HOS_CHAIN=<file>` | While `<file>.go` exists, every wait of a game thread that blocks, every signal that can end one, every sleep and every present, with the time, the thread, the object and the caller; written to `<file>` when `<file>.go` goes away (about 2 million records at most). `python -I scripts/chain.py <file> [<HOS_SAMPLE_ALL file>]` walks each frame back from its present (the thread that ran, the wait that stopped it, the thread whose signal ended it) and prints the frame's critical path by thread: running, wake-ups, sleeps, and, with a sample file of the same run, the functions on it |
 | `HOS_HLE_STATS=1` | About every 5 s, calls of each HLE function and host call (`hle:` lines, most called first), with measured monotonic clock boundaries. `scripts/cpu_report.py --calls` joins complete blocks to native frames in that clock span; per-call occupancy estimates require the same run's timestamped stacks. Off by default; take performance numbers from a run without counting |
 | `HOS_THREAD_TIMES=<seconds>` | Every interval, the threads that used over 5% of a core |
@@ -541,7 +587,7 @@ frame's waits and wake-ups.
 | `HOS_MOVIE_PACE=0` | Leave the pacing at the Game frame rate cap row while a movie plays, instead of raising a 60 FPS cap to 240 for the movie's pictures (issue #73); an explicit 30 FPS cap remains 30 |
 | `RX_VK_PERF_INTERVAL=<60-840>` | Seconds of play between two performance summaries, with Send performance statistics on (default 300; at most 840, a minute under the relay's 900 s a summary): [performance statistics](performance-statistics.md#switches) |
 | `RX_VK_FRAME_LOG=<csv>` | A CSV line per present: frame, seconds, frame time in ms. Also works with `HOS_HEADLESS`: CPU intervals after submitting the offscreen copy, without swapchain/display waits. Not `RX_VK_FRAMELOG` (no underscore: pictures, above) |
-| `RX_VK_FRAME_TRACE=1` | `logs/longshot_frames.csv`: a line a present with what the frame did (waits for pipelines, translation, uploads, the memory sync, the GPU behind, the read-backs' and the capture's waits), then the frame as the FPS counter's Breakdown splits it (`game_ms`, `render_ms`, `gpu_wait_ms`, `pace_ms`, `wait_render_ms`, `wait_gpu_ms`, `wait_main_ms`; measured whatever the counter shows) and the game's main thread's own time in the frame: on the CPU (`main_cpu_ms`), blocked in waits and sleeps (`main_blocked_ms`) and waiting for a virtual core (`main_vcore_ms`); the frame less those three is its time running but off the CPU |
+| `RX_VK_FRAME_TRACE=1` | `logs/longshot_frames.csv` (with `HOS_PROFILE=1`, `frames.csv` in the profile folder): a line a present with what the frame did (waits for pipelines, translation, uploads, the memory sync, the GPU behind, the read-backs' and the capture's waits), then the frame as the FPS counter's Breakdown splits it (`game_ms`, `render_ms`, `gpu_wait_ms`, `pace_ms`, `wait_render_ms`, `wait_gpu_ms`, `wait_main_ms`; measured whatever the counter shows) and the game's main thread's own time in the frame: on the CPU (`main_cpu_ms`), blocked in waits and sleeps (`main_blocked_ms`) and waiting for a virtual core (`main_vcore_ms`); the frame less those three is its time running but off the CPU; then `at_ns`, the present on the host's clock |
 | `RX_VK_PRESENTS_AHEAD=<1-8>` | How many presents the game may hand over ahead of the render thread (`RX_VK_ASYNC=1`; 1 by default). Not `RX_VK_PRESENT_AHEAD` |
 | `RX_VK_PRESENT_AHEAD=0` | Frame generation's copies into the window submitted each at its own time, as before #1702 (default on: a set's copies go to the GPU together). Not `RX_VK_PRESENTS_AHEAD` |
 | `RX_VK_PASS_TIMING=1` or `2` | GPU time per pass (2: per program too), logged every 600 presents |
