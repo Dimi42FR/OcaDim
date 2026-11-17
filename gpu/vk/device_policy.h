@@ -292,9 +292,10 @@ struct DevicePolicy {
     // found, so whether Mesa's driver or a GPU without mesh shaders needs it wants a run. RX_VK_SPLIT_BEFORE_DRAW. Read
     // (vk_replay.cpp part_ends_before_draw)
     bool split_before_draw = false;
-    // AMD's Windows driver on the graphics in Ryzen 7000 and 9000 desktop CPUs (0x164E, 0x13C0): ASTC decoded on the CPU,
-    // as the GPU decoder's one long submission had Windows reset the device (a Ryzen 9 7900X, 7 runs of 8; seen on driver
-    // 26.10.1). RX_VK_ASTC_CPU. Read (vk_texture.cpp astc_on_cpu)
+    // AMD's Windows driver on the graphics in Ryzen 7000 and 9000 desktop CPUs (0x164E, 0x13C0) and the Radeon 860M (0x1114,
+    // #1040): ASTC decoded on the CPU, as the GPU decoder's one long submission had Windows reset the device (a Ryzen 9 7900X,
+    // 7 runs of 8; seen on driver 26.10.1; the 860M lost it on the same Kokiri Forest arrays). RX_VK_ASTC_CPU. Read
+    // (vk_texture.cpp astc_on_cpu)
     bool astc_on_cpu = false;
     // NVIDIA: the Deku Tree web's vertex code b449bcdb69b36a8a has its global loads inlined, as NVIDIA's compiler
     // substitutes a load's result there (#455). No switch. Site (vk_shader.cpp), step 6
@@ -482,7 +483,7 @@ inline DevicePolicy device_policy(const DeviceFacts& f) {
     p.compute_builds_serial = f.driver_id == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS;
     p.pcache_fetch_lock = f.windows && f.intel();
     p.split_before_draw = f.intel();
-    p.astc_on_cpu = f.windows && f.amd() && (f.device_id == 0x164E || f.device_id == 0x13C0);
+    p.astc_on_cpu = f.windows && f.amd() && (f.device_id == 0x164E || f.device_id == 0x13C0 || f.device_id == 0x1114);
     p.inline_deku_web_loads = f.nvidia();
     p.dma_buf_imports = !f.windows && f.driver_id != VK_DRIVER_ID_NVIDIA_PROPRIETARY;
     p.nv_checkpoints = f.nv_checkpoints_ext;
