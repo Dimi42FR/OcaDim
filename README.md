@@ -643,7 +643,8 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
   bypasses CRT and keeps the choice for SDR. **Off**, the default, adds no CRT passes or GPU images.
 - **Anisotropic filtering** keeps textures sharp on surfaces seen at a slant: the paths and floors ahead of Link. The game
   asks for 1x or 2x, which at a PC's resolutions smears the ground a few metres off; 16x costs little on most cards, and
-  Game's is the console's own. `RX_VK_ANISO=<n>` sets it for one run (0: the game's).
+  Game's is the console's own. `RX_VK_ANISO=<n>` sets it for one run (0: the game's). It is for the game's textures:
+  a picture the game drew itself and reads back (one level, no mipmaps) keeps the game's own anisotropy.
 - **Shadow resolution** sets the size of the sun's shadow maps. The game draws them 1600 pixels a side, which at a PC's
   resolutions turns the shadows of thin things near Link (the drawbridge's chains, fences, ivy) into stair steps. High
   (2200) and Highest (3072) are the game's own larger sizes, from its own table: by their size, Highest takes about
