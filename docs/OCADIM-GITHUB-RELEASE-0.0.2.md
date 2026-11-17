@@ -6,9 +6,10 @@ OcaDim ne demande pas de choisir un preset « petit PC » : les réglages se pre
 mémoire de la machine. Ce que ce build fait pour une petite carte ou une machine à 8-16 Go :
 
 - **La VRAM des textures suit la carte, pas un preset.** 2,2 Go sur une carte de 4,5 Go ou moins, 3,6 Go sur 6 Go,
-  4,8 Go sur 8 Go, 7,5 Go sur 12 Go, 11 Go sur 16 Go — et **4 Go quand le pilote n'expose pas de heap dédié**.
-  Sous **12 Go de RAM**, plafond à **6 Go**. C'est ce plafond qui évite le cas où le pilote pagine la VRAM pour de
-  bon (une RTX 3060 Ti tombée à **14 fps** avec 5,1 Go de cache).
+  4,8 Go sur 8 Go, 7,2 Go sur 12 Go, 11 Go sur 16 Go — et **4 Go quand le pilote n'expose pas de heap dédié**.
+  Sous **12 Go de RAM**, une carte de plus de 6,75 Go passe à **45 % de ce que le pilote autorise** (3,3 Go sur une
+  8 Go), plafonné à **6 Go**. C'est ce plafond qui évite le cas où le pilote pagine la VRAM pour de bon (une
+  RTX 3060 Ti tombée à **14 fps** avec 5,1 Go de cache).
 - **Le pool se vide avant la limite**, à **90 % puis 97 %** de ce que le pilote autorise : le jeu ne demande jamais
   plus qu'il n'a, il rétrécit d'abord.
 - **Le budget d'uploads ×4 pendant les chargements** : **1 303 → 571 textures ASTC repoussées**. La frame la plus
