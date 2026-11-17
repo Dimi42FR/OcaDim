@@ -5620,12 +5620,9 @@ bool wb_diff_on() {
     // it). RX_VK_WB_DIFF=0: off
     // (integrated GPUs too: an Ally X's hard reboots stopped with v2.0.8 and came back with v2.0.9's off, issue 997: the whole copies
     // are long submissions there. Its shadows are the system's RAM on them, so at most 512 MB: shadow_room)
-    // (OcaDim: off by default. The diff skips the pages its shadows never heard of; the log named 11 seen only by the
-    // collection, and the CPU then read a stale value. On an RX 9070 XT that showed as wrong colours on textures, the
-    // sky and the shield, by moments. The whole copies wrote the GPU's value everywhere, as v2.0.9/2.0.10 did;
-    // RX_VK_WB_DIFF=1 opts back into the diff.)
-    static const bool on = getenv("RX_VK_WB_DIFF") && atoi(getenv("RX_VK_WB_DIFF")) != 0;
-    return on;
+    // (OcaDim: back ON by default: the flash came from #51, not the diff; RX_VK_WB_DIFF=0 gives the whole copies)
+    static const int env = getenv("RX_VK_WB_DIFF") ? atoi(getenv("RX_VK_WB_DIFF")) : -1;
+    return env >= 0 ? env != 0 : menu_wb_diff() != 0;   // (OcaDim: the Debug row, unless the switch holds it)
 }
 void shadow_free(Pool& p) {   // (pools_mu held: destroyed once the submissions so far are done)
     if (!p.shadow) return;

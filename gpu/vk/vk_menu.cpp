@@ -1802,6 +1802,13 @@ Row rows[] = {
     {TAB_DEBUG, "Threaded rendering", &opts.threaded_rendering, 0, 2, 1, tx_vsync,
      "Draws the picture on threads of its own, beside the game's, on a processor with threads to spare. Applies after a "
      "restart.", hn_threaded, true, true},
+    // (OcaDim) performance switches, saved in the ini
+    {TAB_DEBUG, "Write back diff", &opts.wb_diff, 0, 1, 1, tx_onoff,
+     "Copies only what changed back into the game's memory, against a VRAM shadow: less bandwidth each present. Off "
+     "copies everything, as before v2.0.9.", nullptr, false, true},
+    {TAB_DEBUG, "Upscaler notes cache", &opts.notes_keep, 0, 1, 1, tx_onoff,
+     "Reuses the DLSS/FSR notes while the target and camera stand: about 0.9 ms a frame less. Off recomputes them at "
+     "every draw.", nullptr, false, true},
     {TAB_DEBUG, "Descriptor reuse", &opts.descriptor_reuse, 0, 1, 1, tx_onoff,
      "A draw keeps its descriptors while the texture slots it samples are unchanged, so streaming elsewhere in the game no longer "
      "rebuilds every set each frame. Changes at once.", nullptr, false, true},
@@ -5618,6 +5625,8 @@ int menu_player_flight() { return cheats_on() ? player_flight.load(std::memory_o
 int menu_free_camera() { return cheats_on() ? free_camera.load(std::memory_order_relaxed) : 0; }
 int menu_link_speed() { return cheats_on() ? link_speeds[std::clamp(link_speed.load(std::memory_order_relaxed), 0, kLinkSpeeds - 1)] : 100; }
 int menu_transition_autosave() { return transition_autosave_enabled.load(std::memory_order_relaxed); }
+int menu_wb_diff() { return opts.wb_diff; }
+int menu_notes_keep() { return opts.notes_keep; }
 int menu_damage_taken() { return cheats_on() ? opts.damage_taken : 1; }   // (Normal while the tools are off; the choice is kept)
 int menu_take_cheat_action() { return cheat_action.exchange(0, std::memory_order_relaxed); }
 

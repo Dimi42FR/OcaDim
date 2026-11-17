@@ -7904,7 +7904,9 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
         // with another camera in the same frame (a reflection, the sky, a second pass) kept the first camera's note, and
         // the temporal upscaler then drew with the wrong matrices for a frame or two: the textures, the sky and the shield
         // flashing on an RX 9070 XT. RX_VK_TEMPORAL_NOTES_KEEP=1 brings the skip back, now with the camera compared.
-        static const bool keep = env_on("RX_VK_TEMPORAL_NOTES_KEEP");
+        // (OcaDim: the Debug row, unless the switch holds it)
+        static const int keep_env = getenv("RX_VK_TEMPORAL_NOTES_KEEP") ? atoi(getenv("RX_VK_TEMPORAL_NOTES_KEEP")) : -1;
+        const bool keep = keep_env >= 0 ? keep_env != 0 : menu_notes_keep() != 0;
         static thread_local const Texture* note_color0;
         static thread_local Texture* note_depth;
         static thread_local uint32_t note_w, note_h;
