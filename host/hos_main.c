@@ -2095,7 +2095,13 @@ static int game_main(int argc, char **argv) {
                 }
                 fclose(o);
             }
-            const int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
+            void hos_monitor_prepare(void);
+            int hos_monitor_screen_size(int *,int *);
+            hos_monitor_prepare();
+            int sw=0,sh=0;
+            if (!hos_monitor_screen_size(&sw,&sh)) {
+                sw=GetSystemMetrics(SM_CXSCREEN); sh=GetSystemMetrics(SM_CYSCREEN);
+            }
             /* (no line: the monitor's shape; an older file's 16:9 on a screen narrower than 16:9 too: hos_aspect_on) */
             const int on = hos_aspect_on(saved, version, sw, sh);
             if (on && sh > 0) want = (float)sw / (float)sh;

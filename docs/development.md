@@ -1275,6 +1275,11 @@ same one (`host/options_path.c`: `HOS_OPTIONS_FILE`, else `--user`'s folder, the
 else beside the game, as before: RecompLauncher sets its rows there and updates in place). The host chooses it at the start and
 gives the renderer its path (`MkwVkHost.options_path`; `gpu/vk/vk_paths.h` `options_path`); the log's `options: the settings
 file is <path>` says which. A game folder's file from a build before this is copied there once, when the user folder has none.
+The Fullscreen monitor row saves `fullscreen_monitor_id` (an opaque destination identity) and
+`fullscreen_monitor_name` (the label retained when that destination is unavailable). Both are empty for
+Auto (current monitor). The transient menu ordinal is not saved. Windows identities are monitor interface
+paths; Linux identities use unique SDL backend-qualified display names. Choose through the menu rather
+than editing these keys; unavailable choices fall back temporarily without discarding the saved identity.
 Only `compile_shaders=`, the build's choice, stays in the game folder's file, where `make_game.py` writes it. The file holds the Insert menu's rows as `<key>=<number>`: the row's name in lower
 case with `_` for spaces (`frame_generation=2`, `invert_camera_x=1`), except Output resolution, which is `output_res`.
 `gpu/vk/vk_menu.cpp` writes the whole file at every change (`save`), with `options_version=5`,

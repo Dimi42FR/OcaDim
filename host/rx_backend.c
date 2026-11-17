@@ -12,6 +12,9 @@
 #include "../gpu/vk/dlss_math.h"
 #include "control.h"
 #include "audio_output_devices.h"
+int hos_monitor_count(void);
+int hos_monitor_info(int index, MkwVkMonitor *out);
+void hos_monitor_select(const char *id);
 
 /* the stand-ins when there is no Vulkan back end (host/rx_nowgpu.c, host/posix/linux_stubs.c) */
 int wgr_start(void *hwnd);
@@ -167,6 +170,8 @@ int hos_sdl_desktop_size(int *width, int *height);   /* hos_sdl.c */
 #endif
 /* (longshot) the main screen's size, as host/hos_main.c takes its shape (MkwVkHost.screen_size) */
 static int host_screen_size(int *width, int *height) {
+    int hos_monitor_screen_size(int *, int *);
+    if (hos_monitor_screen_size(width, height)) return 1;
 #ifdef _WIN32
     const int w = GetSystemMetrics(SM_CXSCREEN), h = GetSystemMetrics(SM_CYSCREEN);
     if (w <= 0 || h <= 0) return 0;
@@ -280,6 +285,7 @@ static const MkwVkHost vk_host = {
     host_take_text, hos_options_file,
     hos_audio_output_count, hos_audio_output_info, hos_audio_output_select, hos_audio_output_state,
     hos_mic_test, hos_perf_info, host_main_thread_times, host_out_of_memory,
+    hos_monitor_count, hos_monitor_info, hos_monitor_select,
 };
 
 static const MkwVkRenderer *vk;   /* the Vulkan back end, when it was chosen and started */
