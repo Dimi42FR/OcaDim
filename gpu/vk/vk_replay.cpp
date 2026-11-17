@@ -1284,12 +1284,7 @@ struct ParPoint {
     size_t ub, cond;
     int64_t work;
 };
-std::vector<ParPoint> par_points;   // (every par_every draws and dispatches of the dry pass)
-// (OcaDim) How many draws and dispatches between the dry pass's points: the segment boundaries can only fall on one, so a
-// command buffer shorter than two of them cannot be split, whatever the segment size asks. 64 measured, and an RTX 2060's
-// buffers (under 64 draws) had none inside: the parallel replay stayed idle. The adaptive rule in replay_handle lowers it
-// with the segment size when a session only makes short buffers (RX_VK_PAR_POINT over it)
-int64_t par_every = 64;
+std::vector<ParPoint> par_points;   // (every 64 draws and dispatches of the dry pass)
 // (longshot, the step 3's P2) RX_VK_DESC_PREFETCH=1: the dry pass queues its stretches (a point to the next, the
 // buffer's start to the first, the last to its stop) for a descriptor-prefetch helper (BELOW_NORMAL, the priority
 // pattern proven with the parallel workers). The helper re-walks each stretch from the point's state, mirroring the
@@ -2495,9 +2490,9 @@ void replay(VkCommandBuffer& cmd, NvnState& s, const uint8_t* p, const uint8_t* 
                 if (s.render_enabled && (compute || !s.raster_discard)) dry_mark_written(s, compute, dry_work == 0);
                 // (longshot) the point interval copies the whole state: coarser points make the dry pass cheaper
                 // (fewer state copies) at coarser segment boundaries. RX_VK_PAR_POINT=<n> (64 measured)
-                static const int every_env = getenv("RX_VK_PAR_POINT") ? std::max(8, atoi(getenv("RX_VK_PAR_POINT"))) : 0;
-                if (every_env) par_every = every_env;
-                if (++dry_work % par_every == 0) {
+                static const int every = getenv("RX_VK_PAR_POINT") && atoi(getenv("RX_VK_PAR_POINT")) > 0
+                                             ? atoi(getenv("RX_VK_PAR_POINT")) : 64;
+                if (++dry_work % every == 0) {
                     par_points.push_back({p + h.size, s, ub_updates.size(), par_conds.size(), dry_work});
                     if (desc_prefetch_on()) {
                         pf_start();
@@ -2770,8 +2765,8 @@ const uint8_t* replay_handle(VkCommandBuffer& cmd, const uint8_t* h, bool may_st
     // (segments of ~RX_VK_PARALLEL_SEG draws and dispatches (the Insert menu's Replay segments row, 32 by default: this game's
     // command buffers are short, and 160 never filled them), taken in order by the threads and submitted as each is done with
     // those before it: the GPU starts on the first while the rest are recorded)
-    static int64_t per = getenv("RX_VK_PARALLEL_SEG") ? std::max(8, atoi(getenv("RX_VK_PARALLEL_SEG")))
-                                                      : menu_replay_seg();   // (the row, resolved once at the start)
+    static const int64_t per = getenv("RX_VK_PARALLEL_SEG") ? std::max(8, atoi(getenv("RX_VK_PARALLEL_SEG")))
+                                                           : menu_replay_seg();   // (the row, resolved once at the start)
     // (OcaDim: the floor was 32, and this game's buffers are short: with 32, 2000 of them in a session were under 2 x 32
     // draws and recorded serially. 8 lets an A/B ask what a finer split would take; the row's default is unchanged)
     // (too little work for two segments: recorded here, as with parallel replay off. The dry pass would apply the stream's
@@ -2781,20 +2776,6 @@ const uint8_t* replay_handle(VkCommandBuffer& cmd, const uint8_t* h, bool may_st
     static int64_t shorts;
     if (!no_short && stream_work(h, 2 * per) < 2 * per) {
         shorts++;
-        // (OcaDim) a session whose command buffers all fall short of two segments leaves the parallel replay idle while one
-        // thread records everything: an RTX 2060, 2 538 draws a frame, made 2 000 such buffers, and its recording was 18-21 ms
-        // on one thread. After enough of them, halve the segment (32 -> 16 -> 8, one step at a time, never back up); the
-        // buffers between the new size's two segments then split across the threads. RX_VK_PARALLEL_SEG sets where it starts
-        if (shorts >= 512 && per > 8) {
-            const int64_t was = per;
-            per = std::max<int64_t>(8, per / 2);
-            // (the segment boundaries only fall on the dry pass's points: with one every 64 draws, a buffer under 64 has
-            // none and cannot be split however small the segment is. Both come down together, the points never under 8)
-            if (!getenv("RX_VK_PAR_POINT") && par_every > per) par_every = std::max<int64_t>(8, per);
-            shorts = 0;
-            logf("vk: parallel replay: 512 command buffers under two segments of %lld draws: lowered to %lld, points every %lld (%d threads)",
-                 (long long)was, (long long)per, (long long)par_every, threads);
-        }
         // (longshot) the segment size's default assumes command buffers far bigger than this game's: after many
         // short ones, one hint, so that the parallel replay with the default segment is not silently idle. The same
         // walk measured this game's buffers against 160 and 32 (OoT: none of the first reached 320 work)
