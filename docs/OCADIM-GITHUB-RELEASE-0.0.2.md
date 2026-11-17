@@ -1,6 +1,36 @@
 # OcaDim 0.0.2 — notes de mise à jour (prêtes pour GitHub)
 
-## 1. Ce qu'OcaDim apporte — notre travail, sans copie
+## 1. Petits PC d'abord — rien à régler, tout est automatique
+
+OcaDim ne demande pas de choisir un preset « petit PC » : les réglages se prennent tout seuls sur la carte et la
+mémoire de la machine. Ce que ce build fait pour une petite carte ou une machine à 8-16 Go :
+
+- **La VRAM des textures suit la carte, pas un preset.** 2,2 Go sur une carte de 4,5 Go ou moins, 3,6 Go sur 6 Go,
+  4,8 Go sur 8 Go, 7,5 Go sur 12 Go, 11 Go sur 16 Go — et **4 Go quand le pilote n'expose pas de heap dédié**.
+  Sous **12 Go de RAM**, plafond à **6 Go**. C'est ce plafond qui évite le cas où le pilote pagine la VRAM pour de
+  bon (une RTX 3060 Ti tombée à **14 fps** avec 5,1 Go de cache).
+- **Le pool se vide avant la limite**, à **90 % puis 97 %** de ce que le pilote autorise : le jeu ne demande jamais
+  plus qu'il n'a, il rétrécit d'abord.
+- **Le budget d'uploads ×4 pendant les chargements** : **1 303 → 571 textures ASTC repoussées**. La frame la plus
+  lourde d'une arrivée de zone est absorbée par le chargement au lieu de tomber en jeu — c'est le hoquet qu'on sent
+  sur un CPU ou un disque lent.
+- **Les ombres sont verrouillées au 1600 du jeu.** Auto prenait **3072** sur une carte de 16 Go : **6-7 fps en ville**
+  et de la mémoire pour rien. Sur une petite carte, c'est la même économie, en mieux.
+- **Les grosses textures ASTC restent en BC7, 1 octet par texel.** Pas de bascule en RGBA8 (4 octets par texel,
+  soit **4 fois plus de VRAM**) : la mémoire d'une petite carte ne double pas au chargement d'une zone.
+- **Le seed de shaders est mappé, plus copié** : **539 Mo de RAM en moins** sur chaque lancement.
+- **#1242 : plus de clear des textures gardées en blocs ASTC.** Le log d'une session réelle montre une
+  **12288×12288 (288 Mo) lue en 21,7 ms puis effacée sur le GPU** — ce travail ne se refait plus.
+- **#1250 : un upload sparse à court de staging lie ce qu'il a déjà mis en file.** Quand la VRAM est pleine — le cas
+  des petites cartes — on ne récupère plus de textures vides ou périmées.
+- **#906 : le mesh fallback en SoA**, pour les GPU sans mesh shaders (les cartes anciennes et les iGPU).
+
+**Pas encore là, prévu pour la suite (0.0.3)** : le plafond de **2 Go** sur les textures libérées (#960), le
+`heap_lazy` qui ne tombe plus à 12 fps (#923), et un **preset « OcaDim minimal »** qui règle aussi les lignes du
+moteur (segments, prefetch, barrières) au lieu de laisser le joueur deviner. Le dirty census (#965) a été mesuré
+inutile ici : **4 µs par sync, 0,024 ms par frame**.
+
+## 2. Ce qu'OcaDim apporte — notre travail, sans copie
 
 **Le menu F1, refait de zéro**
 - Une identité propre : bleu nuit et or, canvas plein écran, en-tête **OCADIM**, rail vertical des sections,
@@ -12,17 +42,12 @@
 - **Touche Run**, le miroir de Walk : liaison, mode Hold/Toggle, stick gauche poussé à fond sur les axes déjà
   poussés.
 - **Ombres verrouillées au 1600 du jeu** : la ligne Shadow resolution disparaît, `shadow_resolution` est ignoré.
-  Auto prenait 3072 sur une 16 Go et coûtait 6-7 fps en ville.
 - **Ids d'options uniques** : Auto run et Shadow resolution partageaient l'id 56, Above-60 fixes et Transition
   autosave l'id 59 — une option de chaque paire ne recevait jamais sa valeur.
 - **Deux réglages de perf dans Debug** : `Write back diff` et `Upscaler notes cache`, On/Off, gardés dans
   `longshot_options.ini` (`write_back_diff`, `upscaler_notes_cache`).
 
 **Perf et mémoire (de nous)**
-- Le **budget d'uploads ×4 pendant les chargements** : 1 303 → 571 textures ASTC repoussées, la frame la plus
-  lourde absorbée par le chargement.
-- Le **seed de shaders mappé** au lieu d'être copié : 539 Mo hors du commit privé.
-- Les **submits ne sont plus copiés à chaque frame** pour `RX_VK_BENCH` quand il n'est pas demandé.
 - **Le diff des write-backs et le cache des notes DLSS/FSR sont réactivés par défaut** (fps max) ; ils avaient
   été coupés pendant la chasse au flash. Le vrai coupable était ailleurs.
 - **#51 retiré** : notre replay parallèle adaptatif (segments 32→16→8 sur les buffers courts) exposait une
@@ -33,31 +58,33 @@
 - **Une texture dessinée par le GPU puis finalisée n'est plus ré-uploadée** depuis la mémoire guest (elle
   écrasait le dessin une frame).
 - **Notes DLSS/FSR** : la caméra (UBO vue/projection) entre dans la comparaison, puis le cache est réactivé.
+- Les **submits ne sont plus copiés à chaque frame** pour `RX_VK_BENCH` quand il n'est pas demandé.
 
 **Diagnostic et documentation**
 - Le **bisect complet** de la 0.0.1 jusqu'au commit fautif (#51), écrit dans `docs/OCADIM-BISECT.md`.
 - Les documents mémoire, coût par draw et chargement des programmes, mis à jour.
 - Les tests du menu, de l'i18n et des fixtures recalés sur le nouveau F1.
 
-## 2. Porté de l'amont (intégré et adapté par OcaDim)
+## 3. Porté de l'amont (intégré et adapté par OcaDim)
 
 - **#994** cibles de rendu réutilisées ; **#1035** pool à 3 paliers ; **#472/#391** coûts d'un draw.
 - **#568** arenas de staging conservées ; **#790** trous zéro ; **#903** cache de pipelines avant le titre ;
   **#906** mesh fallback SoA.
-- **#1083** fenêtre de collecte ; **#1121** jobs rejoués dès qu'ils arrivent.
+- **#1083** fenêtre de collecte ; **#1121** jobs rejoués dès qu'ils arrivent (86,95 → 92,4 fps à Kokiri,
+  53,6 → 58,0 au marché).
 - **#1098** Gohma au-dessus de 60 fps ; **#1106** lignes de test ; **#1242** clears ASTC ; **#1250** upload
   sparse à court de staging.
 - Descripteurs gardés (#794-800), retry d'upload (`af1e8110`), cible dessinée/finalisée (`7c641b34`),
   écritures GPU trouvées sous une plus petite (`3a183492`).
 
-## 3. Vérifications
+## 4. Vérifications
 
 - 16/16 tests du menu ; tests textures/mémoire (`target_image_pool`, `target_pool_cap`, `vram_pressure`,
   `vram_compact`, `bc_levels`, `astc_bc_policy`) ; `test_sparse_staging_failure`, `test_upload_retry`,
   `test_drawn_target`, `test_gpu_write_intervals`, `test_bc_scratch_layers`.
 - Suite complète : les échecs restants sont pré-existants (fixtures POSIX/Windows, dépôt Tooling absent).
 
-## 4. Installation et mises à jour
+## 5. Installation et mises à jour
 
 - Met à jour l'installation existante en gardant saves et options.
 - **Les mises à jour restent disponibles** : le launcher/updater n'est pas modifié.
@@ -66,12 +93,15 @@
 ## Remerciements
 
 - **@mrmimmmme** : pour la touche **Run** (pouvoir binder une touche pour la course), l'onglet **NVIDIA** (les
-  reglages du constructeur au meme endroit) et le **widescreen** rendu visible des l'onglet Display.
-- **@444nils** : pour la **nouvelle icone** OcaDim, desormais portee par l'executable.
+  réglages du constructeur au même endroit) et le **widescreen** rendu visible depuis l'onglet Display.
+- **@444nils** : pour la **nouvelle icône** OcaDim, désormais portée par l'exécutable.
 
-## 5. Connu
+## 6. Connu
 
 - **Shaders manquants** : `cache/longshot_driver_faults.txt` mémorise les programmes sur lesquels le pilote a
   planté une fois et ne les redemande plus. Le supprimer (ou `RX_VK_DRIVER_FAULTS=0`) les redemande.
 - **#1462** (libération des cibles finalisées, VRAM des longues sessions) n'est pas inclus : il demande le
   sweep des cibles mortes absent de cette base.
+- **Un crash au démarrage a été vu une fois** sur RX 9070 XT (`amdvlk64.dll+0xef61f`, pendant l'import des pools,
+  FSR 4.1.2 chargé) : non reproduit sur les lancements suivants. Si ça revient, `RX_VK_FSR4=0` ou
+  `RX_VK_PARALLEL=1` isolent la cause.
