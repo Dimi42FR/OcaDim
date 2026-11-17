@@ -659,6 +659,9 @@ A build reads and writes tens of gigabytes. When the game folder or the build fi
 | `RX_PGO=gen` or `RX_PGO=<file>` | The hot code counting its branches for a profile, or built with one (`make_game.py` passes the shipped profile) |
 | `RX_VK_PGO=gen` or `RX_VK_PGO=<file>` | The Vulkan back end's own files counting their branches for a profile, or built with one (`make_game.py` passes `work/longshot_vk.profdata` when it is there, else the committed `assets/profiles/longshot_vk.profdata.xz`; a compiler that can't read it builds without): [the renderer's play profile](#the-renderers-play-profile) |
 | `RX_HOT_OPT=<level>` | The hot pieces' optimisation level (default `O2`); `O1` for [a faster build for development](#a-faster-build-for-development) |
+| `LONGSHOT_CHUNK_OPT=all` or `=<file>` | Compiles the lifted chunks at `-O2` instead of `-O1`: `all`, or a file naming them (a `code_*.c` a line, or an `f_` name a line for the chunks that define it). A compile-only choice like `RX_HOT_OPT`: the lift's C is unchanged, the object keys name the flags, and a `-O2` object is never taken for a `-O1` one. The hot pieces keep `RX_HOT_OPT`. The cut below brings an all-`O2` build from 23:06 to 4:37 here; [an all-O2 build](#an-all-o2-build) has what it measured |
+| `LONGSHOT_CHUNK_PART_MB=<MB>` | With `LONGSHOT_CHUNK_OPT`: the size of the parts a chunk sent to `-O2` is cut into (default 6), each compiled as its own object beside the build's others. `-O2`'s passes cost more than linearly in a function's size, so the parts compile sooner than the whole chunk and side by side; the lifted C is not changed. `0` compiles the whole chunks, as before |
+| `LONGSHOT_CHUNK_LEVEL=<level>` | With `LONGSHOT_CHUNK_OPT`: the optimisation level its chunks compile at (default `O2`; `O1`, `O2` or `O3`). The level is in the object key, so a `-O3` object is never taken for a `-O2` one |
 | `LONGSHOT_SPLIT_GIANTS=<KB>` | Compiles each lifted function of 256 KB of C or more as pieces of about `<KB>` (8 is the measured best) cut at its labels, with a dispatch loop under its own name (`nx2/split_giants.py`). Measured on a Ryzen 5 5600, 16 GB: the 15 giant-function chunks compile 2.6x faster one at a time (their largest compile's peak memory 2,263 -> 586 MB; a single 2-6 MB function's peak falls to about a fifth), and a whole first build's compile (`--jobs 4`) takes ~21% less time, with ~6% less summed compiler memory. The lifted files are not changed (`build.py` compiles a copy). The hot pieces (`code_hot*.c`, built at `-O2`) are split too: a hot function of 256 KB or more, like the 4.79 MB `f_81b8c000`, is no longer one translation unit (on a Ryzen 9 9950X3D a 47-function hot-list build from scratch went 8 min 26 s -> 3 min 19 s, its compile 446 s -> 137 s; the giant alone 438 s -> 56 s). On by default at 8; `0` turns it off |
 | `LONGSHOT_LIGHT_PASSES=0` | Turns off the light passes (on by default): lifted chunks whose functions are all under `LONGSHOT_LIGHT_PASSES_KB` (1024) KB of C compile at `-O1` without its module passes (the inliner, ipsccp, globalopt, function-attrs ...; `-mllvm -opt-disable`). Those chunks compile about a fifth faster for ~3% more code (Ryzen 5 5600, `--jobs 4`). 56 of the game's 75 chunks are light (-21% on them, ~15% of a first build's compile), their `LONGSHOT_SPLIT_GIANTS` pieces too; the giant functions' chunks and the hot pieces keep every pass. It needs LLVM 22 or newer (`-opt-disable`): with an older clang (a Linux system's) the build says so and keeps every pass |
 | `RX_MARCH=<level>` | The CPU level to build for. Default: `native` (this PC's own CPU) on a CPU with `x86-64-v3`'s features, else `x86-64-v2`, else `x86-64`; `x86-64-v3` if clang can't say what `native` is here. With `native` the CPU clang finds goes into the object keys (`-DLONGSHOT_NATIVE_CPU=`, in the build log), so another CPU compiles again ([issue 182](https://git.magicbean.dev/MagicBeanDev/Longshot/issues/182)). `RX_MARCH=x86-64-v3` builds as before. `native` also tunes for this CPU (the Steam Deck's Zen 2 too), so there is no tuning switch. The third-party code is built for `x86-64-v3` on every CPU that has it, not `native`, so the objects a release ships fit (`LONGSHOT_THIRD_PARTY_OBJECTS`); with an `RX_MARCH`, or below v3, it is built as the rest |
@@ -739,6 +742,41 @@ what you test.
 
 **Never use it for numbers:** no fps or frame-time measurements, build timings, hitch or stutter checks, profiles,
 and no release or player build. Build those with the defaults.
+
+#### An all-O2 build
+
+The lifted chunks compile at `-O1` by default (`OPT` in `nx2/build.py`); the hot pieces at `-O2`. `LONGSHOT_CHUNK_OPT=all`
+builds every lifted chunk at `-O2` too (or a file of `code_*.c` / `f_` names selects some), for checking what the extra
+optimisation does to a scene. The game runs faster; without the cut below the build costs several times the compile,
+because `-O2`'s passes cost more than linearly in a function's size: on one 25 MB chunk here GVN alone was 43-46% of
+the compile.
+
+So the build cuts each chunk it sends to `-O2` into parts of about `LONGSHOT_CHUNK_PART_MB` (6) MB of estimated compile
+cost, at function starts, each with the chunk's declarations and each its own object (`nx2/build.py` `chunk_parts`, the
+lift's own `chunks._cut`). The lifted C is not changed. The parts keep each function's `-O2` passes small and let the
+work spread over more compilers, and they keep the compilers' memory traffic apart: a 25 MB chunk compiled 32 at a time
+takes 500-900 s, a 5 MB part 10-50 s. `LONGSHOT_CHUNK_PART_MB=0` builds the whole chunks, as before.
+
+Measured on a Ryzen 9 9950X3D (32 threads, 62 GB), from scratch on one lift (75 files, 1.4 GB of C), one build at a time,
+nothing else running:
+
+| | whole chunks | 6 MB parts |
+|---|---|---|
+| whole build | 23:06 | 4:37 |
+| compile | 1,384 s | 268 s |
+| the lifted code's compiles, summed | 31,675 s in 76 files | 7,859 s in 331 files |
+| longest single compile | 960 s (`code_010.c`) | 91 s (`code_025_1.c`) |
+| `longshot` | 452,820,200 B | 452,244,912 B |
+
+The per-chunk probe says where it comes from: `code_022.c` 133 -> 87 s of compile CPU in 4 parts (its longest compile
+133 -> 28 s), `code_008.c` 162 -> 73 s, `code_000.c` 39 -> 26 s. The objects are the same size; the exe is 0.13%
+smaller because the inliner sees one part at a time (the hot pieces are not cut, so the game's hot path is unchanged).
+A headless run of the parts build presented 6,885 frames in 30 s with no crash or assertion.
+
+The parts are written to `<build>/split/`; a stamp beside them names the chunk's content and the cut, so a build that
+changed nothing writes nothing. A chunk's edit writes its parts again (the cut may move at a boundary) and compiles the
+parts that changed, not the whole chunk. A `--kept-lift` build is not cut: its objects were built from the whole chunks,
+and a player's update has no `LONGSHOT_CHUNK_OPT`.
 
 #### Links skipped, and the compile commands
 
