@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define MKWVK_API_VERSION 30
+#define MKWVK_API_VERSION 31
 enum { HOS_MONITOR_CURRENT = 1, HOS_MONITOR_PRIMARY = 2 };
 typedef struct MkwVkMonitor {
     char id[512];             /* opaque persistent preference; never a runtime handle or list index */
@@ -364,6 +364,10 @@ typedef struct MkwVkRenderer {
        game's thread, before any draw uses it: what the back end kept ready for it can be loaded now (gpu/vk/vk_programs.cpp).
        Its stages' code and control sections are in the game's memory at this call */
     void (*nvn_program_created)(const nvn_prog *p);
+    /* (version 31, longshot) nvn_invalidate when nothing in [gpu, gpu + size) can make it wait: 1, done (the host keeps the
+       game thread's virtual core for it); 0, call nvn_invalidate (with the core given up, as before). Never waits: no lock
+       but a short one of its own (RX_VK_WB_MAX_KB's table), any thread */
+    int (*nvn_invalidate_quick)(uint64_t gpu, uint64_t size);
 } MkwVkRenderer;
 
 /* the DLL's one export: null when Vulkan is not usable (the executable then draws nothing) */

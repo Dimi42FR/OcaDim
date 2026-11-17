@@ -264,6 +264,14 @@ meter read late is the white flashes the wait is there for. `RX_VK_LOG_READBACK_
 every 3,000 calls (calls, waits and their time, how many had the newest submission as their writer, how many were read
 late), which is how the ranges worth a rule are found on a PC.
 
+An invalidate gives up the calling thread's virtual core while it may wait, so another of the game's threads can run.
+Most of them have nothing to wait for: OoT's model work invalidates each shape's occlusion-query slot for each view, and
+the CPU writes those counts itself. When no page of the range was ever written back by the GPU, no texture the GPU wrote
+was ever listed there and no live texture's storage lies there, the call is finished with the core kept
+(`invalidate_quick`, `vk_replay.cpp`, read without a lock from marks that are set and never cleared: `gpu/vk/page_marks.h`).
+`RX_VK_INVALIDATE_QUICK=0` gives the core up for every call, as before. The line `vk: invalidates since the last readbacks
+line` comes after each `readbacks of GPU results` line and counts the calls that kept the core and the ones that gave it up.
+
 Native HDR PsychoV35 automatically enables the compatible RGBA16F scene path for DLSS/DLAA, AMD FSR 4 (and its Native AA), Intel XeSS (and its Native AA), and FSR 3.1 on the shared chain.
 `RX_VK_PSYCHOV35_DLSS=0` disables that route for troubleshooting; unset, empty or nonzero enables it. The value is read
 once per process, so restart after changing `longshot_env.txt`. The existing flag name is retained for existing

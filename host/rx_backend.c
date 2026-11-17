@@ -570,6 +570,10 @@ void rx_nvn_write_texels(const nvn_tex *t, unsigned level, unsigned layer0, cons
        : wgr_nvn_write_texels(t, level, layer0, r, src, row, img);
 }
 void rx_nvn_invalidate(uint64_t gpu, uint64_t size) {
+    /* (longshot) nothing there it can wait for (the back end's lock-free look: nothing ever written back, no texture the GPU
+       wrote): done with the core kept, as on the console, where the call is a cache operation. OoT makes it per shape per
+       view in its model work, each a release of the core and a wait for one again */
+    if (vk && vk->nvn_invalidate_quick && vk->nvn_invalidate_quick(gpu, size)) return;
     /* The callback can wait for replay or GPU write-back: let another guest thread use this core meanwhile. */
     const int away = hos_vcore_away();
     vk ? vk->nvn_invalidate(gpu, size) : wgr_nvn_invalidate(gpu, size);

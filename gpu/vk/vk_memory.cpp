@@ -43,6 +43,7 @@
 #include "sparse_mirror.h"
 #include "sparse_spare.h"
 #include "linux_pressure.h"
+#include "page_marks.h"   // (wb_ever: invalidate_quick)
 #include "page_table_census.h"   // (the page table's windows, and the census of the pools outside them)
 #include <atomic>
 #include <unordered_set>
@@ -1635,11 +1636,16 @@ WbPages wb_parts;
 // (longshot) the pages' last write in place (part 0: note_direct_write), for the late pages' fix: no record of which words,
 // so a capture with such a page late waits, as before, whatever else writes it back
 WbPages wb_direct;
+// (longshot) and whether a page was ever written back, read without wb_pages_mu: wb_pages' "ever" for invalidate_quick
+// (vk_replay.cpp), on the game's thread with its virtual core held. Marked under wb_pages_mu before the pages' values, which
+// are never dropped either (page_marks.h: the order)
+PageMarks<kPages, kChunkPages> wb_ever;
 // (RX_VK_LOG_RB_WRITERS, diagnostics: set once it is on) each range noted, to rb_page_note (below, with the writers it keeps)
 void (*wb_writers_hook)(uint64_t lo, uint64_t hi, uint64_t value, uint64_t part) = nullptr;
 void wb_pages_note(uint64_t guest_lo, uint64_t guest_hi, uint64_t value, uint64_t part) {
     if (!value || guest_hi <= guest_lo) return;
     std::lock_guard lk(wb_pages_mu);
+    wb_ever.mark(guest_lo >> kPageShift, (guest_hi - 1) >> kPageShift);
     for (uint64_t p = guest_lo >> kPageShift; p <= (guest_hi - 1) >> kPageShift; p++) {
         wb_pages.set(p, value);
         if (part || !wb_parts.empty()) wb_parts.set(p, part);
@@ -1648,6 +1654,11 @@ void wb_pages_note(uint64_t guest_lo, uint64_t guest_hi, uint64_t value, uint64_
     if (wb_writers_hook) wb_writers_hook(guest_lo, guest_hi, value, part);
 }
 } // namespace
+/// (longshot) Whether any page of [guest, guest + size) was ever written back: memory_writeback_value's *ever, without its lock
+/// (invalidate_quick, on the game's thread with its virtual core held)
+bool memory_writeback_ever(uint64_t guest, uint64_t size) {
+    return size && wb_ever.any(guest >> kPageShift, (guest + size - 1) >> kPageShift);
+}
 /// The newest write-back value of the range's pages (0: none; *ever: whether any page was ever written back). With part
 /// and whole: *part is the newest part that wrote any of them back from a mirror (0: none), *whole the newest value among
 /// the pages with no part (written in place: their whole submission is what a read waits for; 0: none)

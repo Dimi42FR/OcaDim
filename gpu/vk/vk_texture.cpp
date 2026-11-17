@@ -67,6 +67,7 @@
 #include "guest_holes.h"
 #include "target_overlap.h"
 #include "target_pool.h"
+#include "page_marks.h"   // (vw_ever: invalidate_quick)
 #include "dead_targets.h"
 #include "host_shaders/block_linear_unswizzle_2d_comp_spv.h"
 #ifndef LONGSHOT_ENV_H   // (env_on: the switches' one rule)
@@ -3406,6 +3407,10 @@ namespace {
 constexpr uint64_t kFlushMax = 16ull << 20;   // (the small ones: render targets that size and more are not)
 std::mutex vw_mu;
 std::map<uint64_t, uint64_t> vw;   // (storage start -> end of the GPU-written textures of virtual pools that may be flushed)
+// (longshot) and the 4 KB pages (GPU addresses below 512 GB) of every texture ever listed there, read without vw_mu: for
+// invalidate_quick (vk_replay.cpp), on the game's thread with its virtual core held. Marked under vw_mu as a texture is listed,
+// never taken off (page_marks.h: the order)
+PageMarks<(1ull << 39 >> 12), (1ull << 16)> vw_ever;
 bool flushable(const Texture& t) {
     if (!t.guest_size || t.guest_size > kFlushMax || t.astc || t.bc || t.sparse || t.skip ||
         t.samples != VK_SAMPLE_COUNT_1_BIT || t.aspect != VK_IMAGE_ASPECT_COLOR_BIT || t.bpb <= 0 || !t.image ||
@@ -3418,6 +3423,7 @@ bool flushable(const Texture& t) {
 void vw_note(Texture& t) {
     if (t.vw_listed || !flushable(t)) return;
     std::lock_guard lk(vw_mu);
+    vw_ever.mark(t.gpu >> 12, (t.gpu + t.guest_size - 1) >> 12);
     uint64_t& end = vw[t.gpu];
     end = std::max(end, t.gpu + t.guest_size);
     t.vw_listed = true;
@@ -3926,6 +3932,14 @@ bool texture_gpu_written_in(uint64_t lo, uint64_t size) {
     for (auto it = vw.lower_bound(lo > kFlushMax ? lo - kFlushMax : 0); it != vw.end() && it->first < hi; ++it)
         if (it->second > lo) return true;
     return false;
+}
+
+/// (longshot) Whether a texture the GPU wrote was ever listed in [lo, lo + size), texture_gpu_written_in's list, without its lock
+/// (invalidate_quick): false only where texture_gpu_written_in is false. Ranges reaching past 512 GB are not followed: true
+bool texture_gpu_written_ever(uint64_t lo, uint64_t size) {
+    if (!size) return false;
+    if (lo >= (1ull << 39) || size > (1ull << 39) - lo) return true;
+    return vw_ever.any(lo >> 12, (lo + size - 1) >> 12);
 }
 
 int texture_flush_to_guest(uint64_t lo, uint64_t size) {

@@ -3884,6 +3884,17 @@ void early_check_read(uint64_t gpu, uint64_t size, uint64_t v, uint64_t whole, u
     e->gen_m = ec_full_begun.load();   // (after the copy)
     ec_cv.notify_one();
 }
+// (longshot) the invalidates that kept their virtual core (invalidate_quick) and the ones that gave it up, counted on each
+// thread and added here every 256 calls (the kept ones come per shape per view: no shared line written at each), on the
+// readbacks line's cadence below
+std::atomic<int64_t> inv_kept{0}, inv_gave{0};
+void inv_count(bool kept) {
+    thread_local uint32_t k = 0, g = 0;
+    (kept ? k : g)++;
+    if (k + g < 256) return;
+    inv_kept.fetch_add(k, std::memory_order_relaxed), inv_gave.fetch_add(g, std::memory_order_relaxed);
+    k = g = 0;
+}
 void invalidate(uint64_t gpu, uint64_t size) {
     static const bool log_inv = env_on("RX_VK_LOG_INVALIDATE");
     static std::atomic<int> logged{0};
@@ -4088,6 +4099,9 @@ void invalidate(uint64_t gpu, uint64_t size) {
                          (long long)st_early_splits.exchange(0), (long long)r, r ? st_early_rec_ns.exchange(0) / (double)r / 1e6 : 0.0,
                          (long long)st_early_rec_late.exchange(0));
                 }
+                logf("vk: invalidates since the last readbacks line: %lld kept their virtual core (nothing there to wait for), %lld "
+                     "gave it up (counted by 256 a thread; RX_VK_INVALIDATE_QUICK=0: none kept)",
+                     (long long)inv_kept.exchange(0), (long long)inv_gave.exchange(0));
             }
         }
     }
@@ -4133,6 +4147,38 @@ void invalidate(uint64_t gpu, uint64_t size) {
     }
     std::lock_guard lk(replay_mu);
     texture_flush_to_guest(gpu, size);
+}
+/// (longshot) invalidate with the game's virtual core kept (host/rx_backend.c rx_nvn_invalidate, nvn_invalidate_quick): 1 when
+/// invalidate would find nothing in [gpu, gpu + size) to wait for or to write back, done here as it would be (the CPU's read
+/// noted for the write-backs left out, memory_note_cpu_read: the one thing it does then); 0 when it may find something, and
+/// the host calls it with the core given up, as before. Read without a lock, from marks set and never taken off
+/// (page_marks.h): no page there ever written back (memory_writeback_ever: invalidate's `ever`, none of its waits), no texture
+/// the GPU wrote ever listed there (texture_gpu_written_ever: texture_gpu_written_in false, no texels to write back) and no
+/// live texture's storage (tex_pages_any, as invalidate reads it: no catch-up, behind or not). OoT's model calc invalidates
+/// each shape's 64-byte occlusion-query slot, per view, from the stage slot jobs: the counts are written there on the CPU
+/// (REPORT_COUNTER and occ_collect, guest_cpu_write), never written back, and each call gave up the core, let another thread
+/// on it and queued to get one back, for nothing to wait for. On the console the call is a cache operation and the thread
+/// runs on. It takes no lock but memory_note_cpu_read's (wb_learn_mu, a leaf, only with RX_VK_WB_MAX_KB) and never waits,
+/// so holding the core here cannot keep another guest thread from what it waits for. Not with invalidate's diagnostics on
+/// (RX_VK_LOG_INVALIDATE, RX_VK_LOG_READBACK), nor with RX_VK_INVALIDATE_WAIT=1 (every range caught up, as before); ranges
+/// past 512 GB (virtual pools, not followed) always go the slow way. RX_VK_INVALIDATE_QUICK=0: never, as before
+int invalidate_quick(uint64_t gpu, uint64_t size) {
+    static const bool on = [] {
+        const char* q = getenv("RX_VK_INVALIDATE_QUICK");
+        const char* rb = getenv("RX_VK_LOG_READBACK");
+        const bool v = (!q || atoi(q) != 0) && !env_on("RX_VK_LOG_INVALIDATE") && !env_on("RX_VK_INVALIDATE_WAIT") &&
+                       !(rb && atoll(rb) >= 0);
+        logf("vk: invalidates with nothing to wait for keep their virtual core: %s", v ? "on" : "off (RX_VK_INVALIDATE_QUICK=0, "
+             "RX_VK_INVALIDATE_WAIT or invalidate's logs)");
+        return v;
+    }();
+    constexpr uint64_t kFollowed = 1ull << 39;   // (tex_pages' and the marks' window: GPU addresses below 512 GB)
+    const bool kept = on && (!size || (gpu < kFollowed && size <= kFollowed - gpu && !tex_pages_any(gpu, size) &&
+                                       !texture_gpu_written_ever(gpu, size) &&
+                                       !memory_writeback_ever(host->gpu_guest(gpu), size)));
+    if (kept) memory_note_cpu_read(host->gpu_guest(gpu), size);
+    inv_count(kept);
+    return kept;
 }
 void do_texture_released(const nvn_tex* t) {
     std::lock_guard lk(replay_mu);
@@ -7074,6 +7120,7 @@ void fill_replay_table(MkwVkRenderer& t) {
     t.nvn_read_texels = read_texels;
     t.nvn_write_texels = write_texels;
     t.nvn_invalidate = invalidate;
+    t.nvn_invalidate_quick = invalidate_quick;
     t.nvn_pool_created = memory_pool_created;
     t.guest_imported = memory_guest_imported;
     t.nvn_vmap_changing = vmap_changing;
