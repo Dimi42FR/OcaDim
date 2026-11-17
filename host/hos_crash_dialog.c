@@ -1292,7 +1292,8 @@ static int build_report(const Shown *s, Buf *json, Buf *shown, const char **why)
     char os[sizeof in.system];
     snprintf(os, sizeof os, "%s", f->os[0] ? f->os : in.system);
     const char *place = f->place[0] ? f->place : HOS_CRASH_TITLE_AND_INTRO;
-    putf(json, "{\n  \"version\": \"%s\",\n  \"release\": %s", version, in.release ? "true" : "false");
+    putf(json, "{\n  \"client\": \"Longshot\",\n  \"version\": \"%s\",\n  \"release\": %s", version,
+         in.release ? "true" : "false");
     put_field(json, ",\n  ", "os", os, HOS_CRASH_MAX_OS, s, devices, nd);
     put_field(json, ",\n  ", "renderer", f->renderer, HOS_CRASH_MAX_RENDERER, s, devices, nd);
     put_field(json, ",\n  ", "gpu", f->gpu, HOS_CRASH_MAX_GPU, s, devices, nd);
@@ -1306,7 +1307,7 @@ static int build_report(const Shown *s, Buf *json, Buf *shown, const char **why)
     put(json, settings.s);
     put(json, "\n}\n");
     /* (the page: the card's rows, the crash's first lines, what else goes; the whole of it is the file Show all of it opens) */
-    putf(shown, "Version: %s\nRelease build: %s\nOperating system: %s\nRenderer: %s\nGraphics card: %s\nCPU and RAM: %s\nMap: %s\n"
+    putf(shown, "Client: Longshot\nVersion: %s\nRelease build: %s\nOperating system: %s\nRenderer: %s\nGraphics card: %s\nCPU and RAM: %s\nMap: %s\n"
                 "Settings: %d (%d changed from the defaults)\n\nThe crash:\n",
          version, in.release ? "Yes" : "No (a local or modified build)", os, f->renderer[0] ? f->renderer : "not known",
          f->gpu[0] ? f->gpu : "not known", f->cpu[0] ? f->cpu : "not known", place, in.settings, in.changed);
