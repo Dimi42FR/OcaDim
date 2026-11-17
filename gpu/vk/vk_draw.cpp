@@ -3952,8 +3952,7 @@ VkDescriptorBufferInfo uniform_range(const NvnState& s, const Stage& st, uint32_
         // (updates the stream made to this range in this submission or ones still in flight: a copy with them in)
         // (room first: the overlay copies into the stream's mapping, which a move to a bigger stream in the middle would change)
         if (stream_reserve(n, align))
-            if (const uint64_t at = ub_overlay(u.addr, n, cur->mapped, [&](uint64_t bytes) { return stream_alloc(bytes, align); });
-                at != UINT64_MAX) {
+            if (const uint64_t at = ub_overlay(u.addr, n, cur->mapped, stream_alloc, align); at != UINT64_MAX) {
                 FINE_N(FC_UBO_OVERLAY, 1);
                 return {cur->stream, at, n};
             }
@@ -3979,8 +3978,8 @@ VkDescriptorBufferInfo uniform_range(const NvnState& s, const Stage& st, uint32_
         BufferRef b = snapshot && !gpu_written ? BufferRef{} : gpu_buffer_bind(u.addr, n, false);
         // (the guard's: after a write in this submission, then in an earlier one; bound in place, copied all the same)
         static std::atomic<int64_t> after_gpu[2][2];
-        if (gpu_written) after_gpu[gpu_written - 1][b && b.offset % align == 0 ? 0 : 1].fetch_add(1, std::memory_order_relaxed);
-        if (b && b.offset % align == 0) return {b.buffer, b.offset, n};
+        if (gpu_written) after_gpu[gpu_written - 1][b && !(b.offset & (align - 1)) ? 0 : 1].fetch_add(1, std::memory_order_relaxed);
+        if (b && !(b.offset & (align - 1))) return {b.buffer, b.offset, n};   // (a power of two: Vulkan's, and stream_reserve asks it)
         // (the sharing and the batched reads are the snapshot's alone: with it off, a range that can't be bound in place, unaligned
         // or outside the pools, is read and copied at its binding as before, and bind_descriptors keeps its delta push)
         static const int dedup = snapshot ? ub_snap_dedup_mode() : 0;   // (the recording's earlier copy of the range: ub_snap_slot)
@@ -5384,11 +5383,8 @@ bool dyn_same(const float* fp, int nf, const uint32_t* up, int nu, const uint8_t
     if (nf <= 0 || nu <= 0 || nb <= 0) return false;
     for (int i = 0; i < nf; i++)
         if (fp[i] != cfp[i]) return false;
-    for (int i = 0; i < nu; i++)
-        if (up[i] != cup[i]) return false;
-    for (int i = 0; i < nb; i++)
-        if (raw[i] != craw[i]) return false;
-    return true;
+    // (the words and the bytes each at once: a draw that keeps its state, the usual one, compared every one of them in turn)
+    return !std::memcmp(up, cup, (size_t)nu * sizeof *up) && !std::memcmp(raw, craw, (size_t)nb);
 }
 constexpr int kDynF = 13, kDynU = 35;
 struct DynFast {
@@ -6444,7 +6440,7 @@ void log_dump_draw(const NvnState& s, const Program& p, const DrawArgs& d) {
         const nvn_p_bind_buf& u = s.ubo[0][i];
         if (!u.addr) continue;
         float f[16] = {};
-        const bool upd = ub_overlay(u.addr, sizeof f, (uint8_t*)f, [](uint64_t) { return (uint64_t)0; }) != UINT64_MAX;
+        const bool upd = ub_overlay(u.addr, sizeof f, (uint8_t*)f, [](uint64_t, uint64_t) { return (uint64_t)0; }, 0) != UINT64_MAX;
         if (!upd) host->gpu_read(u.addr, f, sizeof f);
         n += snprintf(line + n, sizeof line - n, " C%d%s %#llx+%#llx [", i + 3, upd ? "*" : "", (unsigned long long)u.addr,
                       (unsigned long long)u.size);
@@ -6472,7 +6468,7 @@ void log_dump_draw(const NvnState& s, const Program& p, const DrawArgs& d) {
         if (!u.addr) continue;
         float f[16] = {};
         // (as the draw reads it: guest memory with the stream's uniform updates over it; '*': updated)
-        const bool upd = ub_overlay(u.addr, sizeof f, (uint8_t*)f, [](uint64_t) { return (uint64_t)0; }) != UINT64_MAX;
+        const bool upd = ub_overlay(u.addr, sizeof f, (uint8_t*)f, [](uint64_t, uint64_t) { return (uint64_t)0; }, 0) != UINT64_MAX;
         if (!upd) host->gpu_read(u.addr, f, sizeof f);
         n += snprintf(line + n, sizeof line - n, " c%d%s %#llx+%#llx [", i + 3, upd ? "*" : "", (unsigned long long)u.addr,
                       (unsigned long long)u.size);
@@ -8112,7 +8108,7 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
             ParLock lk;
             ensure_layout(p);
         }
-        const int64_t pipes_new = use_counters.pipes_new;
+        const int64_t pipes_new = use.on ? use_counters.pipes_new : 0;   // (another file's thread-local: read for the life log only)
         pe = graphics_pipeline(p, s, at, topo, types);
         if (use.on) use.pipeline(pe->ready.load(std::memory_order_acquire), use_counters.pipes_new != pipes_new);
     }
@@ -11027,7 +11023,7 @@ void dispatch(VkCommandBuffer cmd, NvnState& s, uint32_t x, uint32_t y, uint32_t
         static const char* want = getenv("RX_VK_LOG_PUSH");
         static bool done;
         char hex[24];
-        snprintf(hex, sizeof hex, "%016llx", (unsigned long long)cp->key);
+        if (want && !done) snprintf(hex, sizeof hex, "%016llx", (unsigned long long)cp->key);   // (only with the switch: once per dispatch)
         if (want && !done && !strncmp(hex, want, strlen(want))) {
             done = true;
             char line[1600];
