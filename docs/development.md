@@ -304,7 +304,7 @@ format, tone mapper, encoding and luminance changes reset the corresponding hist
 | `RX_VK_FRAMEGEN=0`, `RX_VK_FRAMEGEN_MULT=<2..8>`, `RX_VK_PACE=0`, `RX_VK_UPSCALE=<0..2>` | No frame generation whatever the menu says; over the options file: its multiplier, frame pacing, the upscaling filter |
 | `RX_VK_DEVICE=<n>` | The graphics card listed as `vk: device <n>` in the log, over the menu's GPU device |
 | `HOS_TRACE=1` | Every Horizon call logged, as `--trace` does |
-| `HOS_TEST_ALLOC_REFUSE=<text>` | A test, off when unset: every host allocation through `hos_xmalloc` / `hos_xcalloc` / `hos_xrealloc` (`host/mkw_glue.c`) whose label contains the text is refused, as at Windows' commit limit, to see what a player sees there: 5 s of tries, the out-of-memory line and notice, then the game stops. `recording handle set` fails at the first recording, before the title; `recording copy` in play |
+| `HOS_TEST_ALLOC_REFUSE=<text>` | A test, off when unset: every host allocation through `hos_xmalloc` / `hos_xcalloc` / `hos_xrealloc` (`host/mkw_glue.c`) whose label contains the text is refused, as at Windows' commit limit, to see what a player sees there: 5 s of tries, the out-of-memory line and notice, then the game stops. `recording handle set` fails at the first recording, before the title; `recording copy` in play. `renderer` (the renderer's C++ allocations, `gpu/vk/vk_main.cpp` `new_refused`, issue 1280): at the 600th present one allocation of 1 PB is asked for, refused on any PC, and waited for as at the limit |
 | `HOS_CV_SIGNAL_ALWAYS` (set) | SignalConditionVariable takes its lock and wakes even when no thread waits, as before it returned at once for no waiter (`host/nn_os_sync.c`); a control for a hang or a movie stutter |
 | `HOS_GPU_ALLOC_RETRY=0` | A model's material-block allocations from a full heap (the OptimizeChangeBank thread's two CPU buffers and two GPU-memory calls in f_804566e0) not tried in the heap's parents, as shipped (`host/oot_heap_retry.c`, issue 1697) |
 | `HOS_GPU_ALLOC_TEST_FAIL=<n>` or `<gpu>,<cpu>` | A test: the first n of those allocations of each kind (or that many of the GPU memory and of the CPU buffers) refused by the heap they name, as a full heap would, so the retry runs |
@@ -1318,7 +1318,7 @@ under Audio with its existing settings keys and behavior unchanged.
 The host reads the startup output preference from `hos_options_file()`, the same settings path the menu receives through
 `MkwVkHost.options_path`: `HOS_OPTIONS_FILE`, then `--user`, otherwise beside the game. A missing or unchosen file means
 Default, without independently falling back to another settings file. API version 24 appends the playback callbacks after
-version 22's `take_text` and version 23's `options_path`, version 25 the microphone test's `mic_test`, version 26 the performance summary's `perf_info` and version 27 the frame trace's `main_thread_times` after it; build the host and renderer together. `tests/test_audio_output_devices.py`
+version 22's `take_text` and version 23's `options_path`, version 25 the microphone test's `mic_test`, version 26 the performance summary's `perf_info`, version 27 the frame trace's `main_thread_times` and version 28 the renderer's out-of-memory stop, `out_of_memory`, after it; build the host and renderer together. `tests/test_audio_output_devices.py`
 checks their positional wiring and layout, and `tests/test_audio_output_preferences.py` compiles the actual settings-path
 and preference modules together against synthetic settings files, without enumerating or opening a device.
 

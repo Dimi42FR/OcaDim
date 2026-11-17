@@ -217,6 +217,8 @@ extern volatile int hos_fps_timing;
 static void host_fps_timing(int on) { __atomic_store_n(&hos_fps_timing, on != 0, __ATOMIC_RELAXED); }
 int hos_thread_times_of(const char *name, int64_t out[3]);   /* (hos_thread.c) */
 static int host_main_thread_times(int64_t out[3]) { return hos_thread_times_of("sead::MainThread", out); }
+/* (version 28, issue 1280) the renderer's C++ allocations that its new_handler gave up on: the size is not known there */
+static void host_out_of_memory(const char *what) { hos_alloc_gave_up(0, what); }
 static void host_slept_ns(int64_t out[2]) {
     out[0] = __atomic_load_n(&hos_poll_slept_ns, __ATOMIC_RELAXED);
     out[1] = hos_slept_ns[1] + __atomic_load_n(&hos_acquire_slept_ns, __ATOMIC_RELAXED);
@@ -277,7 +279,7 @@ static const MkwVkHost vk_host = {
     host_romfs_dir, host_wide_menus, host_slept_ns, host_fps_timing, hos_prompts_live_parts, host_screen_size,
     host_take_text, hos_options_file,
     hos_audio_output_count, hos_audio_output_info, hos_audio_output_select, hos_audio_output_state,
-    hos_mic_test, hos_perf_info, host_main_thread_times,
+    hos_mic_test, hos_perf_info, host_main_thread_times, host_out_of_memory,
 };
 
 static const MkwVkRenderer *vk;   /* the Vulkan back end, when it was chosen and started */

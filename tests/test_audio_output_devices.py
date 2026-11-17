@@ -59,10 +59,10 @@ def check_host_callbacks(api, backend):
                 'audio_output_count': 'hos_audio_output_count', 'audio_output_info': 'hos_audio_output_info',
                 'audio_output_select': 'hos_audio_output_select', 'audio_output_state': 'hos_audio_output_state',
                 'mic_test': 'hos_mic_test', 'perf_info': 'hos_perf_info',
-                'main_thread_times': 'host_main_thread_times'}
+                'main_thread_times': 'host_main_thread_times', 'out_of_memory': 'host_out_of_memory'}
     assert len(fields) == len(table), 'Host interface/initializer lengths differ'
     assert fields[-len(expected):] == list(expected), \
-        'Performance info must follow the mic test, playback, take_text and options_path (version 27 appends main_thread_times)'
+        'Performance info must follow the mic test, playback, take_text and options_path (version 27 appends main_thread_times, 28 out_of_memory)'
     for field, value in expected.items():
         assert table[fields.index(field)] == value, 'Wrong host callback slot: ' + field
 
@@ -84,6 +84,8 @@ _Static_assert(offsetof(MkwVkHost, perf_info) == offsetof(MkwVkHost, mic_test) +
                "append performance info after the microphone test without shifting earlier callbacks");
 _Static_assert(offsetof(MkwVkHost, main_thread_times) == offsetof(MkwVkHost, perf_info) + sizeof(((MkwVkHost *)0)->perf_info),
                "append the main thread's times after performance info without shifting earlier callbacks");
+_Static_assert(offsetof(MkwVkHost, out_of_memory) == offsetof(MkwVkHost, main_thread_times) + sizeof(((MkwVkHost *)0)->main_thread_times),
+               "append the renderer's out-of-memory stop after the main thread's times without shifting earlier callbacks");
 int main(void) {
     char id[HOS_OUTPUT_ID_CAP] = "old";
     assert(audio_output_copy_id(id, sizeof id, "opaque=id") && !strcmp(id, "opaque=id"));
