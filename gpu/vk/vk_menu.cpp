@@ -192,6 +192,15 @@ const char* hn_vrs(int, int k) {
     return "Ombrage réduit à l'intérieur des surfaces, fin sur les contours : soulage le GPU des petites cartes. Le HUD et le "
            "texte restent nets. Désactivé : rien ne change.";
 }
+const char* tx_vcore(int v) {
+    static const char* const t[] = {"Auto", "Standard (2 s)", "Réactif (200 ms)"};
+    return t[v < 0 ? 0 : v > 2 ? 2 : v];
+}
+const char* hn_vcore(int, int k) {
+    if (k) return nullptr;
+    return "Combien de temps un thread peut attendre un cœur avant de tourner sans (2 s, ou 200 ms en Réactif). Réactif aide "
+           "les petits CPU, au prix de quelques échanges en plus. Prend effet après un redémarrage.";
+}
 const char* tx_fps_cap(int v) {
     if (v == -1) return "30";
     static const char* const t[] = {"60 (the console's)", "90", "120", "144", "165", "240", "Uncapped"};
@@ -1971,6 +1980,9 @@ Row rows[] = {
     {TAB_OCADIM, "Ombrage à taux variable", &opts.vrs, 0, 3, 1, tx_vrs,   // (OcaDim: VRS)
      "Réduit la finesse d'ombrage à l'intérieur des surfaces, la garde fine sur les contours : le GPU travaille moins. Le HUD "
      "et le texte restent nets. Désactivé : aucun changement. Auto et 2x visent les petites cartes.", hn_vrs, false, true},
+    {TAB_OCADIM, "Ordonnanceur de vcores", &opts.vcore_mode, 0, 2, 1, tx_vcore,   // (OcaDim: the wait before running without a core)
+     "Combien de temps un thread attend un cœur avant de tourner sans, et au bout de combien il passe devant les autres. "
+     "Standard : 2 s. Réactif : 200 ms, pour les petits CPU. Prend effet après un redémarrage.", hn_vcore, false, true},
     {TAB_DEBUG, "Robust buffers", &opts.robust, 0, 2, 1, tx_robust,
      "Bounds-checked buffer reads: a read past a buffer's end is dropped instead of stopping the GPU. Applies after a "
      "restart.", hn_robust, true, true},
@@ -2414,6 +2426,7 @@ const char* ini_key(const Row& r) {
     if (r.value == &opts.mem_guard) return "mem_guard";   // (OcaDim: French names, ASCII keys)
     if (r.value == &opts.drs) return "drs";
     if (r.value == &opts.vrs) return "vrs";
+    if (r.value == &opts.vcore_mode) return "vcore_mode";
     if (r.value == &opts.fps_cap) return "frame_rate_cap";   // (host/nn_vi.c reads it at the start, then HOS_OPT_FPS_CAP)
     if (r.value == &opts.upscale) return "upscaling";
     if (r.value == &opts.dlss) return "dlss";   // (as opts.dlss and RX_VK_DLSS)
