@@ -235,3 +235,11 @@ Code du garde-fou : `git stash` - « Garde-fou memoire (a retester en build prop
 
 Le budget VRAM reste **manuel** (Auto / 2 / 3 / 4 / 6 / 8 Go) et se contente de dire« PLAFOND DEPASSE » dans la ligne Memoire video. Pas d'eviction automatique des textures pour l'instant : on garde ce qui marche. L'eviction LRU, les formats compacts et la dedup restent notes pour plus tard, si un cas reel le demande.
 
+
+## Mesures de reference (2026-11-19)
+
+- **Place du marche** : 48 fps, 21,3 ms, 1 %% low 47,8 ms. Game 29,3 ms, GPU 10,2 ms (48 %%). VRAM 3,8/15,1 Go, pic 4,5 Go, 2840 textures, 2865 draws.
+- **Plaine d'Hyrule (herbe)** : 67 fps, 15,1 ms, 1 %% low 21,7 ms. Game 13,0 ms, GPU 8,5 ms (56 %%). VRAM 7,4/15,1 Go, 1755 textures, 3,2 Go, 2360 draws, 158 passes.
+
+Cible de la prepasse de profondeur et des lots statiques : la Plaine, 1 %% low 21,7 ms et GPU 8,5 ms.
+
