@@ -1,4 +1,4 @@
-# Reprendre la fusion — notre base `v0.0.2-fusion-base`, la 0.0.2 comme référence
+# Reprendre la fusion — notre base `v0.0.2-fusion-f1-fg-hdr`, la 0.0.2 comme référence
 
 Ce document est pour la session qui reprend. Il dit **ce qui marche, ce qui a cassé, et dans quel ordre
 avancer sans rien perdre**. La règle du projet tient en une phrase : **un build testé à la fois, jamais deux
@@ -6,10 +6,15 @@ changements sans mesure entre eux.**
 
 ## 1. Notre base, et la référence d'origine
 
-**La base est maintenant `F:\OcaDim-SAVE-17-11\build-fg-final-ok\`** (`longshot.exe` + `longshot_vk.dll`),
-posée le 2026-11-18 : le moteur fusionné **avec la frame generation AMD FSR 4 qui tourne**, vérifiée en jeu.
-Son commit est `588da818` sur `merge-amont`, **tagué `v0.0.2-fusion-base`** ; ses empreintes, sa commande de
-build, ses preuves et ses limites sont dans `build-fg-final-ok\BASE.md`.
+**La base est maintenant `F:\OcaDim-SAVE-17-11\build-f1-fg-hdr-ok\`** (`longshot.exe` + `longshot_vk.dll`),
+posée le 2026-11-18 : le moteur fusionné avec **le F1** (onglets Display/NVIDIA, touche Run), **les deux
+générations AMD** (FSR 4 4.0.2 et FSR 3.1 3.1.6, choisissables et applicables à chaud) et le **HDR de la FG
+corrigé** (frames générées en PQ), vérifiés en jeu. Son commit est `734d217e` sur `merge-amont`, **tagué
+`v0.0.2-fusion-f1-fg-hdr`** ; ses empreintes, sa commande de build, ses preuves et ses limites sont dans
+`build-f1-fg-hdr-ok\BASE.md`.
+
+La base précédente, `build-fg-final-ok` (commit `588da818`, tag `v0.0.2-fusion-base`), reste la référence
+« FSR 4 seule » si un comportement de la nouvelle base surprend.
 
 `F:\OcaDim-SAVE-17-11\build-0.0.2-1\` reste la **référence d'origine** : la 0.0.2 que le joueur connaît, avec
 la FSR 4 qui fonctionne. Tout ce qu'elle fait doit se retrouver dans le résultat final ; on la compare quand
@@ -18,6 +23,13 @@ un comportement surprend.
 Sources : branche **`merge-amont`** (le travail de fusion, 184 commits de l'amont) ou le tag `v0.0.2-1`
 (la 0.0.2 d'origine). Les deux sont dans `D:\Emulateur\Longshot-src\longshot-merge` (worktree) et
 `D:\Emulateur\Longshot-src\longshot`.
+
+**DLSS (NVIDIA)** : le code est celui de l'amont, intact, mais il n'est compilé qu'avec le SDK NVIDIA
+(`LONGSHOT_NGX_SDK`). Le Setup d'OcaDim demande la case (cochée par défaut) et livre `ngx/` :
+`--fetch-ngx-sdk --accept-nvidia-license` (`setup/OcaDimSetup/Setup.cs`, `WizardForm.cs`). Une RTX a alors
+DLSS, DLAA, DLSS Frame Generation et l'onglet NVIDIA du F1 (DLSS model, Reflex). **Les builds de
+développement de cette base n'ont pas le SDK** : ils sont AMD/FSR ; c'est un choix de build, pas une
+régression de code.
 
 ## 2. Ce que la fusion a cassé, et pourquoi — à ne pas refaire
 
@@ -118,7 +130,10 @@ dessine avec les mauvaises matrices une frame ou deux.
 | `D:\Emulateur\Longshot-src\longshot-merge` | branche `merge-amont` : moteur de l'amont + notre couche + la FG qui marche (`588da818`, tag `v0.0.2-fusion-base`) |
 | `D:\Emulateur\Longshot-src\longshot` | la 0.0.2-1, base saine, `v0.0.2-1` |
 | `F:\test` | le même build que la base, installé ; ini du joueur intact |
-| `F:\OcaDim-SAVE-17-11\build-fg-final-ok` | **NOTRE BASE** : binaires + `BASE.md` + le log qui la valide |
+| `F:\OcaDim-SAVE-17-11\build-f1-fg-hdr-ok` | **NOTRE BASE** : F1 + FSR 4/3.1 + HDR, binaires + `BASE.md` + le log qui la valide |
+| `F:\OcaDim-SAVE-17-11\build-fg-final-ok` | la base précédente, FSR 4 seule (`588da818`, `v0.0.2-fusion-base`) |
+| `F:\OcaDim-SAVE-17-11\build-hdr-ok`, `build-both-startup-ok` | les étapes HDR seule, puis 3.1/4 au démarrage |
+| `F:\OcaDim-SAVE-17-11\build-f1b-avant` | la version exacte avec l'ancien bug HDR (DLL `3EEC…`) |
 | `F:\OcaDim-SAVE-17-11\build-fg-fsr4-ok` | l'étape où la FSR 4 a généré pour la première fois (+ logs 3.1 refusée) |
 | `F:\OcaDim-SAVE-17-11\build-fg-avant-diag`, `build-fg-diag1`, `build-fg-diag2`, `build-fg-compteur-avant` | les étapes : avant diagnostics, sans FSR 4, avant le compteur juste |
 | `F:\OcaDim-SAVE-17-11\build-0.0.2-1` | **la 0.0.2 d'origine, FG comprise** (référence de comportement) |
