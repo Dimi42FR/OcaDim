@@ -1576,6 +1576,22 @@ const char* hn_drs(int, int k) {
     return "La 3D suit un temps d'image cible : elle baisse d'un palier quand les images sont manquées, remonte quand il y a "
            "de la marge. Jamais au-dessus de la résolution choisie, et celle-ci revient dès que la ligne est sur Désactivée.";
 }
+/// (OcaDim, étape 0 du budget VRAM) the numbers only: what the video memory holds, the driver's allowance, the peak since the
+/// start and the textures' count and bytes. Nothing is changed by reading it.
+const char* hn_vram(int, int k) {
+    if (k) return nullptr;
+    static char b[224];
+    static double peak = 0;
+    uint64_t used = 0, allowed = 0;
+    if (!vram_usage(&used, &allowed) || !allowed)
+        return "Mémoire vidéo : le pilote ne donne pas de budget sur cette machine.";
+    const double gb = used / 1073741824.0;
+    if (gb > peak) peak = gb;
+    snprintf(b, sizeof b,
+             "Mémoire vidéo : %.1f Go sur %.1f Go (pic %.1f Go). Textures : %d, %.1f Go. Lecture seule : rien n'est changé.",
+             gb, allowed / 1073741824.0, peak, texture_count(), texture_bytes() / 1073741824.0);
+    return b;
+}
 Row rows[] = {
     // Graphics, in sections: a heading row is a section's title (draw_options draws it, the selection steps over it). The
     // Quality preset first, as it sets rows in every section. (Reflex, Anti-Lag 2, the Upscaler and the DLSS model only where
@@ -1927,6 +1943,9 @@ Row rows[] = {
      "l'image, le HUD reste net. Paliers de l'upscaler, un changement toutes les 2 s au plus, jamais au-dessus de la "
      "résolution choisie dans Graphismes, et celle-ci revient dès que la ligne est sur Désactivée.",
      hn_drs, false, true},
+    {TAB_OCADIM, "Mémoire vidéo", nullptr, 0, 0, 0, nullptr,   // (OcaDim: étape 0 du budget VRAM, lecture seule)
+     "Affiche dans cette aide la mémoire vidéo utilisée, ce que le pilote autorise, le pic depuis le lancement, et le nombre "
+     "et la taille des textures. Rien n'est modifié : c'est la mesure qui servira au budget.", hn_vram, false, true},
     {TAB_DEBUG, "Robust buffers", &opts.robust, 0, 2, 1, tx_robust,
      "Bounds-checked buffer reads: a read past a buffer's end is dropped instead of stopping the GPU. Applies after a "
      "restart.", hn_robust, true, true},
