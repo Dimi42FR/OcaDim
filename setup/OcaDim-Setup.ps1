@@ -1,5 +1,5 @@
 <#
-  OcaDim 0.0.1 — the no-dependency installer (option B of setup/README-setup.md)
+  OcaDim 0.0.1 ??? the no-dependency installer (option B of setup/README-setup.md)
   Usage:
     -Install [-From <payload folder>]   copy the game to %LOCALAPPDATA%\OcaDim, desktop + Start-menu shortcuts
     -Play                               start the installed game
@@ -11,7 +11,7 @@ param([switch]$Install, [switch]$Play, [switch]$Uninstall, [string]$From)
 
 $ErrorActionPreference = 'Stop'
 $name = 'OcaDim'
-$version = '0.0.2'
+$version\ = '0.0.3'
 $exe = 'longshot.exe'
 $root = Join-Path $env:LOCALAPPDATA $name
 
@@ -20,7 +20,7 @@ function Banner {
     Write-Host ''
     Write-Host '        .--------------------------------------------.' -ForegroundColor $c
     Write-Host '        |            O  C  A  D  I  M               |' -ForegroundColor $c
-    Write-Host ("        |        native port  ·  {0}              |" -f $version) -ForegroundColor $c
+    Write-Host ("        |        native port  ??  {0}              |" -f $version) -ForegroundColor $c
     Write-Host '        ''--------------------------------------------''' -ForegroundColor $c
     Write-Host ''
 }
@@ -44,7 +44,7 @@ function Install-It([string]$src) {
         }
     }
     if (-not (Test-Path (Join-Path $src $exe))) {
-        throw "no $exe in $src — build the game first (nx2/make_game.py --update)"
+        throw "no $exe in $src ??? build the game first (nx2/make_game.py --update)"
     }
     Write-Host "  from : $src" -ForegroundColor Gray
     Write-Host "  into : $root" -ForegroundColor Gray

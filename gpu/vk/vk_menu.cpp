@@ -82,6 +82,9 @@ extern char** environ;
 #ifndef LONGSHOT_VERSION   // (nx2/build.py gives it to this file: nx2/version.py)
 #define LONGSHOT_VERSION "unknown"
 #endif
+// (OcaDim) the product version players see (the window, the start-up screen, the banner and the log):
+// this build's own, not the upstream release the sources come from
+#define OCADIM_VERSION "0.0.3"
 
 namespace mkwvk {
 int64_t slot_wait_ns();   // (vk_replay.cpp: the replay's waits for a recording slot so far, the FPS counter's Dev line)
@@ -1527,7 +1530,7 @@ const char* hn_nfc(int, int variant) {
     static int said_for = -1;   // (what a tap said stays until another tag is chosen)
     if (said_for != nfc_choice) said_for = nfc_choice, nfc_said.clear();
     if (!nfc_said.empty()) return nfc_said.c_str();
-    if (!nfc_listed) return "Add tag files on the Longshot Launcher's NFC page, or put them in the folder yourself.";
+    if (!nfc_listed) return "Add tag files in the game's nfc folder.";
     if (st & 8) return "The game has read the NFC tag.";
     if (st & 2) return waiting;
     if (st & 4) return "An NFC tag is at the reader: the game reads it when it next asks for one.";
@@ -1621,7 +1624,7 @@ Row rows[] = {
     {TAB_DISPLAY, "Window scaling filter", &opts.upscale, 0, 2, 1, tx_filter,
      "How the finished picture is scaled to the window, when its size differs from the Output resolution.", hn_filter},
     {TAB_DISPLAY, "CRT filter", &opts.crt_filter, 0, 4, 1, tx_crt_filter,
-     "Filters the finished picture, including the game's HUD, after window effects. Longshot's menu and overlays stay "
+     "Filters the finished picture, including the game's HUD, after window effects. OcaDim's menu and overlays stay "
      "clean. Changes at once; quality presets leave it alone.", hn_crt_filter, false, true},
     {TAB_DISPLAY, "CRT lines", &opts.crt_lines, 0, 2, 1, tx_crt_lines,
      "Virtual CRT raster, not Render resolution. Capped at half the destination height (at least one line); width follows "
@@ -1679,7 +1682,7 @@ Row rows[] = {
      "What the ocarina hears when the game's microphone option is on (playing an instrument, or humming).", hn_mic, false,
      true},
     {TAB_AUDIO, "Microphone gain", &opts.microphone_gain, 0, 400, 10, tx_percent,
-     "Adjust capture for Longshot only; system volume is unchanged. Use the microphone test to see live levels while adjusting gain. "
+     "Adjust capture for OcaDim only; system volume is unchanged. Use the microphone test to see live levels while adjusting gain. "
      "Changes apply to new samples.", nullptr, false, true},
     {TAB_AUDIO, "Test microphone", nullptr, 0, 0, 0, nullptr,
      "Start or stop microphone capture. No playback or audio files. You can adjust Microphone gain while testing. "
@@ -1732,7 +1735,7 @@ Row rows[] = {
     {TAB_GAMEPLAY, "Menu language", &opts.menu_lang, 0, i18n::lang_count(), 1, tx_menu_lang, "The language of this menu.",
      hn_menu_lang, false, true},
     {TAB_GAMEPLAY, "Discord status", &opts.discord, 0, 1, 1, tx_onoff,
-     "Shows \"Playing Longshot\" and the time played in your Discord status, while Discord runs on this PC.", nullptr, false,
+     "Shows \"Playing OcaDim\" and the time played in your Discord status, while Discord runs on this PC.", nullptr, false,
      true},
     {TAB_GAMEPLAY, "Skip opening", &opts.skip_opening, 0, 1, 1, tx_onoff,
      "Skips the new-game opening (the story movie and Navi waking Link) and leaves later cutscenes, the Deku Tree "
@@ -1822,7 +1825,7 @@ Row rows[] = {
     // NFC (longshot): the NFC tags of the player's folder; the two actions hold the chosen one to the game's reader and take it away
     // (the choice is kept in the options file as any row's, by its place in the list: refresh_nfc keeps it within the list)
     {TAB_NFC, "NFC tag", &nfc_choice, 0, 0, 1, tx_nfc,
-     "Which of your NFC tags to use: the files of your NFC folder, by their names. The Longshot Launcher's NFC page adds and "
+     "Which of your NFC tags to use: the files of your NFC folder, by their names. The game's nfc folder adds and "
      "removes them; dumps of your own figures (.bin, or a Flipper Zero's .nfc).", hn_nfc, false, true},
     {TAB_NFC, "Tap tag", nullptr, 0, 0, 0, nullptr,
      "Holds the chosen NFC tag to the reader, as tapping the figure on the controller does. It stays there until the game "
@@ -2119,7 +2122,7 @@ void nfc_press(bool tap) {
         host->nfc_tap(-1);
         nfc_said = "The NFC tag is off the reader.";
     } else if (!nfc_listed) {
-        nfc_said = "There is no tag to tap: add one on the Longshot Launcher's NFC page.";
+        nfc_said = "There is no tag to tap: add one in the game's nfc folder.";
     } else if (!host->nfc_tap(nfc_choice)) {
         nfc_said = std::string("\"") + host->nfc_name(nfc_choice) + "\" is not an NFC tag's dump.";
     } else {
@@ -2703,8 +2706,8 @@ void prompts_at_once(const Row& r) {
 namespace ps = pipeline_share;
 std::string share_said;    // (the help box's line after a save: where the zip went and what to do, or why there is none)
 std::string share_value;   // (the row's value after a save: Saved, or Not saved)
-constexpr const char* kShareSaidLongest = "Saved longshot-pipelines-2026-12-31.zip (123456 pipelines) in Downloads. The report "
-    "is in the zip. Open git.magicbean.dev/MagicBeanDev/Longshot/issues/14 and attach the zip to a comment, then paste the report and say "
+constexpr const char* kShareSaidLongest = "Saved ocadim-pipelines-2026-12-31.zip (123456 pipelines) in Downloads. The report "
+    "is in the zip. Open github.com/Dimi42FR/OcaDim/issues and attach the zip to a comment, then paste the report and say "
     "where you played.";   // (measure_help: the help box's room)
 std::string share_saved;   // (the first sentence: the zip's name, its pipelines and its folder)
 std::atomic<bool> share_busy{false};   // (the worker is copying and opening: presses wait for it)
@@ -2725,7 +2728,7 @@ std::string share_saved_line(const std::string& name, long long n, const std::st
 /// The rest of it, once the worker has answered (share_result: 1 copied, 2 the issue opened)
 std::string share_done_line(int r) {
     return std::string(i18n::tr((r & 1) ? "The report is copied. " : "The report is in the zip. ")) +
-           i18n::tr((r & 2) ? "Issue 14 is open in your browser: attach" : "Open git.magicbean.dev/MagicBeanDev/Longshot/issues/14 and attach") +
+           i18n::tr((r & 2) ? "The OcaDim issue page is open in your browser: attach" : "Open github.com/Dimi42FR/OcaDim/issues and attach") +
            i18n::tr(" the zip to a comment, then paste the report and say where you played.");
 }
 /// The help box's line when the zip could not be written in that folder (share_folder_name)
@@ -4041,7 +4044,7 @@ const char* bug_report_cell() {
 /// Under its help once saved: where the report is and what to do with it (the game opens nothing: no browser or file manager is
 /// sure to be there, as on a Steam Deck in Game Mode)
 std::string bug_report_saved_text(const std::string& folder) {
-    return "Saved in the game folder as " + folder + ". To send it, open git.magicbean.dev/MagicBeanDev/Longshot/issues, choose New issue and "
+    return "Saved in the game folder as " + folder + ". To send it, open github.com/Dimi42FR/OcaDim/issues, choose New issue and "
            "Game problem, copy report.txt's answers into the form and drag the folder's files into it: on Windows from File "
            "Explorer, on Linux from a file manager (on a Steam Deck, in Desktop Mode).";
 }
@@ -4142,7 +4145,7 @@ void draw_options(ui::Ctx& c) {
     }
     {   // (which build, at the banner's left, so a report can say it without opening the log: as players see it, version_text,
         // "Longshot v3.0.0-rc.1" or "Longshot Nightly 46 · 434712bb"; the log and the bug report keep the whole name)
-        std::string ver = std::string("Longshot ") + version_text(LONGSHOT_VERSION);
+        std::string ver = std::string("OcaDim ") + OCADIM_VERSION;
         const float room = (c.w - total) * 0.5f - 60 * s - c.safe, px = 15 * s;
         const auto width = [&](float p) { return ui::size_of(c.f.body, p, ver.c_str()).x; };
         // (still too long, as a source build's "v2.0.11-821-g7b81752-dirty" since the Audio tab: at Small and Medium smaller
@@ -5028,7 +5031,7 @@ void draw_fps(ui::Ctx& c, bool under_banner) {
     if (foot) {   // (the footer, at the column's foot: the version, as the banner says it; at Dev the CPU, the GPU, its driver. A line
         // too long for the column's width loses its end)
         static std::string cpu, gpu, drv, fit[4];
-        static const std::string ver = std::string("Longshot ") + version_text(LONGSHOT_VERSION);
+        static const std::string ver = std::string("OcaDim ") + OCADIM_VERSION;
         static float fit_w = 0;
         if (gpu.empty()) cpu = hardware_cpu_name(bug_report::cpu_name()), gpu = hardware_gpu_name(device_name_text()), drv = driver_text(), fit_w = 0;
         if (fit_w != gw) {
@@ -5314,7 +5317,7 @@ void draw_startup(ui::Ctx& c) {
     ImTextureData* logo = ui::logo(&aspect);
     if (logo) c.d->AddImage(logo->GetTexRef(), ImVec2(cx - lh * aspect * 0.5f, top), ImVec2(cx + lh * aspect * 0.5f, top + lh));
     float y = top + lh + 16 * s;
-    ui::spaced(c, c.f.heading, 42 * k, ImVec2(cx, y), ui::rgba(246, 232, 204), "LONGSHOT", 6 * k);
+    ui::spaced(c, c.f.heading, 42 * k, ImVec2(cx, y), ui::rgba(246, 232, 204), "OCADIM", 6 * k);
     ui::flourish(c, cx - 190 * k, cx + 190 * k, y + 66 * k, ui::kAccent);
     ui::text_centre(c, c.f.body, 14.5f * k, ImVec2(cx, y + 78 * k), ui::kDim, v.version.c_str());
     if (!v.title.empty()) {
@@ -5388,7 +5391,7 @@ void startup_screen(const StartupView* view) {
         return;
     }
     StartupView v = *view;
-    if (v.version.empty()) v.version = version_text(LONGSHOT_VERSION);   // ("v2.0.5"; "v2.0.5 dev" between releases)
+    if (v.version.empty()) v.version = std::string("OcaDim ") + OCADIM_VERSION;   // (OcaDim 0.0.3)
     {
         std::lock_guard lk(startup_mu);
         startup = v;

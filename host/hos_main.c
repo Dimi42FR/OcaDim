@@ -1921,7 +1921,7 @@ static int narrow_paths_ok(int argc, char **argv) {
                    w, GetACP() == CP_UTF8 ? L"The path is too long."
                                           : L"Its name has characters this Windows can only give the game from Windows 10 version 1903 on.");
         text[sizeof text / sizeof text[0] - 1] = 0;
-        MessageBoxW(NULL, text, L"OcaDim 0.0.1", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
+        MessageBoxW(NULL, text, L"OcaDim 0.0.3", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
     }
     return 0;
 }
@@ -2013,7 +2013,7 @@ static int game_main(int argc, char **argv) {
             }
         } else hos_crash_record_prepare(NULL);   /* an externally supplied stderr, not the game's log */
     }
-    hos_log("%s %s (longshot %s)", HOS_PRODUCT_NAME, HOS_PRODUCT_VERSION, LONGSHOT_VERSION);   /* (the log's first line: which build a report comes from) */
+    hos_log("%s %s (build %s)", HOS_PRODUCT_NAME, HOS_PRODUCT_VERSION, LONGSHOT_VERSION);   /* (the log's first line: which build a report comes from) */
     const char *hos_report_run_id(void);
     hos_log("run_id: %s", hos_report_run_id());
     hos_game_layout_log();
