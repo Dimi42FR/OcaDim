@@ -1141,6 +1141,13 @@ MENU_HINTS(hn_pace, 0,
 /// showed the game's frames alone (the game's own menus: vk_dlss.cpp dlss_fg_holds)
 const char* framegen_maker_name() {
     if (opts.framegen < 1) return nullptr;
+    // (OcaDim) AMD's own generation while its swapchain is the window's: the renderer's own record never runs then, so the
+    // maker counts below stay empty and the counter named nothing. The made context says which generation it is (g_fg_major,
+    // from the provider's own version name), and nothing while it has none: a refused context names no generation
+    if (fg_amd_active()) {
+        if (!fg_amd_generating()) return nullptr;
+        return fg_amd_major() == 4 ? "FSR 4 FG" : fg_amd_major() == 3 ? "FSR 3.1 FG" : nullptr;
+    }
     switch (framegen_maker()) {
     case FgMaker::Dlss: return "DLSS FG";
     case FgMaker::Fsr3:   // (OcaDim: AMD makes 4 or 3.1, whichever the row asked for)

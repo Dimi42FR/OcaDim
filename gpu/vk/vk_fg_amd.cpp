@@ -279,13 +279,15 @@ bool create_fg(uint32_t w, uint32_t h, VkFormat fmt, bool depth_reversed, float 
         return opts.framegen_by == 3 ? 4 : opts.framegen_by == 2 ? 3 : 0;
     }();
     // (OcaDim) what this creation sees, said: the row as it stands at this instant, and the version that follows from it. A
-    // framegen_by of 0 here means the context was made before the row was read, and the SDK's own (3.1) is what runs
+    // framegen_by of 0 here means the context was made before the row was read, and the SDK's own (the newest it lists) is
+    // what is asked for
     logf("vk: AMD FG: create_fg: framegen_by=%d, so %s", opts.framegen_by,
          want_major == 4 ? "AMD FSR 4's generation" : want_major == 3 ? "AMD FSR 3.1's generation" : "the SDK's own version");
     const uint64_t picked = want_major ? pick_fg_version(want_major) : 0;
     s.fg_version.version = picked ? picked : FFX_FRAMEGENERATION_VERSION;
-    // (OcaDim) what was made, said: the row asks for a generation and the log names the one the SDK gave
-    g_fg_major = picked ? want_major : 0;
+    // (OcaDim) nothing is named before the context is made: a refused creation must leave the counter with no generation
+    // at all, not with the one that was asked for
+    g_fg_major = 0;
     logf("vk: AMD FG: the frame generation context is made with %s",
          picked ? (want_major == 4 ? "AMD FSR 4" : "AMD FSR 3.1") : "the SDK's own version");
     if (want_major && !picked)
@@ -325,6 +327,17 @@ bool create_fg(uint32_t w, uint32_t h, VkFormat fmt, bool depth_reversed, float 
     ffxQueryGetProviderVersion provider{};
     provider.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
     const bool known = s.query(&s.fg, &provider.header) == FFX_API_RETURN_OK && provider.versionName;
+    // (OcaDim) the counter's generation is the one the made context says it is, not the one that was asked for: the SDK's
+    // own fallback may be the other generation, and a version picked by name can still be made as something else. The first
+    // number of the provider's own version name: "4.0.2" is 4, "3.1.6" is 3
+    int made_major = 0;
+    if (known)
+        for (const char* p = provider.versionName; *p; p++)
+            if (*p >= '0' && *p <= '9') {
+                made_major = atoi(p);
+                break;
+            }
+    g_fg_major = made_major == 4 ? 4 : made_major == 3 ? 3 : picked ? want_major : 0;
     FfxApiEffectMemoryUsage mem{};
     ffxQueryDescFrameGenerationGetGPUMemoryUsage mq{};
     mq.header.type = FFX_API_QUERY_DESC_TYPE_FRAMEGENERATION_GPU_MEMORY_USAGE;
