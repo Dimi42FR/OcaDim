@@ -1812,8 +1812,23 @@ static void vc_long_wait(HosThread *t, int64_t waited, int how, unsigned m) {
 static void vc_acquire(HosThread *t) {
     static int64_t esc_better = -1, esc_eq, slice, starve;
     if (esc_better < 0) {
-        esc_eq = vc_env_ns("HOS_VCORE_ESCAPE_EQ_US", 2000000);
-        esc_better = vc_env_ns("HOS_VCORE_ESCAPE_US", 2000000);
+        /* (OcaDim) Ordonnanceur de vcores, from the menu's row (vcore_mode in ocadim_options.ini): 2 Réactif asks a wait of
+           200 ms instead of 2 s. Read once, here, before the game's threads; the environment, when set, still wins */
+        extern const char *hos_options_file(void);
+        int mode = 0;
+        const char *path = hos_options_file();
+        if (path && *path) {
+            FILE *f = fopen(path, "rb");
+            if (f) {
+                char line[256];
+                while (fgets(line, sizeof line, f))
+                    if (!strncmp(line, "vcore_mode=", 11)) mode = atoi(line + 11);
+                fclose(f);
+            }
+        }
+        const int64_t def = mode == 2 ? 200000 : 2000000;
+        esc_eq = vc_env_ns("HOS_VCORE_ESCAPE_EQ_US", def);
+        esc_better = vc_env_ns("HOS_VCORE_ESCAPE_US", def);
         slice = vc_env_ns("HOS_VCORE_SLICE_US", 2000);
         starve = vc_env_ns("HOS_VCORE_STARVE_US", 1000000);
     }
