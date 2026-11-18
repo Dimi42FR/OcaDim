@@ -299,7 +299,9 @@ runs the native network; this is a test override, not a requirement for GPUs alr
 
 **FSR 3.1 frame generation** makes the frames at any Frame generation setting (Auto, 2x to 8x) where DLSS FG does not, with
 Frame generation by at **FSR 3.1 FG**, or at **DLSS FG** (`RX_VK_FSR_FG=0` never, `=1` over the row; `RX_VK_FSR_FG_HUD=0` lets
-AMD's passes move the HUD with the scene, as they did, for an A/B). Native HDR PsychoV35
+AMD's passes move the HUD with the scene, as they did, for an A/B). In play it interpolates the picture from just before
+the game draws its HUD, AMD's HUD-less colour, and lays the frame's HUD over each made frame; menus and movies, which have no
+such picture, keep the HUD guessed (`RX_VK_FSR_FG_HUDLESS=0`: the HUD marked in the frame's alpha in play, as before, for an A/B). Native HDR PsychoV35
 automatically enables the compatible independent RGBA16F depth/motion input path unless `RX_VK_PSYCHOV35_DLSS=0`.
 This does not enable the legacy FSR
 upscaler. To isolate FSR generation on NVIDIA hardware, select Frame generation by **FSR 3.1 FG** or use
