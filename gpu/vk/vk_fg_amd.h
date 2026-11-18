@@ -23,6 +23,7 @@ bool fg_amd_wanted();
 /// AMD's swapchain owns the window's handle: every swapchain call must go through fg_amd_get_images / fg_amd_acquire /
 /// fg_amd_present, never through the Vulkan ones.
 bool fg_amd_active();
+int fg_amd_major();   // (OcaDim) 4 or 3: the frame generation version the context was made with, 0 before one is
 
 /// And its frame generation context is in place: the frames between the game's are AMD's (the FPS counter's maker name)
 bool fg_amd_generating();

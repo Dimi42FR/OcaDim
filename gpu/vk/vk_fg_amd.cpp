@@ -137,6 +137,9 @@ int list_versions(uint64_t type, char* out, size_t size) {
 
 /// (OcaDim) The id of the frame generation version whose name starts with `want_major` ("4" or "3"), from what AMD's
 /// loader lists for this device; 0 when it lists none like that (the SDK's own version is then used)
+/// (OcaDim) The major of the frame generation version the context was made with (4 or 3), 0 before one is made
+int g_fg_major = 0;
+
 uint64_t pick_fg_version(int want_major) {
     const VkDeviceContext context{dev.device, dev.physical, vkGetDeviceProcAddr};
     ffxQueryDescGetVersions q{};
@@ -256,9 +259,15 @@ bool create_fg(uint32_t w, uint32_t h, VkFormat fmt, bool depth_reversed, float 
     s.fg_version.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION_VERSION;
     // (OcaDim) the version the Frame generation by row asks for: index 3 is AMD FSR 4's generation, 2 AMD FSR 3.1's;
     // anything else (Auto, the game's own, DLSS) leaves the SDK's own choice, the newest it lists.
+    // (OcaDim) the row chooses when it names a generation (3: FSR 4's, 2: FSR 3.1's); anything else keeps what 0.0.2 did,
+    // AMD's own FFX_FRAMEGENERATION_VERSION, which is FSR 4's on the SDK we ship
     const int want_major = opts.framegen_by == 3 ? 4 : opts.framegen_by == 2 ? 3 : 0;
     const uint64_t picked = want_major ? pick_fg_version(want_major) : 0;
     s.fg_version.version = picked ? picked : FFX_FRAMEGENERATION_VERSION;
+    // (OcaDim) what was made, said: the row asks for a generation and the log names the one the SDK gave
+    g_fg_major = picked ? want_major : 0;
+    logf("vk: AMD FG: the frame generation context is made with %s",
+         picked ? (want_major == 4 ? "AMD FSR 4" : "AMD FSR 3.1") : "the SDK's own version");
     if (want_major && !picked)
         logf("vk: AMD FG: no FSR %d frame generation listed for this device; the SDK's own version is made instead", want_major);
     s.fg_version.header.pNext = &s.backend.header;
@@ -323,6 +332,8 @@ bool fg_amd_wanted() {
     // (AMD's FidelityFX frame generation is AMD's: the SDK's providers run on AMD's Vulkan driver. Its library is Windows's)
     return fg_amd_requested() && dev.props.vendorID == 0x1002;
 }
+
+int fg_amd_major() { return g_fg_major; }
 
 bool fg_amd_active() { return st().sc != nullptr; }
 

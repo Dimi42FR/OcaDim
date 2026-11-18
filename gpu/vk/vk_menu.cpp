@@ -44,6 +44,7 @@
 #include "vk_menu_keys.h"   // (which gamepad buttons confirm and go back: those A and B are bound to)         // (how it looks: Dear ImGui, vk_imgui.h)
 #include "vk_dlss.h"
 #include "vk_framegen.h"   // (Frame generation by: who makes the frames now, framegen_maker)
+#include "vk_fg_amd.h"     // (OcaDim) which AMD frame generation version the context was made with
 #include "vk_bug_report.h"   // (the Gameplay tab's Bug report: what it writes, and how)
 #include "../../host/hos_wide_size.h"   // (the widescreen picture's size, as host/hos_main.c works it out)
 #include "../../host/audio_output_devices.h"
@@ -1142,7 +1143,8 @@ const char* framegen_maker_name() {
     if (opts.framegen < 1) return nullptr;
     switch (framegen_maker()) {
     case FgMaker::Dlss: return "DLSS FG";
-    case FgMaker::Fsr3: return "FSR 3.1 FG";
+    case FgMaker::Fsr3:   // (OcaDim: AMD makes 4 or 3.1, whichever the row asked for)
+        return fg_amd_major() == 4 ? "FSR 4 FG" : "FSR 3.1 FG";
     case FgMaker::BuiltIn: return "Built-in FG";
     case FgMaker::DlssPaused: return "DLSS FG paused";
     default: return nullptr;
