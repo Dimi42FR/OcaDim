@@ -179,6 +179,10 @@ const char* tx_drs(int v) {
     static const char* const t[] = {"Désactivée", "60 images/s", "120 images/s", "144 images/s"};
     return t[v < 0 ? 0 : v > 3 ? 3 : v];
 }
+const char* tx_vram_budget(int v) {
+    static const char* const t[] = {"Auto", "2 Go", "3 Go", "4 Go", "6 Go", "8 Go"};
+    return t[v < 0 ? 0 : v > 5 ? 5 : v];
+}
 const char* tx_fps_cap(int v) {
     if (v == -1) return "30";
     static const char* const t[] = {"60 (the console's)", "90", "120", "144", "165", "240", "Uncapped"};
@@ -1587,9 +1591,14 @@ const char* hn_vram(int, int k) {
         return "Mémoire vidéo : le pilote ne donne pas de budget sur cette machine.";
     const double gb = used / 1073741824.0;
     if (gb > peak) peak = gb;
+    static const double caps[] = {0, 2, 3, 4, 6, 8};
+    const double cap = caps[opts.vram_budget >= 0 && opts.vram_budget <= 5 ? opts.vram_budget : 0];
+    const bool over = cap > 0 && gb > cap;
     snprintf(b, sizeof b,
-             "Mémoire vidéo : %.1f Go sur %.1f Go (pic %.1f Go). Textures : %d, %.1f Go. Lecture seule : rien n'est changé.",
-             gb, allowed / 1073741824.0, peak, texture_count(), texture_bytes() / 1073741824.0);
+             "Mémoire vidéo : %.1f Go sur %.1f Go (pic %.1f Go). Textures : %d, %.1f Go.%s%s", gb, allowed / 1073741824.0, peak,
+             texture_count(), texture_bytes() / 1073741824.0,
+             cap > 0 ? over ? " PLAFOND DÉPASSÉ." : " Sous le plafond." : "",
+             cap > 0 ? "" : " Lecture seule.");
     return b;
 }
 Row rows[] = {
@@ -1946,6 +1955,10 @@ Row rows[] = {
     {TAB_OCADIM, "Mémoire vidéo", nullptr, 0, 0, 0, nullptr,   // (OcaDim: étape 0 du budget VRAM, lecture seule)
      "Affiche dans cette aide la mémoire vidéo utilisée, ce que le pilote autorise, le pic depuis le lancement, et le nombre "
      "et la taille des textures. Rien n'est modifié : c'est la mesure qui servira au budget.", hn_vram, false, true},
+    {TAB_OCADIM, "Budget VRAM", &opts.vram_budget, 0, 5, 1, tx_vram_budget,   // (OcaDim: the cap, measured for now)
+     "Le plafond de mémoire vidéo à ne pas dépasser. Pour l'instant il se contente de le dire dans la ligne Mémoire vidéo "
+     "(« PLAFOND DÉPASSÉ ») : l'éviction des textures vient ensuite. Auto : pas de plafond.",
+     hn_vram, false, true},
     {TAB_DEBUG, "Robust buffers", &opts.robust, 0, 2, 1, tx_robust,
      "Bounds-checked buffer reads: a read past a buffer's end is dropped instead of stopping the GPU. Applies after a "
      "restart.", hn_robust, true, true},
