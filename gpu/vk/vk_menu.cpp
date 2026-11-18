@@ -3671,11 +3671,14 @@ void help_box(ui::Ctx& c, float x0, float x1, float y0, const char* title, const
 }
 /// The menu's column: from the safe margin to about 58% of the width (wide enough for a row at any unit); the help box beside it,
 /// or, on a narrow window, over the column's foot (*narrow)
+/// (OcaDim) The section rail's width: the menu's sections down the left edge, not tabs in the band, so the band is the
+/// header (wordmark, section name, build) and the content gets a column of its own
+float rail_w(const ui::Ctx& c) { return 236 * c.s; }
 void columns(const ui::Ctx& c, float* x0, float* x1, float* hx0, float* hx1, bool* narrow) {
     const float s = c.s;
-    *x0 = c.safe + 6 * s;
-    *x1 = std::min(c.w - c.safe, std::max(c.w * 0.585f, *x0 + 560 * s));
-    *hx0 = *x1 + 28 * s, *hx1 = c.w - c.safe;
+    *x0 = c.safe + rail_w(c) + 26 * s;   // (OcaDim: the rail takes the left edge)
+    *x1 = std::min(c.w - c.safe, std::max(c.w * 0.70f, *x0 + 500 * s));
+    *hx0 = *x1 + 26 * s, *hx1 = c.w - c.safe;
     *narrow = *hx1 - *hx0 < 260 * s;
     if (*narrow) *hx0 = *x0 + 20 * s, *hx1 = *x1 - 20 * s;
 }
@@ -4062,6 +4065,26 @@ const char* bug_report_hint() {
 
 const char* const tab_titles[TAB_COUNT] = {"Display", "Graphics", "Audio", "Gameplay", "Controls", "NFC", "NVIDIA", "Debug"};
 inline const char* tab_title(int t) { return t >= 0 && t < TAB_COUNT ? tab_titles[t] : "Settings"; }
+/// (OcaDim) The rail: one line a section, the shown one on an inset with a gold bar at its left, the others dim; the
+/// sections under another (Motion, the FPS counter's details) light their parent
+void rail(ui::Ctx& c, float y0, float y1) {
+    const float s = c.s, x0 = c.safe + 4 * s, w = rail_w(c), ih = 44 * s;
+    c.d->AddLine(ImVec2(x0 + w, y0), ImVec2(x0 + w, y1), ui::alpha(ui::kEdge, 0.55f), std::max(1.0f, s));
+    float y = y0;
+    for (int i = 0; i < TAB_COUNT; i++) {
+        if (!tab_shown(i)) continue;   // (OcaDim: a section with nothing on this PC, NVIDIA's on an AMD card)
+        const bool shown = i == (cur_tab == TAB_MOTION ? TAB_CONTROLS : cur_tab == TAB_FPS_DEV ? TAB_GAMEPLAY : cur_tab);
+        const bool hover = hover_tab == i && !shown;
+        if (shown || hover)
+            c.d->AddRectFilled(ImVec2(x0, y + 2 * s), ImVec2(x0 + w - 10 * s, y + ih - 2 * s),
+                               shown ? ui::kTabInset : ui::alpha(ui::kTabInset, 0.4f), 7 * s);
+        if (shown) c.d->AddRectFilled(ImVec2(x0 + 8 * s, y + 10 * s), ImVec2(x0 + 11 * s, y + ih - 10 * s), ui::kGoldHi, 1.5f * s);
+        ui::text_mid(c, shown ? c.f.heading : c.f.body, 18 * s, x0 + 24 * s, y + ih * 0.5f,
+                     shown ? ui::kInkBright : hover ? ui::kInk : ui::kDim, tab_titles[i]);
+        hits.add(x0, y, x0 + w - 10 * s, y + ih, menu_hit::kTab, i);
+        y += ih + 2 * s;
+    }
+}
 inline bool cheat_is_toggle(int c) { return c == 0 || c == 1 || c == 7; }
 
 /// Draws a row's value cell (slider, toggle, choice, or subpage arrow), shared between the full menu and tuning bar
@@ -4109,51 +4132,22 @@ void row_value_cell(ui::Ctx& c, const Row& r, ImVec2 va, ImVec2 vb, bool selecte
 void draw_options(ui::Ctx& c) {
     const float s = c.s, hh = banner_h(c);
     ui::banner(c, hh);
-    // the tabs in the banner: dark ink on the tan, the shown one light on a dark inset; the tab keys at their ends (a click there
-    // is the previous or the next tab)
-    // (OcaDim) a section with no row on this PC takes no room: its width is 0 and it is skipped below (the NVIDIA tab on
-    // an AMD card, and a section whose every row is hidden)
-    float tw[TAB_COUNT], total = 0;
-    for (int i = 0; i < TAB_COUNT; i++) {
-        tw[i] = tab_shown(i) ? ui::size_of(c.f.heading, 23 * s, tab_titles[i]).x + 56 * s : 0;
-        total += tw[i];
-    }
-    float x = (c.w - total) * 0.5f;
-    const float ty = hh * 0.5f + s;
-    const char* const keys[2] = {c.pad ? "L" : "Q", c.pad ? "R" : "E"};
-    for (int i = 0; i < 2; i++) {
-        const float cw = 26 * s, cx = i ? x + total + 22 * s : x - 22 * s - cw;
-        const bool hover = hover_tab == TAB_COUNT + i;
-        c.d->AddRectFilled(ImVec2(cx, ty - 13 * s), ImVec2(cx + cw, ty + 13 * s), hover ? ui::kTabInset : ui::kBannerInk, 3 * s);
-        ui::text_mid_centre(c, c.f.strong, 14 * s, cx + cw * 0.5f, ty, ui::kInk, keys[i]);
-        hits.add(i ? cx - 10 * s : 0, 0, i ? c.w : cx + cw + 10 * s, hh, i ? menu_hit::kTabNext : menu_hit::kTabPrev, -1);
-    }
-    for (int i = 0; i < TAB_COUNT; i++) {
-        if (!tw[i]) continue;   // (OcaDim: a section with nothing on this PC)
-        // (the Motion page: under Controls; the FPS counter details: under Gameplay)
-        const bool shown = i == (cur_tab == TAB_MOTION ? TAB_CONTROLS : cur_tab == TAB_FPS_DEV ? TAB_GAMEPLAY : cur_tab);
-        if (shown || i == hover_tab) {
-            c.d->AddRectFilled(ImVec2(x, 0), ImVec2(x + tw[i], hh - 3 * s), shown ? ui::kTabInset : ui::alpha(ui::kTabInset, 0.35f));
-            if (shown) {
-                c.d->AddLine(ImVec2(x + 1, 0), ImVec2(x + 1, hh - 3 * s), ui::rgba(52, 34, 16), std::max(1.0f, s));
-                c.d->AddLine(ImVec2(x + tw[i] - 1, 0), ImVec2(x + tw[i] - 1, hh - 3 * s), ui::rgba(52, 34, 16), std::max(1.0f, s));
-            }
-        }
-        ui::text_mid(c, c.f.heading, 23 * s, x + 28 * s, ty, shown ? ui::kInkBright : ui::kBannerInk, tab_titles[i]);
-        hits.add(x, 0, x + tw[i], hh, menu_hit::kTab, i);
-        x += tw[i];
-    }
-    {   // (which build, at the banner's left, so a report can say it without opening the log: as players see it, version_text,
-        // "Longshot v3.0.0-rc.1" or "Longshot Nightly 46 · 434712bb"; the log and the bug report keep the whole name)
+    // (OcaDim) the band is the header: the wordmark at the left, the section's name beside it, the build at the right; the
+    // sections are the rail down the left (rail), drawn below
+    {
+        const float ty = hh * 0.5f + s, tx = ui::mid_top(c.f.heading, 20 * s, ty);
+        const float wm = ui::spaced_left(c, c.f.heading, 20 * s, ImVec2(c.safe + 8 * s, tx), ui::kGoldHi, "OCADIM", 4.5f * s);
+        const float xr = c.safe + 8 * s + wm + 20 * s;
+        c.d->AddLine(ImVec2(xr, hh * 0.5f - 13 * s), ImVec2(xr, hh * 0.5f + 13 * s), ui::alpha(ui::kGold, 0.75f), std::max(1.0f, s));
+        const char* cur_name = cur_tab == TAB_MOTION ? "Motion" : cur_tab == TAB_FPS_DEV ? "FPS counter details" : tab_title(cur_tab);
+        ui::text_mid(c, c.f.heading, 22 * s, xr + 20 * s, ty, ui::kInkBright, cur_name);
         std::string ver = std::string("OcaDim ") + OCADIM_VERSION;
-        const float room = (c.w - total) * 0.5f - 60 * s - c.safe, px = 15 * s;
+        const float room = c.w - c.safe - (xr + 20 * s) - 200 * s, px = 15 * s;
         const auto width = [&](float p) { return ui::size_of(c.f.body, p, ver.c_str()).x; };
-        // (still too long, as a source build's "v2.0.11-821-g7b81752-dirty" since the Audio tab: at Small and Medium smaller
-        // until it fits, on half-point steps, 10 points at the least; at Large, the size for a TV across the room, at its size
-        // or not at all, as before)
-        const float fit = ui::fit_px(px, opts.menu_size == 3 ? px : kVersionMinPt * s, 0.5f * s, room, width);
-        if (fit > 0) ui::text_mid(c, c.f.body, fit, c.safe, ty, ui::kBannerInk, ver.c_str());
+        const float fit = ui::fit_px(px, opts.menu_size == 3 ? px : kVersionMinPt * s, 0.5f * s, std::max(room, 40 * s), width);
+        if (fit > 0) ui::text_mid_right(c, c.f.body, fit, c.w - c.safe, ty, ui::alpha(ui::kBannerInk, 0.7f), ver.c_str());
     }
+    rail(c, hh + 22 * s, std::min(c.h - c.safe, ui::prompt_bar_top(c)) - 12 * s);
     // the rows, in the column; the help beside it
     float cx0, cx1, hx0, hx1;
     bool narrow;
