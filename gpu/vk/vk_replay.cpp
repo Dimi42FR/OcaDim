@@ -181,6 +181,9 @@ constexpr int kRecordings = 48;   // (test: 24 before; with RX_VK_BATCH the ring
 Recording recordings[kRecordings];
 uint64_t rec_end_pos[kRecordings];   // (RX_VK_RECORDER_OWN: the recorder ring's position after each slot's last end, vk_recorder.h)
 int recording_index = 0;
+/// (OcaDim) Mode mémoire réduite: the ring keeps 24 frames instead of 48 (the arrays stay at 48). The present is 2-3 frames
+/// behind the recording, so 24 still leaves a wide margin; the 10-minute test is what proves it.
+static int rec_cap() { return opts.low_mem ? 24 : kRecordings; }
 
 /// (a recording slot's last submit done: before it is used again)
 void recording_wait(Recording& r) {
@@ -395,7 +398,7 @@ void gpu_time_begin(Recording& r) {
     if (!ts_pool) {
         VkQueryPoolCreateInfo qi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
         qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
-        qi.queryCount = 2 * kRecordings;
+        qi.queryCount = 2 * rec_cap();
         if (vkCreateQueryPool(dev.device, &qi, nullptr, &ts_pool) != VK_SUCCESS) ts_pool = VK_NULL_HANDLE;
         if (!ts_pool) return;
     }
@@ -808,7 +811,7 @@ void occ_take(NvnState& s, DrawArgs& da, bool dry) {
 Recording& begin_recording(uint64_t value) {
     occ_collect();
     Recording& r = recordings[recording_index];
-    recording_index = (recording_index + 1) % kRecordings;
+    recording_index = (recording_index + 1) % rec_cap();
     if (r.value) {
         PROF(PROF_SLOTWAIT);
         const auto t0 = std::chrono::steady_clock::now();
@@ -2172,7 +2175,7 @@ void par_worker_main() {
 /// A recording slot for a segment a worker records (its command buffer only: uploads go to the shared one)
 Recording& begin_segment_recording(uint64_t value) {
     Recording& r = recordings[recording_index];
-    recording_index = (recording_index + 1) % kRecordings;
+    recording_index = (recording_index + 1) % rec_cap();
     if (r.value) {
         PROF(PROF_SLOTWAIT);
         recording_wait(r);
@@ -6566,7 +6569,7 @@ void fo_recording_begin(const Recording& r) {
     if (!fo_up_pool) {
         VkQueryPoolCreateInfo qi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
         qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
-        qi.queryCount = kRecordings;
+        qi.queryCount = rec_cap();
         if (vkCreateQueryPool(dev.device, &qi, nullptr, &fo_up_pool) != VK_SUCCESS) fo_up_pool = VK_NULL_HANDLE;
         if (!fo_up_pool) return;
     }

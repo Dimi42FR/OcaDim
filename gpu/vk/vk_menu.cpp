@@ -1988,6 +1988,9 @@ Row rows[] = {
      "Ne garde que les niveaux de mip que la distance demande : moins de mémoire vidéo et de bande passante, textures "
      "lointaines un peu plus douces. Auto le fait déjà sur une petite carte ; Activé l'impose partout. Immédiat.",
      nullptr, false, true},
+    {TAB_OCADIM, "Mode mémoire réduite", &opts.low_mem, 0, 1, 1, tx_onoff,   // (OcaDim: a shorter recording ring)
+     "Garde 24 frames d'enregistrement au lieu de 48 : moins de mémoire et de travail en retard. À activer sur une petite "
+     "machine. Immédiat, sans redémarrage.", nullptr, false, true},
     {TAB_DEBUG, "Robust buffers", &opts.robust, 0, 2, 1, tx_robust,
      "Bounds-checked buffer reads: a read past a buffer's end is dropped instead of stopping the GPU. Applies after a "
      "restart.", hn_robust, true, true},
@@ -2434,6 +2437,7 @@ const char* ini_key(const Row& r) {
     if (r.value == &opts.vcore_mode) return "vcore_mode";
     if (r.value == &opts.precompile) return "precompile";
     if (r.value == &opts.mips) return "mips";
+    if (r.value == &opts.low_mem) return "low_mem";
     if (r.value == &opts.fps_cap) return "frame_rate_cap";   // (host/nn_vi.c reads it at the start, then HOS_OPT_FPS_CAP)
     if (r.value == &opts.upscale) return "upscaling";
     if (r.value == &opts.dlss) return "dlss";   // (as opts.dlss and RX_VK_DLSS)
