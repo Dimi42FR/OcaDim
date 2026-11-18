@@ -436,6 +436,11 @@ bool create_device() {
     optional(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME, dev.custom_border_color);
     optional(VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME, dev.dynamic_state3);
     optional(VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME, dev.depth_clip_control);
+    // (OcaDim) VRS, step 1: just ask for the extension and say whether this driver has it. Nothing shades differently yet; the
+    // per-draw rate (vk_draw.cpp) comes next, once the feature is enabled and the image has been compared.
+    bool fragment_shading_rate = false;   // (not a field of dev for now)
+    optional(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME, fragment_shading_rate);
+    if (fragment_shading_rate) logf("vk: VRS: VK_KHR_fragment_shading_rate is available here");
     optional(VK_EXT_ROBUSTNESS_2_EXTENSION_NAME, dev.null_descriptor);
     optional(VK_EXT_INDEX_TYPE_UINT8_EXTENSION_NAME, dev.index_uint8);
     optional(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME, dev.push_descriptor);
