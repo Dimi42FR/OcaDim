@@ -295,6 +295,7 @@ void memory_capture_submit();
 /// The replay of the next submit: its capture (false: none, the pages are collected now as before)
 bool memory_take_capture(uint64_t value, uint64_t completed);
 int64_t memory_late_wait_ns();   // (longshot: RX_VK_FRAME_TRACE's late_wait_ms)
+void take_shown_samples(double& sum_ms, int64_t& count);   // (present-to-shown confirmations since the last summary)
 bool memory_capture_now(uint64_t value, uint64_t completed);   // (longshot: made and taken at once)
 // (longshot, the #543 port v2) RX_VK_EVENT_GATE=1: under RX_VK_ASYNC=1 a submission stopped at a wait resumes after
 // the signal was processed, and its reads took the capture made at its submit — the frame before the game's next-frame
