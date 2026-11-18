@@ -5624,6 +5624,11 @@ void menu_set_gpu_count(int count) {
 
 /// (longshot) Once a present: the Rumble strength row changed with the menu open, and the new strength is felt at once, a
 /// short rumble, which also shows that the controller rumbles (Off is silent). Whatever changed it: the keys, the mouse.
+int menu_fps_cap() {   // (l'amont, perf_report.cpp: le plafond en vigueur, la meme regle que la ligne)
+    static const int env_max = getenv("HOS_FPS_MAX") ? std::max(1, atoi(getenv("HOS_FPS_MAX"))) : 0;
+    return fps_stats::cap_rate(opts.fps_cap, env_max);
+}
+double menu_target_ms() { return fps_target_ms(); }   // (l'amont: le temps de frame vise, 0 sans plafond)
 int menu_memory_tier() { return 0; }   // (OcaDim: pas de ligne Texture cache ici: 0 = l'Auto de vk_texture.cpp)
 void menu_rumble_tick() {
     static int was = -1;

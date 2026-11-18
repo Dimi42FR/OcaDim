@@ -5718,4 +5718,11 @@ void texture_read_texels(const nvn_tex* t, unsigned level, unsigned layer0, cons
     }
 }
 
+// (OcaDim) A pool made, told early by host/nvn_native.c -> rx_nvn_pool_created. The renderer imports a pool when it first
+// meets it; our 0.0.2 also imported it here, before the game used it, and that early import is to be re-bound on this
+// engine (it needs the merged vk_memory's import entry points). Until then this only notes it.
+void memory_pool_created(uint64_t gpu, uint64_t size, uint32_t flags) {
+    (void)gpu, (void)size, (void)flags;
+}
+
 } // namespace mkwvk

@@ -1443,6 +1443,9 @@ bool temporal_upscale(VkCommandBuffer cmd, uint64_t key, bool known, Texture* in
     std::memcpy(f.projection, projection, sizeof f.projection);
     f.jitter_phases = (uint32_t)dlss_jitter_phases(rw, rh, dw, dh);
     f.depth_reversed = fsr_flip;   // (the prep wrote 1 - d: bit 3 of its flags)
+    // (OcaDim, FSR 4's frame generation: the depth, the motion and the camera this frame, taken by vk_fg_amd.cpp's
+    // display thread through temporal_fg_take. Published before evaluate so a frame the upscaler skips still feeds it)
+    temporal_fg_publish(f);
     if (!s.told_camera && cam.near_z > 0.0f) {
         s.told_camera = true;
         logf("vk: upscaler: the scene's camera: near %.3f, far %.1f, vertical field of view %.1f degrees", cam.near_z,
@@ -1498,6 +1501,38 @@ bool temporal_upscale(VkCommandBuffer cmd, uint64_t key, bool known, Texture* in
         logf("vk: %s draws OoT's upscale: %ux%u -> %ux%u%s", name_of(mode), rw, rh, ow, oh,
              show_motion ? " (its motion shown)" : "");
     }
+    return true;
+}
+
+// ---- (OcaDim, RX_VK_FG_AMD) FSR 4's frame generation: one frame's inputs at a time, published by the chain's thread
+// (temporal_fg_publish, above) and taken by the display's thread (vk_fg_amd.cpp). Restored on the merged engine, where the
+// chain builds the same TemporalFrame as before.
+namespace {
+std::mutex fg_mu;
+TemporalFgInputs fg_slot;
+bool fg_fresh = false;
+}  // namespace
+
+void temporal_fg_publish(const TemporalFrame& f) {
+    if (!f.depth.image || !f.motion.image) return;
+    std::lock_guard lk(fg_mu);
+    TemporalFgInputs& o = fg_slot;
+    o.depth = f.depth.image, o.depth_format = f.depth.format;
+    o.motion = f.motion.image, o.motion_format = f.motion.format;
+    o.width = f.depth.width ? f.depth.width : f.motion.width;
+    o.height = f.depth.height ? f.depth.height : f.motion.height;
+    o.jitter[0] = f.jitter[0], o.jitter[1] = f.jitter[1];
+    o.near_z = f.near_z, o.far_z = f.far_z, o.fov_y = f.fov_y;
+    o.reset = f.reset;
+    o.depth_reversed = f.depth_reversed;
+    fg_fresh = true;
+}
+
+bool temporal_fg_take(TemporalFgInputs* out) {
+    std::lock_guard lk(fg_mu);
+    if (!fg_fresh) return false;
+    *out = fg_slot;
+    fg_fresh = false;
     return true;
 }
 
