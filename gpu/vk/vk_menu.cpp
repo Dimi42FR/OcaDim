@@ -1895,6 +1895,10 @@ Row rows[] = {
     {TAB_OCADIM, "Sampler cache", &opts.sampler_cache, 0, 1, 1, tx_onoff,
      "What a sampler holds is kept beside it on the replay thread, so resolving a sampler that was not registered anew takes no "
      "lock. Helps while the game streams textures. Changes at once.", nullptr, false, true},
+    {TAB_OCADIM, "Ça rame ?", nullptr, 0, 0, 0, nullptr,   // (OcaDim: the one-click look at the numbers, and its undo)
+     "Lit les mesures des dernières secondes : temps par image, 1 % low, mémoire vidéo, plafond d'images et génération "
+     "d'images. Il nomme la cause la plus probable et propose un seul réglage, en français. Appuyez sur Entrée pour "
+     "analyser, encore pour l'appliquer, encore pour l'annuler.", nullptr, false, true},
     {TAB_DEBUG, "Robust buffers", &opts.robust, 0, 2, 1, tx_robust,
      "Bounds-checked buffer reads: a read past a buffer's end is dropped instead of stopping the GPU. Applies after a "
      "restart.", hn_robust, true, true},
@@ -3474,6 +3478,152 @@ double fps_target_ms() {
     const bool fifo = menu_vsync() == 1 && opts.framegen == 0;
     return fps_stats::target_ms_for(cap, fifo, fifo ? (display_refresh_mhz() + 500) / 1000 : 0);
 }
+
+// ---- (OcaDim) « Ça rame ? » : the one-click look at the game's own numbers, with its fix and its undo ----------------------
+/// Where the row stands: nothing looked at yet, a cause found (and a setting proposed), or the setting changed and its old
+/// value kept (from/preset) so the same row undoes it. Everything it changes goes through set_row: the row's own effects, its
+/// save, and the restart note, exactly as if the player had moved it by hand.
+enum DiagState { kDiagIdle, kDiagAnalysed, kDiagApplied };
+struct Diag {
+    DiagState state = kDiagIdle;
+    std::string cause;    // (the cause, in plain French: the help box's line)
+    std::string action;   // (the one setting proposed, or empty when there is nothing to change)
+    int* target = nullptr;
+    int to = 0, from = 0, preset = 0;
+};
+Diag diag;
+/// The longest line the row can show, for the help box's height (measure_help): the VRAM case, its fix and the undo's line
+constexpr const char* kDiagLongest =
+    "La mémoire vidéo est presque pleine : 7,9 Go sur 8,0 Go. C'est la cause la plus probable des saccades et des à-coups.\n\n"
+    "Proposé : garder les grandes textures ASTC en BC3 au lieu de RGBA8 (moins de mémoire vidéo). Prend effet au prochain "
+    "démarrage.\nAppuyez encore pour annuler.";
+bool is_diag_row(const Row& r) { return !r.value && r.tab == TAB_OCADIM && !strcmp(r.name, "Ça rame ?"); }
+const char* diag_value() {
+    switch (diag.state) {
+    case kDiagApplied: return "Annuler";
+    case kDiagAnalysed: return diag.target ? "Appliquer" : "Compris";
+    default: return "Analyser";
+    }
+}
+const char* diag_hint() {
+    if (diag.state == kDiagIdle || diag.cause.empty()) return nullptr;
+    static std::string text;
+    text = diag.cause;
+    if (!diag.action.empty()) {
+        text += "\n\n";
+        text += diag.state == kDiagApplied ? "Appliqué : " : "Proposé : ";
+        text += diag.action;
+        if (diag.state == kDiagApplied) text += "\nAppuyez encore pour annuler.";
+    }
+    return text.c_str();
+}
+Row* row_for_value(int* value) {
+    for (Row& r : rows)
+        if (r.value == value) return &r;
+    return nullptr;
+}
+/// The look itself: the last second of frames (and the 10 s 1 % low), the video memory, the cap and what frame generation is
+/// doing. The first cause found wins, because a menu can only offer one thing to change.
+void diag_analyse() {
+    namespace fs = fps_stats;
+    diag = Diag{};
+    diag.state = kDiagAnalysed;
+    const fs::Summary s = fps_summary(fps_clock(), fs::kSecond, fs::kLowWindow);
+    char b[384];
+    if (!s.frames) {
+        diag.cause = "Pas encore assez d'images mesurées : revenez en jeu quelques secondes, puis relancez l'analyse.";
+        return;
+    }
+    const double fps = s.avg_ms > 0 ? 1000.0 / s.avg_ms : 0;
+    uint64_t used = 0, allowed = 0;
+    const bool vram_known = vram_usage(&used, &allowed) && allowed > 0;
+    const int rate = fps_cap_now();   // (the cap in effect, images a second; 0 Uncapped)
+    // (the memory first: the surest cause, and the fix costs nothing but a restart)
+    if (vram_known && used * 10 >= allowed * 9) {
+        snprintf(b, sizeof b,
+                 "La mémoire vidéo est presque pleine : %.1f Go sur %.1f Go. C'est la cause la plus probable des saccades et "
+                 "des à-coups.", used / 1073741824.0, allowed / 1073741824.0);
+        diag.cause = b;
+        if (opts.astc_rgba8) {
+            diag.action = "garder les grandes textures ASTC en BC3 au lieu de RGBA8 (moins de mémoire vidéo). Prend effet au "
+                          "prochain démarrage.";
+            diag.target = &opts.astc_rgba8, diag.to = 0;
+        } else if (opts.shadow_res != 1) {
+            diag.action = "baisser la résolution des ombres à celle du jeu (1600).";
+            diag.target = &opts.shadow_res, diag.to = 1;
+        }
+        return;
+    }
+    // (the cap: the machine spends its time waiting for the frame's turn)
+    if (rate > 0 && opts.fps_cap < 6 && s.part[fs::kPace] > 0.35 * s.avg_ms) {
+        const int next = opts.fps_cap < 0 ? 0 : opts.fps_cap + 1;
+        snprintf(b, sizeof b,
+                 "Votre machine attend : le plafond de %d images/s la bride (%.0f ms d'attente par image). Elle peut faire "
+                 "mieux.", rate, s.part[fs::kPace]);
+        diag.cause = b;
+        snprintf(b, sizeof b, "passer le plafond à %s images/s.", tx_fps_cap(next));
+        diag.action = b;
+        diag.target = &opts.fps_cap, diag.to = next;
+        return;
+    }
+    // (the game's own code: the graphics card is not the limit)
+    if (s.part[fs::kGame] > 0.5 * s.avg_ms) {
+        snprintf(b, sizeof b,
+                 "Le temps part surtout dans le jeu lui-même (CPU) : %.1f ms sur %.1f par image. La carte graphique n'est pas "
+                 "la limite.", s.part[fs::kGame], s.avg_ms);
+        diag.cause = b;
+        if (opts.threaded_rendering == 0) {
+            diag.action = "activer le rendu threadé (le rendu et l'enregistrement sur leurs propres threads). Prend effet "
+                          "après un redémarrage.";
+            diag.target = &opts.threaded_rendering, diag.to = 1;
+        }
+        return;
+    }
+    // (frame generation, when the game is under 50 images a second and it is simply off)
+    if (opts.framegen == 0 && s.avg_ms > 20) {
+        snprintf(b, sizeof b,
+                 "Le jeu tourne à %.0f images/s (1 %% low à %.0f) : la génération d'images peut doubler ça sans toucher aux "
+                 "réglages.", fps, s.low_fps);
+        diag.cause = b;
+        diag.action = "activer la génération d'images, en Auto.";
+        diag.target = &opts.framegen, diag.to = 1;
+        return;
+    }
+    // (nothing to change, but the stutter has a known name)
+    if (s.low_fps > 0 && fps > 0 && s.low_fps < 0.5 * fps) {
+        snprintf(b, sizeof b,
+                 "Des à-coups : le 1 %% low est à %.0f images/s pour %.0f de moyenne. Souvent les shaders qui se compilent au "
+                 "premier passage d'une zone : rejouez-la, ça se tasse.", s.low_fps, fps);
+        diag.cause = b;
+        return;
+    }
+    snprintf(b, sizeof b,
+             "Rien d'anormal dans les mesures : %.0f images/s, 1 %% low à %.0f, %.1f ms par image. Si ça rame encore, essayez "
+             "la Résolution de rendu ou la génération d'images.", fps, s.low_fps, s.avg_ms);
+    diag.cause = b;
+}
+void diag_press() {
+    if (diag.state == kDiagIdle) {
+        diag_analyse();
+    } else if (diag.state == kDiagAnalysed && diag.target) {
+        if (Row* r = row_for_value(diag.target)) {
+            diag.from = *diag.target, diag.preset = opts.preset;
+            set_row(*r, diag.to, 0);   // (as if the player had set it: its effects, its save, its restart note)
+            diag.state = kDiagApplied;
+            logf("menu: Ça rame ? : %s = %d (was %d)", r->name, diag.to, diag.from);
+        }
+    } else if (diag.state == kDiagApplied && diag.target) {
+        if (Row* r = row_for_value(diag.target)) {
+            set_row(*r, diag.from, 0);
+            opts.preset = diag.preset, save();   // (the row's own set_row had moved the preset to Custom)
+            logf("menu: Ça rame ? : %s back to %d", r->name, diag.from);
+        }
+        diag.state = kDiagAnalysed;
+    } else {
+        diag = Diag{};   // (Compris, or nothing to apply: the next press looks again)
+    }
+    menu_refresh = true;
+}
 menu_hit::Map hits;      // (the menu's controls as last drawn: the mouse's, menu_tick)
 float scroll_at[TAB_FPS_DEV + 2];   // (the first row shown, eased toward the selection: the options' tabs and the Motion page, then
                                    // the Controls page: kControlsSlot)
@@ -3534,6 +3684,8 @@ float measure_help(ui::Ctx& c, float width) {
         if (is_share_row(r))   // (Save my pipeline list's line after a save: the longest it can be, or the one shown when longer)
             hint = std::max(ui::para(c, c.f.body, 16 * c.s, ImVec2(), 0, kShareSaidLongest, width - 18 * c.s, false),
                             share_said.empty() ? 0.f : ui::para(c, c.f.body, 16 * c.s, ImVec2(), 0, share_said.c_str(), width - 18 * c.s, false));
+        if (is_diag_row(r))   // (Ça rame ?: the cause, the fix and the undo's line)
+            hint = ui::para(c, c.f.body, 16 * c.s, ImVec2(), 0, kDiagLongest, width - 18 * c.s, false);
         if (&r == &rows[kBugReportRow])   // (the Bug report's line once saved, with the longest folder name it can have)
             hint = ui::para(c, c.f.body, 16 * c.s, ImVec2(), 0, bug_report_saved_text("bug-reports/2026-12-31_23-59-59-99").c_str(),
                             width - 18 * c.s, false);
@@ -3952,6 +4104,8 @@ void draw_debug_rows(ui::Ctx& c, float cx0, float cx1, float top, float bottom, 
             choice_cell(c, va, vb, share_value.empty() ? "Save" : share_value, selected, false, false);
         } else if (is_laptop_row(r)) {
             choice_cell(c, va, vb, laptop_applied ? "Applied" : "Apply", selected, false, false);
+        } else if (is_diag_row(r)) {   // (Ça rame ?: Analyser, then Appliquer or Compris, then Annuler)
+            choice_cell(c, va, vb, diag_value(), selected, false, false);
         } else if (r.cheat == 0 || r.cheat == 1 || r.cheat == 7) {
             halves_cell(c, va, vb, "Off", "On", cheat_value(r.cheat) == "On", selected, false);
         } else if (age_shown(r.cheat)) {   // (Link's age now: the other half switches)
@@ -4111,6 +4265,7 @@ void row_value_cell(ui::Ctx& c, const Row& r, ImVec2 va, ImVec2 vb, bool selecte
             choice_cell(c, va, vb, !host || !host->mic_test ? "Unavailable" : opts.mic == 0 ? "Microphone Off" : mic_testing ? "Stop test" : "Start test", selected, false, false);
         else if (pending == &r) choice_cell(c, va, vb, "Press again to confirm", selected, false, false);
         else if (is_share_row(r)) choice_cell(c, va, vb, share_value.empty() ? "Save" : share_value, selected, false, false);   // (an action, not a page)
+        else if (is_diag_row(r)) choice_cell(c, va, vb, diag_value(), selected, false, false);
         else if (&r == &rows[kBugReportRow]) choice_cell(c, va, vb, bug_report_cell(), selected, false, false);   // (how the last report went)
         else {
             choice_cell(c, va, vb, "", selected, false, false);
@@ -4166,6 +4321,7 @@ void draw_options(ui::Ctx& c) {
     if ((is_nfc_tap(selr) || is_nfc_remove(selr)) && !nfc_said.empty()) hint = nfc_said.c_str();   // (what the press did)
     if (is_nfc_scan(selr)) hint = nfc_scan_says(-1);
     if (is_share_row(selr) && !share_said.empty()) hint = share_said.c_str();   // (what the last save did)
+    if (is_diag_row(selr)) hint = diag_hint();   // (Ça rame ?: the cause, the fix and the undo's line)
     if (&selr == &rows[kBugReportRow]) hint = bug_report_hint();   // (the Bug report: where it was saved, or why not)
     const std::string pending_line = (cur_tab == TAB_GRAPHICS || cur_tab == TAB_DEBUG) && restart_pending() ? restart_line(c, 16 * s, hx1 - hx0 - 66 * s) : "";
     static float help_tall = 0, help_tall_w = 0;
@@ -4198,7 +4354,7 @@ void draw_options(ui::Ctx& c) {
             if (const char* says = cheat_confirm(selr.cheat)) prompt_list[prompts_n++] = {ui::kConfirm, says};
             prompt_list[prompts_n++] = {ui::kCompact, "Compact", compact_key_name};
         } else {
-            prompt_list[prompts_n++] = {ui::kConfirm, is_nfc_tap(selr) ? "Tap" : is_nfc_remove(selr) ? "Remove" : is_nfc_scan(selr) ? "Scan" : confirms ? (pending == &selr ? "Confirm" : selr.name) : &selr == &rows[kBugReportRow] || is_share_row(selr) ? "Save" : "Open"};
+            prompt_list[prompts_n++] = {ui::kConfirm, is_nfc_tap(selr) ? "Tap" : is_nfc_remove(selr) ? "Remove" : is_nfc_scan(selr) ? "Scan" : confirms ? (pending == &selr ? "Confirm" : selr.name) : &selr == &rows[kBugReportRow] || is_share_row(selr) ? "Save" : is_diag_row(selr) ? diag_value() : "Open"};
         }
         if (cur_tab == TAB_MOTION || cur_tab == TAB_FPS_DEV) prompt_list[prompts_n++] = {ui::kBack, "Back"};   // (Esc: to Controls, or Gameplay)
         else {
@@ -6739,6 +6895,7 @@ void menu_tick() {
             press[7] = false, changed = true;
         }
         else if (press[7] && is_share_row(r)) share_pipeline_list(), press[7] = false, changed = true;
+        else if (press[7] && is_diag_row(r)) diag_press(), press[7] = false, changed = true;   // (OcaDim: Ça rame ?)
         else if (press[7] && is_laptop_row(r)) weak_laptop_apply(), press[7] = false, changed = true;
         else if (press[7] && &r == &rows[kBugReportRow]) bug_report_save(), press[7] = false, changed = true;
         else if (const FieldRow* f = press[7] ? field_row(r) : nullptr) edit_start(*f->field, f->apply), changed = true;   // (longshot)

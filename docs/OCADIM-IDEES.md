@@ -15,17 +15,22 @@ build sauvegardé et un tag avant de passer au suivant.
   et les suivantes. Les lignes de l'amont restent dans Débogage.
 - Tout ce qui est visible dans le jeu est **en français** (libellés traduits **avant** d'être coupés).
 
-## Priorité 1 — « Ça rame ? » (dépannage en un clic)
+## Priorité 1 — « Ça rame ? » (dépannage en un clic) — **fait**
 
 Une ligne d'action dans OcaDim. Elle lit l'état réel et propose **une** cause et **une** action
-expliquée, avec annulation :
+expliquée, avec annulation (Entrée : analyser, encore : appliquer, encore : annuler). Testée en jeu
+par Dimi.
 
-- VRAM proche du plafond → proposer le budget textures / couper « ASTC en RGBA8 » ;
-- shaders en compilation (« Shaders built », « Draws left out ») → proposer le cache de pipelines ;
-- frame generation coupée alors que le GPU a de la marge → la proposer ;
-- cap d'images trop bas ou vsync incohérent avec l'écran → proposer la bonne valeur ;
-- résolution de sortie très supérieure à l'écran / upscaler désactivé → proposer l'upscaler ;
-- temps « Game » (CPU) très supérieur au temps GPU → proposer le mode Petit PC.
+Ce qu'elle regarde, dans cet ordre :
+
+- VRAM proche du plafond → proposer « ASTC en RGBA8 » coupé, sinon les ombres au niveau du jeu ;
+- plafond d'images qui bride (temps d'attente dans le pacing) → proposer le cran au-dessus ;
+- temps passé dans le jeu (CPU) → proposer le rendu threadé (après redémarrage) ;
+- frame generation coupée sous 50 images/s → la proposer en Auto ;
+- à-coups (1 % low sous la moitié de la moyenne) → expliquer les shaders du premier passage ;
+- sinon, dire que rien n'est anormal, avec les chiffres.
+
+Build : `F:\OcaDim-SAVE-17-11\build-0.0.3-ca-rame`, tag `v0.0.3-ca-rame`.
 
 ## Priorité 2 — Résolution dynamique (DRS), dans OcaDim
 
@@ -66,12 +71,29 @@ Un veilleur qui lit la mémoire toutes les secondes :
 - si la baisse ne suffit pas, on propose de quitter proprement plutôt que de laisser la machine
   swapper.
 
-## Priorité 6 — Cache de pipelines partagé
+## Priorité 6 — Les options de rendu, toutes dans OcaDim
+
+Chaque levier ci-dessous est une ligne de la section **OcaDim**, en français, avec son aide et son
+état par défaut « Désactivé = comportement actuel » :
+
+| Ligne (OcaDim) | Effet | Réglage |
+|---|---|---|
+| `Ombrage à taux variable` (VRS) | ombrage fin sur les contours, réduit à l'intérieur des surfaces | Désactivé / Auto / 2x / 4x |
+| `Occlusion` | ne pas dessiner ce qui est caché derrière un mur | Désactivé / Activé |
+| `Lots statiques` | la géométrie fixe d'une salle en une seule soumission | Désactivé / Activé |
+| `Prépasse de profondeur` | remplir la profondeur d'abord sur les scènes à fort recouvrement | Désactivé / Auto |
+| `Tri des rendus` | trier les draws par pipeline pour réduire les changements d'état | Désactivé / Activé |
+
+Règles : aucune de ces lignes ne change le rendu quand elle est sur « Désactivé » ; chacune est
+mesurable seule (temps de frame, 1 % low, VRAM) avant d'être laissée active par défaut ; et le mode
+« Petit PC » les active ensemble.
+
+## Priorité 7 — Cache de pipelines partagé
 
 L'amont demande au joueur d'envoyer son cache à la main. OcaDim : un cache signé, proposé au premier
 lancement (opt-in), pour supprimer les saccades de compilation dès la première partie.
 
-## Priorité 7 — Assistant de premier lancement
+## Priorité 8 — Assistant de premier lancement
 
 Détection GPU / VRAM / écran HDR / manette, trois profils français (Qualité, Équilibré,
 Performances), test de 10 s, application. Il pose aussi la DRS et le mode Petit PC.
