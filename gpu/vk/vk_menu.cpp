@@ -102,9 +102,10 @@ enum MenuTab {
     TAB_GAMEPLAY = 3,
     TAB_CONTROLS = 4,
     TAB_NFC = 5,     // (longshot: the player's NFC tags, held to the game's reader: host/nn_nfp.c)
-    TAB_NVIDIA = 6,  // (OcaDim: the vendor's own settings in one place; a tab with no row shown here is skipped)
-    TAB_DEBUG = 7,   // (the OoT debug tools of #785, a tab of their own)
-    TAB_COUNT = 8,
+    TAB_OCADIM = 6,  // (OcaDim: only the options this fork adds, apart from the game's and the vendor's)
+    TAB_NVIDIA = 7,  // (OcaDim: the vendor's own settings in one place; a tab with no row shown here is skipped)
+    TAB_DEBUG = 8,   // (the OoT debug tools of #785, a tab of their own)
+    TAB_COUNT = 9,
     TAB_MOTION = TAB_COUNT,   // (longshot: not a tab of the strip, the Motion page that the Controls tab's Motion row
                               // opens: one past the strip's tabs, so a tab added before TAB_COUNT moves it along)
     TAB_FPS_DEV = TAB_MOTION + 1,   // (longshot: not a tab either, the FPS counter's Dev lines page, from the Gameplay tab)
@@ -1839,10 +1840,10 @@ Row rows[] = {
     {TAB_DEBUG, "Debug tools", &opts.debug_tools, 0, 1, 1, tx_onoff,
      "Testing tools: no-clip flight, a free camera, teleport, Link's age, the inventory, the clock, heart protection and "
      "movement speed. Off puts flight, the free camera and heart protection away and Link back to his own speed and damage.", nullptr, false, true},
-    {TAB_DEBUG, "Write back diff", &opts.wb_diff, 0, 1, 1, tx_onoff,   // (OcaDim)
+    {TAB_OCADIM, "Write back diff", &opts.wb_diff, 0, 1, 1, tx_onoff,   // (OcaDim)
      "Compares only the pages a submission wrote back instead of copying whole pools: the fastest, and on by default. Off "
      "returns the whole copies.", nullptr, false, true},
-    {TAB_DEBUG, "Upscaler notes cache", &opts.notes_keep, 0, 1, 1, tx_onoff,   // (OcaDim)
+    {TAB_OCADIM, "Upscaler notes cache", &opts.notes_keep, 0, 1, 1, tx_onoff,   // (OcaDim)
      "Reuses the upscaler's scene note while the target and the camera stay the same: fewer locks a frame.",
      nullptr, false, true},
     {TAB_DEBUG, "Heart protection", nullptr, 0, 0, 0, nullptr,
@@ -1888,10 +1889,10 @@ Row rows[] = {
     {TAB_DEBUG, "Threaded rendering", &opts.threaded_rendering, 0, 2, 1, tx_vsync,
      "Draws the picture on threads of its own, beside the game's, on a processor with threads to spare. Applies after a "
      "restart.", hn_threaded, true, true},
-    {TAB_DEBUG, "Descriptor reuse", &opts.descriptor_reuse, 0, 1, 1, tx_onoff,
+    {TAB_OCADIM, "Descriptor reuse", &opts.descriptor_reuse, 0, 1, 1, tx_onoff,
      "A draw keeps its descriptors while the texture slots it samples are unchanged, so streaming elsewhere in the game no longer "
      "rebuilds every set each frame. Changes at once.", nullptr, false, true},
-    {TAB_DEBUG, "Sampler cache", &opts.sampler_cache, 0, 1, 1, tx_onoff,
+    {TAB_OCADIM, "Sampler cache", &opts.sampler_cache, 0, 1, 1, tx_onoff,
      "What a sampler holds is kept beside it on the replay thread, so resolving a sampler that was not registered anew takes no "
      "lock. Helps while the game streams textures. Changes at once.", nullptr, false, true},
     {TAB_DEBUG, "Robust buffers", &opts.robust, 0, 2, 1, tx_robust,
@@ -3557,22 +3558,26 @@ std::vector<size_t> char_starts(const std::string& t) {
     return at;
 }
 std::string fit(ui::Ctx& c, ImFont* f, float px, float room, const std::string& label, bool sel) {
+    // (OcaDim) the label in the menu's language, measured and cut in that language: fitting the English first gave a
+    // French menu an English fragment with "..." (the lookup no longer matched "Custom output size...") and a width
+    // that was not the shown text's
+    const std::string text = i18n::tr(label.c_str());
     auto width = [&](const std::string& t) { return ui::size_of(f, px, t.c_str()).x; };
-    if (width(label) <= room) return label;
-    const std::vector<size_t> at = char_starts(label);
+    if (width(text) <= room) return text;
+    const std::vector<size_t> at = char_starts(text);
     const int chars = (int)at.size() - 1;
     if (sel) {   // (marquee_pos and marquee_max count characters)
         int start = chars;   // (the last start that still shows the label's end)
-        while (start > 0 && width(label.substr(at[start - 1])) <= room) start--;
+        while (start > 0 && width(text.substr(at[start - 1])) <= room) start--;
         marquee_max = start;
         const int from = std::min(marquee_pos, marquee_max);
         int end = chars;
-        while (end > from + 1 && width(label.substr(at[from], at[end] - at[from])) > room) end--;
-        return label.substr(at[from], at[end] - at[from]);
+        while (end > from + 1 && width(text.substr(at[from], at[end] - at[from])) > room) end--;
+        return text.substr(at[from], at[end] - at[from]);
     }
     int end = chars;
-    while (end > 1 && width(label.substr(0, at[end]) + "...") > room) end--;
-    std::string t = label.substr(0, at[end]);
+    while (end > 1 && width(text.substr(0, at[end]) + "...") > room) end--;
+    std::string t = text.substr(0, at[end]);
     while (!t.empty() && t.back() == ' ') t.pop_back();
     return t + "...";
 }
@@ -4063,7 +4068,7 @@ const char* bug_report_hint() {
     return text.c_str();
 }
 
-const char* const tab_titles[TAB_COUNT] = {"Display", "Graphics", "Audio", "Gameplay", "Controls", "NFC", "NVIDIA", "Debug"};
+const char* const tab_titles[TAB_COUNT] = {"Display", "Graphics", "Audio", "Gameplay", "Controls", "NFC", "OcaDim", "NVIDIA", "Debug"};
 inline const char* tab_title(int t) { return t >= 0 && t < TAB_COUNT ? tab_titles[t] : "Settings"; }
 /// (OcaDim) The rail: one line a section, the shown one on an inset with a gold bar at its left, the others dim; the
 /// sections under another (Motion, the FPS counter's details) light their parent
@@ -5852,8 +5857,8 @@ void menu_option_set(int id, int value) {
 // its own thread: menu_mu keeps them apart from menu_tick (the present's thread) and from menu_option_set (the game's)
 bool bridge_row(int i) { return rows[i].value && !rows[i].heading && rows[i].cheat < 0 && row_shown(i); }
 void bridge_fill(int i, MkwVkSetting* out) {
-    static const char* const tabs[] = {"display", "graphics", "audio", "gameplay", "controls", "nfc", "nvidia", "debug",
-                                       "motion", "gameplay", "controls"};
+    static const char* const tabs[] = {"display", "graphics", "audio", "gameplay", "controls", "nfc", "ocadim", "nvidia",
+                                       "debug", "motion", "gameplay", "controls"};
     static_assert(sizeof tabs / sizeof tabs[0] == TAB_PAGE + 1, "a name for each MenuTab");
     const Row& r = rows[i];
     *out = MkwVkSetting{};
