@@ -63,11 +63,14 @@ struct State {
     // (what the context was made from, kept as the SDK asks)
     ffxCreateContextDescFrameGenerationSwapChainVK desc{};
     ffxCreateContextDescFrameGenerationSwapChainVersionVK version{};
+    ffxOverrideVersion sc_override{};   // (OcaDim) the swapchain's provider version (3.1.7 or 4.0.0), when one is asked
+    int sc_major = 0;                   // (OcaDim) the generation that context was made for (3, 4, 0 the SDK's own)
     // (P2: the frame generation context, for the swapchain's size and format)
     ffxContext fg = nullptr;
     ffxCreateBackendVKDesc backend{};
     ffxCreateContextDescFrameGeneration fg_desc{};
     ffxCreateContextDescFrameGenerationVersion fg_version{};
+    ffxOverrideVersion fg_override{};   // (OcaDim) the generation's provider version (3.1.6 or 4.0.2), when one is asked
     uint32_t fg_w = 0, fg_h = 0;
     VkFormat fg_format = VK_FORMAT_UNDEFINED;
     uint64_t frame_id = 0;    // (one more a frame, as the API asks)
@@ -140,11 +143,11 @@ int list_versions(uint64_t type, char* out, size_t size) {
 /// (OcaDim) The major of the frame generation version the context was made with (4 or 3), 0 before one is made
 int g_fg_major = 0;
 
-uint64_t pick_fg_version(int want_major) {
+uint64_t pick_version(uint64_t desc_type, int want_major, const char* what) {
     const VkDeviceContext context{dev.device, dev.physical, vkGetDeviceProcAddr};
     ffxQueryDescGetVersions q{};
     q.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
-    q.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION;
+    q.createDescType = desc_type;
     q.device = (void*)&context;
     uint64_t n = 0;
     q.outputCount = &n;
@@ -157,7 +160,7 @@ uint64_t pick_fg_version(int want_major) {
     for (uint64_t i = 0; i < n; i++) {
         // (OcaDim) each entry as AMD names it, so a choice that finds nothing says what it was offered
         const char* name = names[i] ? names[i] : "";
-        logf("vk: AMD FG: frame generation version %llu is \"%s\"", (unsigned long long)ids[i], name);
+        logf("vk: AMD FG: %s version %llu is \"%s\"", what, (unsigned long long)ids[i], name);
         // (OcaDim) the first number anywhere in the name: "4.0.2" and "FSR 4.0.2" both give 4
         for (const char* p = name; *p; p++)
             if (*p >= '0' && *p <= '9') {
@@ -166,6 +169,17 @@ uint64_t pick_fg_version(int want_major) {
             }
     }
     return 0;
+}
+
+/// (OcaDim) The generation the Frame generation by row asks for this run (RX_VK_FG_AMD_FORCE over it): 4 FSR 4's,
+/// 3 FSR 3.1's, 0 the SDK's own (the newest it lists). The swapchain and the generation context both follow it
+int want_major() {
+    if (const char* force = getenv("RX_VK_FG_AMD_FORCE")) {
+        const int v = atoi(force);
+        if (v >= 4) return 4;
+        if (v == 3) return 3;
+    }
+    return opts.framegen_by == 3 ? 4 : opts.framegen_by == 2 ? 3 : 0;
 }
 
 /// Loads AMD's loader once and asks it what this device can run. False: no library, or nothing for this GPU.
@@ -241,6 +255,18 @@ FfxApiResource image_resource(VkImage image, VkFormat format, uint32_t w, uint32
 /// The swapchain's callback at its present: AMD's frame generation between the frame just shown and the one before
 ffxReturnCode_t generate(ffxDispatchDescFrameGeneration* d, void* user) {
     State& s = st();
+    // (OcaDim) the transfer function the generated frames read the backbuffer with: PQ on the HDR10 swapchain, sRGB
+    // otherwise. The dispatch's fields are the application's to fill; left at zero (sRGB), the PQ codes of the picture are
+    // read as sRGB, which is the neon, magenta picture HDR players got from AMD's generation at 2x
+    if (hdr_format(dev.swap_format)) {
+        d->backbufferTransferFunction = FFX_API_BACKBUFFER_TRANSFER_FUNCTION_PQ;
+        d->minMaxLuminance[0] = 0.0f;
+        const int peak = opts.hdr_peak < 400 ? 400 : opts.hdr_peak > 10000 ? 10000 : opts.hdr_peak;
+        d->minMaxLuminance[1] = (float)peak;
+    } else {
+        d->backbufferTransferFunction = FFX_API_BACKBUFFER_TRANSFER_FUNCTION_SRGB;
+        d->minMaxLuminance[0] = d->minMaxLuminance[1] = 0.0f;
+    }
     s.generated++;
     return s.dispatch((ffxContext*)user, &d->header);
 }
@@ -270,32 +296,37 @@ bool create_fg(uint32_t w, uint32_t h, VkFormat fmt, bool depth_reversed, float 
     // anything else (Auto, the game's own, DLSS) leaves the SDK's own choice, the newest it lists.
     // (OcaDim) the row chooses when it names a generation (3: FSR 4's, 2: FSR 3.1's); anything else keeps what 0.0.2 did,
     // AMD's own FFX_FRAMEGENERATION_VERSION, which is FSR 4's on the SDK we ship
-    const int want_major = [] {
-        if (const char* force = getenv("RX_VK_FG_AMD_FORCE")) {   // (OcaDim) the run's switch: 4 or 3, and nothing else
-            const int v = atoi(force);
-            if (v >= 4) return 4;
-            if (v == 3) return 3;
-        }
-        return opts.framegen_by == 3 ? 4 : opts.framegen_by == 2 ? 3 : 0;
-    }();
+    const int major = want_major();
     // (OcaDim) what this creation sees, said: the row as it stands at this instant, and the version that follows from it. A
     // framegen_by of 0 here means the context was made before the row was read, and the SDK's own (the newest it lists) is
     // what is asked for
     logf("vk: AMD FG: create_fg: framegen_by=%d, so %s", opts.framegen_by,
-         want_major == 4 ? "AMD FSR 4's generation" : want_major == 3 ? "AMD FSR 3.1's generation" : "the SDK's own version");
-    const uint64_t picked = want_major ? pick_fg_version(want_major) : 0;
-    s.fg_version.version = picked ? picked : FFX_FRAMEGENERATION_VERSION;
+         major == 4 ? "AMD FSR 4's generation" : major == 3 ? "AMD FSR 3.1's generation" : "the SDK's own version");
+    const uint64_t picked = major ? pick_version(FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION, major, "frame generation") : 0;
+    // (OcaDim) the version desc holds the API version this build was made against (as its header says), and the provider
+    // version is chosen by ffxOverrideVersion: a provider id written into the version desc is not a selection at all, and
+    // the loader gave its newest (4.0.2) whatever was picked -- the reason 3.1 was never really asked for
+    s.fg_version.version = FFX_FRAMEGENERATION_VERSION;
+    s.fg_override = {};
+    s.fg_override.header.type = FFX_API_DESC_TYPE_OVERRIDE_VERSION;
+    s.fg_override.versionId = picked;
     // (OcaDim) nothing is named before the context is made: a refused creation must leave the counter with no generation
     // at all, not with the one that was asked for
     g_fg_major = 0;
-    logf("vk: AMD FG: the frame generation context is made with %s",
-         picked ? (want_major == 4 ? "AMD FSR 4" : "AMD FSR 3.1") : "the SDK's own version");
-    if (want_major && !picked)
-        logf("vk: AMD FG: no FSR %d frame generation listed for this device; the SDK's own version is made instead", want_major);
+    logf("vk: AMD FG: the frame generation context is asked for with %s",
+         picked ? (major == 4 ? "AMD FSR 4" : "AMD FSR 3.1") : "the SDK's own version");
+    if (major && !picked)
+        logf("vk: AMD FG: no FSR %d frame generation listed for this device; the SDK's own version is made instead", major);
+    // (OcaDim) desc -> override (the provider) -> version (the API) -> backend
     s.fg_version.header.pNext = &s.backend.header;
     s.fg_desc = {};
     s.fg_desc.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION;
-    s.fg_desc.header.pNext = &s.fg_version.header;
+    if (picked) {
+        s.fg_override.header.pNext = &s.fg_version.header;
+        s.fg_desc.header.pNext = &s.fg_override.header;
+    } else {
+        s.fg_desc.header.pNext = &s.fg_version.header;
+    }
     // (the projection's far plane: infinite only where the camera says so (the chain's camera has a far of 1e8 there,
     // 1000.5 for Ocarina's own). FSR 3.1's reversed depth is the only input the chain gives reversed)
     const bool infinite = !(far_z > 0.0f) || far_z >= 1e6f;
@@ -337,7 +368,10 @@ bool create_fg(uint32_t w, uint32_t h, VkFormat fmt, bool depth_reversed, float 
                 made_major = atoi(p);
                 break;
             }
-    g_fg_major = made_major == 4 ? 4 : made_major == 3 ? 3 : picked ? want_major : 0;
+    g_fg_major = made_major == 4 ? 4 : made_major == 3 ? 3 : picked ? major : 0;
+    if (picked && made_major && made_major != major)
+        logf("vk: AMD FG: FSR %d was asked for, and the SDK made %s: its own choice stands above the provider's", major,
+             provider.versionName);
     FfxApiEffectMemoryUsage mem{};
     ffxQueryDescFrameGenerationGetGPUMemoryUsage mq{};
     mq.header.type = FFX_API_QUERY_DESC_TYPE_FRAMEGENERATION_GPU_MEMORY_USAGE;
@@ -370,6 +404,8 @@ bool fg_amd_wanted() {
 
 int fg_amd_major() { return g_fg_major; }
 
+int fg_amd_want_major() { return want_major(); }
+
 bool fg_amd_active() { return st().sc != nullptr; }
 
 bool fg_amd_generating() { return st().fg != nullptr && !st().gen_failed; }
@@ -384,6 +420,15 @@ VkResult fg_amd_create_swapchain(const VkSwapchainCreateInfoKHR& ci, VkSwapchain
         return VK_ERROR_FEATURE_NOT_PRESENT;
     }
     if (!load()) return s.failed = true, VK_ERROR_FEATURE_NOT_PRESENT;
+    // (OcaDim) the row now asks for the other generation: its provider version (3.1.7 or 4.0.0) is part of the swapchain
+    // context, so that context is destroyed and made again -- the size/format remake below keeps the one it was made with
+    const int major = want_major();
+    if (s.sc && s.sc_major != major) {
+        logf("vk: AMD FG: the generation is now %s: AMD's swapchain context is made again",
+             major == 3 ? "AMD FSR 3.1" : major == 4 ? "AMD FSR 4" : "the SDK's own");
+        device_wait_idle_locked();
+        fg_amd_surface_lost();   // (its presents waited, the generation context and the swapchain context destroyed)
+    }
     if (s.sc) {   // a new size or format: the swapchain is remade in place and keeps its handle
         device_wait_idle_locked();   // (the replay's writes into the old images done, then the SDK's presents)
         wait_presents();
@@ -426,7 +471,22 @@ VkResult fg_amd_create_swapchain(const VkSwapchainCreateInfoKHR& ci, VkSwapchain
     s.version = {};
     s.version.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_VERSION_VK;
     s.version.version = FFX_FRAMEGENERATION_SWAPCHAIN_VK_VERSION;
-    s.desc.header.pNext = &s.version.header;
+    // (OcaDim) the swapchain's provider version follows the generation asked for -- 3.1.7 for FSR 3.1, 4.0.0 for FSR 4 --
+    // through ffxOverrideVersion, as the generation context's does; the SDK's newest when neither is asked
+    const uint64_t sc_picked = major ? pick_version(FFX_API_CREATE_CONTEXT_DESC_TYPE_FGSWAPCHAIN_VK, major, "swapchain") : 0;
+    s.sc_override = {};
+    s.sc_override.header.type = FFX_API_DESC_TYPE_OVERRIDE_VERSION;
+    s.sc_override.versionId = sc_picked;
+    if (sc_picked) {
+        s.sc_override.header.pNext = &s.version.header;
+        s.desc.header.pNext = &s.sc_override.header;
+        logf("vk: AMD FG: AMD's swapchain context is asked for with FSR %d's version (%llu)", major,
+             (unsigned long long)sc_picked);
+    } else {
+        s.desc.header.pNext = &s.version.header;
+        if (major)
+            logf("vk: AMD FG: no FSR %d swapchain listed for this device; the SDK's own version is made instead", major);
+    }
     const ffxReturnCode_t rc = s.create(&s.sc, &s.desc.header, nullptr);
     if (rc != FFX_API_RETURN_OK || !s.sc) {
         s.sc = nullptr, s.handle = VK_NULL_HANDLE;
@@ -446,6 +506,7 @@ VkResult fg_amd_create_swapchain(const VkSwapchainCreateInfoKHR& ci, VkSwapchain
         s.failed = true;
         return VK_ERROR_FEATURE_NOT_PRESENT;
     }
+    s.sc_major = major;
     *out = s.handle;
     logf("vk: AMD FG: AMD's frame generation swapchain, %ux%u, %u images asked (RX_VK_FG_AMD=1; no frame generation yet)",
          ci.imageExtent.width, ci.imageExtent.height, ci.minImageCount);

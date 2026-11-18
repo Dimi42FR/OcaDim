@@ -5753,8 +5753,12 @@ void present_image(VkImage src, uint32_t sw, uint32_t sh, const int crop[4], VkI
     // spare images takes one set's images, create_swapchain. The multiplier as it runs, framegen_now: DLSS FG's top with a
     // saved value past it)
     const int framegen = framegen_now();
+    // (OcaDim) AMD's swapchain itself, and the generation it was made for, as bits of this key: turning Frame generation
+    // by to, from or between AMD's generations remakes the window's swapchain at once (create_swapchain takes it, gives it
+    // back, or makes its context again when the provider version changes: 3.1.7 or 4.0.0)
     const int vsync_now = menu_vsync() * 16 + swapchain_framegen() * 2 + (swapchain_dlssg() ? 1 : 0) +
-                          (framegen > 4 ? framegen * 256 : 0);
+                          (framegen > 4 ? framegen * 256 : 0) +
+                          (fg_amd_wanted() ? 4096 + fg_amd_want_major() * 8192 : 0);
     const bool vsync_changed = vsync_was >= 0 && vsync_was != vsync_now;
     if (vsync_was < 0) vsync_was = vsync_now;
     if (presenter_surface_lost.exchange(false, std::memory_order_acquire)) {   // (the presenter's present found the surface lost)

@@ -93,13 +93,15 @@ Options opts;
 
 namespace {
 enum MenuTab {
-    TAB_GRAPHICS = 0,
-    TAB_AUDIO = 1,
-    TAB_GAMEPLAY = 2,
-    TAB_CONTROLS = 3,
-    TAB_NFC = 4,     // (longshot: the player's NFC tags, held to the game's reader: host/nn_nfp.c)
-    TAB_DEBUG = 5,   // (the OoT debug tools of #785, a tab of their own)
-    TAB_COUNT = 6,
+    TAB_DISPLAY = 0,   // (OcaDim: the picture's shape, the screen, HDR: what a player looks for first)
+    TAB_GRAPHICS = 1,
+    TAB_AUDIO = 2,
+    TAB_GAMEPLAY = 3,
+    TAB_CONTROLS = 4,
+    TAB_NFC = 5,     // (longshot: the player's NFC tags, held to the game's reader: host/nn_nfp.c)
+    TAB_NVIDIA = 6,  // (OcaDim: the vendor's own settings in one place; a tab with no row shown here is skipped)
+    TAB_DEBUG = 7,   // (the OoT debug tools of #785, a tab of their own)
+    TAB_COUNT = 8,
     TAB_MOTION = TAB_COUNT,   // (longshot: not a tab of the strip, the Motion page that the Controls tab's Motion row
                               // opens: one past the strip's tabs, so a tab added before TAB_COUNT moves it along)
     TAB_FPS_DEV = TAB_MOTION + 1,   // (longshot: not a tab either, the FPS counter's Dev lines page, from the Gameplay tab)
@@ -1163,9 +1165,10 @@ const char* framegen_maker_name() {
 /// counter's (framegen_maker_name), not the choice's name
 const char* tx_framegen_by(int v) {
     if (framegen_by_dlss_offered() && (v == 0 || dlss_fg_forced())) return "DLSS FG";
-    // (OcaDim) 2 and 3 are AMD's two generations, made by vk_fg_amd.cpp's pick_fg_version: the row chooses the version,
-    // not only the maker (the log names the one made: "AMD FG: ... for this device: ... 4.0.2, 3.1.6")
-    return v == 1 ? "Built-in FG" : v == 2 ? "AMD FSR 3.1 FG" : "AMD FSR 4 FG";
+    // (OcaDim) 2 and 3 are AMD's two generations, made by vk_fg_amd.cpp's pick_version: the row chooses the version, not
+    // only the maker (the log names the one made: "AMD FG: ... for this device: ... 4.0.2, 3.1.6"). 0 is the SDK's own
+    // (the newest it lists, 4.0.2 on the SDK we ship): named as such, so it does not read as a second forced FSR 4
+    return v == 1 ? "Built-in FG" : v == 2 ? "AMD FSR 3.1 FG" : v == 0 ? "AMD FSR 4 FG (Auto)" : "AMD FSR 4 FG";
 }
 /// Why DLSS-G does not make the frames now (vk_dlss.h FgSkip, and the Auto multiplier's FG_SKIP_COUNT), the row's line after
 /// "Not DLSS FG now: ". most: its runtime's most made frames, for FG_SKIP_TOO_MANY
@@ -1564,24 +1567,24 @@ Row rows[] = {
      hn_preset},
     // (the picture's way, top to bottom: the output's size, what fills it from the 3D, the 3D's size, its sharpening; then
     // the frames, and the window it is shown in)
-    {TAB_GRAPHICS, "Resolution and upscaling", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, false, true, -1, true},
+    {TAB_DISPLAY, "Picture", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, false, true, -1, true},
     // (the shape, then its sizes: the screen's display modes, display_modes.h; outputs_sync sets both rows' ends at the start)
-    {TAB_GRAPHICS, "Aspect ratio", &opts.ultrawide, 0, 1, 1, tx_ultrawide,
+    {TAB_DISPLAY, "Aspect ratio", &opts.ultrawide, 0, 1, 1, tx_ultrawide,
      "The picture's shape: your monitor's own (the default: wider on an ultrawide, narrower on 4:3 or 16:10), the game's "
      "16:9, or another your screen has. The Output resolution lists that shape's sizes. Applies after a restart.", hn_ultrawide,
      true, true},
-    {TAB_GRAPHICS, "Output resolution", &opts.output_res, 0, 0, 1, tx_output_res,
+    {TAB_DISPLAY, "Output resolution", &opts.output_res, 0, 0, 1, tx_output_res,
      "The game's whole frame, HUD included, before it is scaled to the window. Docked only. Applies after a restart.",
      hn_output_res, true, true},
-    {TAB_GRAPHICS, "Custom output size", nullptr, 0, 0, 0, nullptr,   // (longshot: a text field, field_rows)
+    {TAB_DISPLAY, "Custom output size", nullptr, 0, 0, 0, nullptr,   // (longshot: a text field, field_rows)
      "An Output resolution of your own, typed as width x height: your monitor's size, such as 3440x1440, 2560x1080 or "
      "2560x1600. Each side is rounded down to a multiple of 8; a size the Output resolution offers is chosen there. Empty: "
      "none. Docked only. Applies after a restart."},
-    {TAB_GRAPHICS, "Profile", &opts.handheld, 0, 1, 1, tx_profile,
+    {TAB_DISPLAY, "Profile", &opts.handheld, 0, 1, 1, tx_profile,
      "Runs the game as the console docked or handheld. Applies after a restart.", hn_handheld, true},
     {TAB_GRAPHICS, "Upscaler", &opts.dlss, 0, ur::kUpscalers - 1, 1, tx_upscaler, "What scales the 3D up to the Output resolution.",
      hn_upscaler},
-    {TAB_GRAPHICS, "DLSS model", &opts.dlss_model, 0, ur::kModels - 1, 1, tx_dlss_model,
+    {TAB_NVIDIA, "DLSS model", &opts.dlss_model, 0, ur::kModels - 1, 1, tx_dlss_model,
      "Which of NVIDIA's DLSS networks draws the picture.", hn_dlss_model, false, true},
     {TAB_GRAPHICS, "Render resolution", &opts.resolution, 0, ur::kValues - 1, 1, tx_resolution,
      "The share of the output the 3D is drawn at; the Upscaler fills in the rest.", hn_resolution},
@@ -1595,54 +1598,55 @@ Row rows[] = {
     {TAB_GRAPHICS, "Frame generation by", &opts.framegen_by, 0, 3, 1, tx_framegen_by,
      "Who makes the frames at 2x and up. NVIDIA DLSS Frame Generation needs a temporal Upscaler (DLSS, DLAA or FSR) for "
      "the scene's depth and motion. Changes at once.", hn_framegen_by, false, true},
-    {TAB_GRAPHICS, "Game frame rate cap", &opts.fps_cap, -1, 6, 1, tx_fps_cap,
+    {TAB_DISPLAY, "Frame rate", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, false, true, -1, true},
+    {TAB_DISPLAY, "Game frame rate cap", &opts.fps_cap, -1, 6, 1, tx_fps_cap,
      "Limits frames rendered by the game. Generated frames are additional. Changes at once. "
      "Past 60 is experimental: the game keeps real time, but some cutscenes and bosses can misbehave (Gohma, the intro's "
      "narration). 60 is the safe choice. Uncapped: as fast as the PC can, still at real time; with V-Sync on, the display's "
      "refresh rate is the limit. 30 FPS always uses real-time game speed, even when Game speed is Per frame.",
      nullptr, false, true},
-    {TAB_GRAPHICS, "NVIDIA Reflex", &opts.reflex, 0, 2, 1, tx_reflex,
+    {TAB_NVIDIA, "NVIDIA Reflex", &opts.reflex, 0, 2, 1, tx_reflex,
      "NVIDIA GPUs: each frame starts as late as it can, for less input delay. With frame generation too: it paces the "
      "game's frames.", hn_reflex, false, true},
     {TAB_GRAPHICS, "AMD Anti-Lag 2", &opts.antilag, 0, 1, 1, tx_antilag,
      "AMD GPUs: each frame starts as late as it can, for less input delay. With frame generation too: it paces "
      "the game's frames.", hn_antilag, false, true},
-    {TAB_GRAPHICS, "Screen", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, false, true, -1, true},
-    {TAB_GRAPHICS, "Fullscreen", &opts.fullscreen, 0, 1, 1, tx_onoff,
+    {TAB_DISPLAY, "Screen", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, false, true, -1, true},
+    {TAB_DISPLAY, "Fullscreen", &opts.fullscreen, 0, 1, 1, tx_onoff,
      "Fills the whole screen with the game, without the window's border. The same as F11.", nullptr, false, true},
-    {TAB_GRAPHICS, "Fullscreen monitor", &monitor_pick, 0, 0, 1, tx_fullscreen_monitor,
+    {TAB_DISPLAY, "Fullscreen monitor", &monitor_pick, 0, 0, 1, tx_fullscreen_monitor,
      "Choose the screen used by Fullscreen, F11 and Alt+Enter. Auto uses the window's current monitor.", hn_fullscreen_monitor, false, true},
-    {TAB_GRAPHICS, "V-Sync", &opts.vsync, 0, 2, 1, tx_vsync,
+    {TAB_DISPLAY, "V-Sync", &opts.vsync, 0, 2, 1, tx_vsync,
      "Whether a frame waits for the display's refresh before it is shown. Changes at once.", hn_vsync, false, true},
-    {TAB_GRAPHICS, "Window scaling filter", &opts.upscale, 0, 2, 1, tx_filter,
+    {TAB_DISPLAY, "Window scaling filter", &opts.upscale, 0, 2, 1, tx_filter,
      "How the finished picture is scaled to the window, when its size differs from the Output resolution.", hn_filter},
-    {TAB_GRAPHICS, "CRT filter", &opts.crt_filter, 0, 4, 1, tx_crt_filter,
+    {TAB_DISPLAY, "CRT filter", &opts.crt_filter, 0, 4, 1, tx_crt_filter,
      "Filters the finished picture, including the game's HUD, after window effects. Longshot's menu and overlays stay "
      "clean. Changes at once; quality presets leave it alone.", hn_crt_filter, false, true},
-    {TAB_GRAPHICS, "CRT lines", &opts.crt_lines, 0, 2, 1, tx_crt_lines,
+    {TAB_DISPLAY, "CRT lines", &opts.crt_lines, 0, 2, 1, tx_crt_lines,
      "Virtual CRT raster, not Render resolution. Capped at half the destination height (at least one line); width follows "
      "its aspect. Non-integer scaling can cause moire.", hn_crt_lines, false, true},
-    {TAB_GRAPHICS, "Ultrawide menus", &opts.wide_menus, 0, 2, 1, tx_wide_menus,
+    {TAB_DISPLAY, "Ultrawide menus", &opts.wide_menus, 0, 2, 1, tx_wide_menus,
      "With the Aspect ratio at the monitor's shape: the pause, item and map menus, and what shows beside them. Loading "
      "screens and pre-rendered movies, which draw no world either, get the same sides. Changes at once.", hn_wide_menus, false, true},
-    {TAB_GRAPHICS, "HUD layout", &opts.hud_layout, 0, 1, 1, tx_hud_layout,
+    {TAB_DISPLAY, "HUD layout", &opts.hud_layout, 0, 1, 1, tx_hud_layout,
      "On a screen that is not 16:9: where the hearts, buttons and minimap sit. Ultrawide menus places the menus; this, the "
      "HUD in play. At 16:9 both are the same. Changes at once.", hn_hud_layout, false, true},
-    {TAB_GRAPHICS, "HDR", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, false, true, -1, true},
-    {TAB_GRAPHICS, "HDR", &opts.hdr, 0, 2, 1, tx_hdr,
+    {TAB_DISPLAY, "HDR", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, false, true, -1, true},
+    {TAB_DISPLAY, "HDR", &opts.hdr, 0, 2, 1, tx_hdr,
      "HDR10 out on an HDR display (Windows: Use HDR on in the display settings). Expanded: the game's SDR picture, its white at "
      "the paper white and its highlights up to the peak. Native: the game's own HDR, told the display's peak and paper white.",
      nullptr, false, true},
-    {TAB_GRAPHICS, "HDR paper white", &opts.hdr_white, 80, 400, 10, tx_nits,
+    {TAB_DISPLAY, "HDR paper white", &opts.hdr_white, 80, 400, 10, tx_nits,
      "How bright the picture's white is with HDR on. Around 200 for a normal room; higher in a bright one.", nullptr, false, true},
-    {TAB_GRAPHICS, "HDR peak brightness", &opts.hdr_peak, 400, 4000, 100, tx_nits,
+    {TAB_DISPLAY, "HDR peak brightness", &opts.hdr_peak, 400, 4000, 100, tx_nits,
      "The brightest highlights with HDR on: set it to your display's peak brightness.", nullptr, false, true},
-    {TAB_GRAPHICS, "HDR contrast", &opts.hdr_contrast, 50, 200, 5, tx_percent,
+    {TAB_DISPLAY, "HDR contrast", &opts.hdr_contrast, 50, 200, 5, tx_percent,
      "The HDR picture's contrast around mid grey, as the RenoDX HDR mods grade it: above 100% deeper shadows and brighter "
      "highlights, which ease into the peak brightness; below it flatter. With Native the game's own HDR picture is graded too, "
      "under the peak brightness the game is told.",
      nullptr, false, true},
-    {TAB_GRAPHICS, "HDR tone mapper", &opts.hdr_tonemap, 0, 1, 1, tx_tonemap,
+    {TAB_DISPLAY, "HDR tone mapper", &opts.hdr_tonemap, 0, 1, 1, tx_tonemap,
      "With Native, how the game's scene meets the peak brightness. Vanilla: the game's own curve. PsychoV35: RenoDX's "
      "tone mapper, the same mid grey with highlights that roll off into the peak and keep their colour.",
      nullptr, false, true},
@@ -2145,7 +2149,7 @@ void outputs_sync() {
          custom_output.w ? ", and one of the player's own" : "", list.c_str());
 }
 
-int cur_tab = TAB_GRAPHICS;
+int cur_tab = TAB_DISPLAY;
 int tab_selected[TAB_FPS_DEV + 1] = {};   // (and the pages' a row opens: Motion, the FPS counter's details)
 bool is_motion_row(const Row& r) { return r.tab == TAB_CONTROLS && !r.value && !strcmp(r.name, "Motion"); }
 bool is_fps_dev_row(const Row& r) { return r.tab == TAB_GAMEPLAY && !r.value && !strcmp(r.name, "FPS counter details"); }
@@ -2238,6 +2242,13 @@ int tab_row_count(int t) {
     int c = 0;
     for (int i = 0; i < kRows; i++) if (rows[i].tab == (MenuTab)t && row_shown(i)) c++;
     return c;
+}
+/// (OcaDim) Whether the menu shows a section: one whose rows exist on this PC (NVIDIA's only where DLSS or Reflex is there,
+/// so an AMD card never sees it). The navigation and the strip both ask it
+bool tab_shown(int t) {
+    for (int i = 0; i < kRows; i++)
+        if (rows[i].tab == (MenuTab)t && row_shown(i)) return true;
+    return false;
 }
 
 int tab_row_to_global(int t, int local_idx) {
@@ -3136,8 +3147,9 @@ void set_row(Row& r, int v, int dir, bool keep = true) {
         v = step_output_choice(*r.value, dir);
         if (v == *r.value) return;
     }
-    // (longshot) Frame generation by where DLSS FG cannot run: FSR 3.1 FG (0; a 2 is the same) and Built-in FG (1)
-    if (r.value == &opts.framegen_by && !framegen_by_dlss_offered()) v = (v % 2 + 2) % 2;
+    // (OcaDim) Frame generation by where DLSS FG cannot run: the SDK's own (0), Built-in FG (1), AMD FSR 3.1 (2) and
+    // AMD FSR 4 (3), the row walking all four. The old (v % 2) walk was written when the row had two values, and it hid
+    // AMD's two generations (and their names) behind it
     // (longshot) Frame generation while NVIDIA DLSS FG makes the frames ends at its runtime's most made frames + 1
     // (vk_framegen.h framegen_capped: 6x on an RTX 50's runtime, 2x on an RTX 40's), as if that were its last value. A saved
     // value past it shows as that top (tx_framegen), so an arrow (a step from the saved value) steps from the value shown;
@@ -3313,14 +3325,15 @@ const Control controls[] = {{HOS_SW_A, "A"}, {HOS_SW_B, "B"}, {HOS_SW_X, "X"}, {
                             {HOS_KEY_MOVE_DOWN, "Move back"}, {HOS_KEY_MOVE_LEFT, "Move left"},
                             {HOS_KEY_MOVE_RIGHT, "Move right"}, {HOS_KEY_CAM_UP, "Camera up"},
                             {HOS_KEY_CAM_DOWN, "Camera down"}, {HOS_KEY_CAM_LEFT, "Camera left"},
-                            {HOS_KEY_CAM_RIGHT, "Camera right"}, {HOS_KEY_WALK, "Walk"}, {HOS_KEY_OC_NOTE_L, "Ocarina note (L)"},
+                            {HOS_KEY_CAM_RIGHT, "Camera right"}, {HOS_KEY_WALK, "Walk"}, {HOS_KEY_RUN, "Run"},
+                            {HOS_KEY_OC_NOTE_L, "Ocarina note (L)"},
                             {HOS_KEY_OC_NOTE_R, "Ocarina note (R)"}, {HOS_KEY_OC_NOTE_A, "Ocarina note (A)"},
                             {HOS_KEY_OC_NOTE_Y, "Ocarina note (Y)"}, {HOS_KEY_OC_NOTE_X, "Ocarina note (X)"}};
 constexpr int kControls = sizeof controls / sizeof controls[0];   // (then "Reset to defaults")
 // (the stick's and camera's directions and Walk: keys only; the ocarina's note rows take a gamepad input too, host/nn_hid.c)
 bool keys_only(int i) {
     return i < kControls && ((controls[i].button >= HOS_KEY_MOVE_UP && controls[i].button <= HOS_KEY_CAM_RIGHT) ||
-                             controls[i].button == HOS_KEY_WALK);
+                             controls[i].button == HOS_KEY_WALK || controls[i].button == HOS_KEY_RUN);
 }
 // a pad input's name on the controller of the button prompts (the Button prompts row's choice; Auto: the face in use),
 // else by its place
@@ -4044,7 +4057,7 @@ const char* bug_report_hint() {
     return text.c_str();
 }
 
-const char* const tab_titles[TAB_COUNT] = {"Graphics", "Audio", "Gameplay", "Controls", "NFC", "Debug"};
+const char* const tab_titles[TAB_COUNT] = {"Display", "Graphics", "Audio", "Gameplay", "Controls", "NFC", "NVIDIA", "Debug"};
 inline const char* tab_title(int t) { return t >= 0 && t < TAB_COUNT ? tab_titles[t] : "Settings"; }
 inline bool cheat_is_toggle(int c) { return c == 0 || c == 1 || c == 7; }
 
@@ -4095,8 +4108,13 @@ void draw_options(ui::Ctx& c) {
     ui::banner(c, hh);
     // the tabs in the banner: dark ink on the tan, the shown one light on a dark inset; the tab keys at their ends (a click there
     // is the previous or the next tab)
+    // (OcaDim) a section with no row on this PC takes no room: its width is 0 and it is skipped below (the NVIDIA tab on
+    // an AMD card, and a section whose every row is hidden)
     float tw[TAB_COUNT], total = 0;
-    for (int i = 0; i < TAB_COUNT; i++) tw[i] = ui::size_of(c.f.heading, 23 * s, tab_titles[i]).x + 56 * s, total += tw[i];
+    for (int i = 0; i < TAB_COUNT; i++) {
+        tw[i] = tab_shown(i) ? ui::size_of(c.f.heading, 23 * s, tab_titles[i]).x + 56 * s : 0;
+        total += tw[i];
+    }
     float x = (c.w - total) * 0.5f;
     const float ty = hh * 0.5f + s;
     const char* const keys[2] = {c.pad ? "L" : "Q", c.pad ? "R" : "E"};
@@ -4108,6 +4126,7 @@ void draw_options(ui::Ctx& c) {
         hits.add(i ? cx - 10 * s : 0, 0, i ? c.w : cx + cw + 10 * s, hh, i ? menu_hit::kTabNext : menu_hit::kTabPrev, -1);
     }
     for (int i = 0; i < TAB_COUNT; i++) {
+        if (!tw[i]) continue;   // (OcaDim: a section with nothing on this PC)
         // (the Motion page: under Controls; the FPS counter details: under Gameplay)
         const bool shown = i == (cur_tab == TAB_MOTION ? TAB_CONTROLS : cur_tab == TAB_FPS_DEV ? TAB_GAMEPLAY : cur_tab);
         if (shown || i == hover_tab) {
@@ -5836,8 +5855,8 @@ void menu_option_set(int id, int value) {
 // its own thread: menu_mu keeps them apart from menu_tick (the present's thread) and from menu_option_set (the game's)
 bool bridge_row(int i) { return rows[i].value && !rows[i].heading && rows[i].cheat < 0 && row_shown(i); }
 void bridge_fill(int i, MkwVkSetting* out) {
-    static const char* const tabs[] = {"graphics", "audio", "gameplay", "controls", "nfc", "debug", "motion", "gameplay",
-                                       "controls"};
+    static const char* const tabs[] = {"display", "graphics", "audio", "gameplay", "controls", "nfc", "nvidia", "debug",
+                                       "motion", "gameplay", "controls"};
     static_assert(sizeof tabs / sizeof tabs[0] == TAB_PAGE + 1, "a name for each MenuTab");
     const Row& r = rows[i];
     *out = MkwVkSetting{};
@@ -6656,8 +6675,15 @@ void menu_tick() {
         // (the tabs: LB and RB, Q and E, or Tab; from the Motion page, as from Controls)
         if ((tab_left || tab_right) && cur_tab == TAB_MOTION) cur_tab = TAB_CONTROLS;
         if ((tab_left || tab_right) && cur_tab == TAB_FPS_DEV) cur_tab = TAB_GAMEPLAY;
-        if (tab_left) cur_tab = (cur_tab + TAB_COUNT - 1) % TAB_COUNT, changed = true;
-        else if (tab_right) cur_tab = (cur_tab + 1) % TAB_COUNT, changed = true;
+        if (tab_left) {   // (OcaDim: the sections with no row on this PC are stepped over)
+            do cur_tab = (cur_tab + TAB_COUNT - 1) % TAB_COUNT;
+            while (!tab_shown(cur_tab));
+            changed = true;
+        } else if (tab_right) {
+            do cur_tab = (cur_tab + 1) % TAB_COUNT;
+            while (!tab_shown(cur_tab));
+            changed = true;
+        }
         const int tab_count = tab_row_count(cur_tab);
         int& selected = tab_selected[cur_tab];
         if (selected >= tab_count) selected = tab_count - 1;   // (a row gone since: the debug tools turned off, HDR turned off: row_shown)
