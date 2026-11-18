@@ -2176,6 +2176,7 @@ uint64_t system_ram_bytes() {
     return v;
 }
 bool low_vram_texture_mips() {
+    if (opts.mips) return true;   // (OcaDim: the Mips à la demande row forces what a small card gets anyway)
     static const bool disabled = [] {
         const char* e = getenv("RX_VK_LOW_VRAM_MIPS");
         return e && env_value_off(e);
