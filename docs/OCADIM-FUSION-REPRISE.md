@@ -1,14 +1,19 @@
-# Reprendre la fusion — la 0.0.2 comme base, la dernière version par-dessus
+# Reprendre la fusion — notre base `v0.0.2-fusion-base`, la 0.0.2 comme référence
 
 Ce document est pour la session qui reprend. Il dit **ce qui marche, ce qui a cassé, et dans quel ordre
 avancer sans rien perdre**. La règle du projet tient en une phrase : **un build testé à la fois, jamais deux
 changements sans mesure entre eux.**
 
-## 1. Le point de départ : la 0.0.2
+## 1. Notre base, et la référence d'origine
 
-`F:\OcaDim-SAVE-17-11\build-0.0.2-1\` — `longshot.exe` + `longshot_vk.dll`, la version que le joueur connaît,
-**avec la frame generation FSR 4 qui fonctionne**. C'est la référence : tout ce qu'elle fait doit se retrouver
-dans le résultat final.
+**La base est maintenant `F:\OcaDim-SAVE-17-11\build-fg-final-ok\`** (`longshot.exe` + `longshot_vk.dll`),
+posée le 2026-11-18 : le moteur fusionné **avec la frame generation AMD FSR 4 qui tourne**, vérifiée en jeu.
+Son commit est `588da818` sur `merge-amont`, **tagué `v0.0.2-fusion-base`** ; ses empreintes, sa commande de
+build, ses preuves et ses limites sont dans `build-fg-final-ok\BASE.md`.
+
+`F:\OcaDim-SAVE-17-11\build-0.0.2-1\` reste la **référence d'origine** : la 0.0.2 que le joueur connaît, avec
+la FSR 4 qui fonctionne. Tout ce qu'elle fait doit se retrouver dans le résultat final ; on la compare quand
+un comportement surprend.
 
 Sources : branche **`merge-amont`** (le travail de fusion, 184 commits de l'amont) ou le tag `v0.0.2-1`
 (la 0.0.2 d'origine). Les deux sont dans `D:\Emulateur\Longshot-src\longshot-merge` (worktree) et
@@ -97,12 +102,13 @@ publication de `temporal_fg_publish` disent leur raison, une fois.
 
 | Chemin | Contenu |
 |---|---|
-| `D:\Emulateur\Longshot-src\longshot-merge` | branche `merge-amont` : moteur de l'amont + notre couche + la FG qui marche (`68cb062a`) |
+| `D:\Emulateur\Longshot-src\longshot-merge` | branche `merge-amont` : moteur de l'amont + notre couche + la FG qui marche (`588da818`, tag `v0.0.2-fusion-base`) |
 | `D:\Emulateur\Longshot-src\longshot` | la 0.0.2-1, base saine, `v0.0.2-1` |
-| `F:\test` | le build fusionné testé de la session : FG FSR 4 qui génère (env `RX_VK_FG_AMD_FORCE=4`), ini du joueur intact |
-| `F:\OcaDim-SAVE-17-11\build-fg-fsr4-ok` | **le build testé de la session** + ses logs (`fsr4-ok`, `fsr31-refus`) |
-| `F:\OcaDim-SAVE-17-11\build-fg-avant-diag`, `build-fg-diag1`, `build-fg-diag2` | les étapes : avant diagnostics, sans FSR 4 (deux causes trouvées) |
-| `F:\OcaDim-SAVE-17-11\build-0.0.2-1` | **la 0.0.2 qui marche, FG comprise** |
+| `F:\test` | le même build que la base, installé ; ini du joueur intact |
+| `F:\OcaDim-SAVE-17-11\build-fg-final-ok` | **NOTRE BASE** : binaires + `BASE.md` + le log qui la valide |
+| `F:\OcaDim-SAVE-17-11\build-fg-fsr4-ok` | l'étape où la FSR 4 a généré pour la première fois (+ logs 3.1 refusée) |
+| `F:\OcaDim-SAVE-17-11\build-fg-avant-diag`, `build-fg-diag1`, `build-fg-diag2`, `build-fg-compteur-avant` | les étapes : avant diagnostics, sans FSR 4, avant le compteur juste |
+| `F:\OcaDim-SAVE-17-11\build-0.0.2-1` | **la 0.0.2 d'origine, FG comprise** (référence de comportement) |
 | `F:\OcaDim-SAVE-17-11\build-0.0.2-light` | la 0.0.2-1 avec light passes ON (comparaison) |
 
 ## 7. La première phrase à écrire à l'agent (session suivante)
@@ -124,4 +130,8 @@ publication de `temporal_fg_publish` disent leur raison, une fois.
 - Build de test corrigé : `LONGSHOT_FSR=1` (sans lui, FSR 4 en stub → aucun depth/motion → pas de `create_fg`).
 - Essais : FSR 4, 4932 frames générées sur 39600 présents, image juste ; 3.1.6 nommée puis refusée par AMD
   (`return 6`), même à 1600x900.
-- Sauvegardes : `build-fg-avant-diag`, `build-fg-diag1`, `build-fg-diag2`, `build-fg-fsr4-ok`.
+- Sauvegardes : `build-fg-avant-diag`, `build-fg-diag1`, `build-fg-diag2`, `build-fg-fsr4-ok`,
+  `build-fg-compteur-avant`.
+- **Base posée** : `build-fg-final-ok` (+ `BASE.md`), commit `588da818`, tag `v0.0.2-fusion-base`. Le
+  compteur nomme la génération du contexte créé (`FSR 4 FG` sur `4.0.2`), et ne nomme rien si le contexte
+  est refusé.
