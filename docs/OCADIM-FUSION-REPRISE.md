@@ -68,6 +68,19 @@ Les switches de test sont déclarés dans `switches.def` : `RX_VK_FG_AMD` et `RX
 `env_override` : l'ini du joueur n'est pas touché). Chaque retour anticipé de `fg_amd_frame` et la première
 publication de `temporal_fg_publish` disent leur raison, une fois.
 
+## 3 bis. Les commits à NE PAS remettre
+
+Deux choses ont été identifiées comme nuisibles pendant la chasse de la 0.0.2, et elles ne doivent pas revenir :
+
+| Commit | Ce qu'il faisait | Pourquoi il reste dehors |
+|---|---|---|
+| **#51** `757531a0` — replay parallèle adaptatif | segments 32→16→8 sur les buffers courts, points de dry pass 64→8 | course sur les buffers courts : **textures, torches, ciel et bouclier faux une frame** (les flashs). Le marché fait ~2300 draws par buffer, l'optimisation n'y servait pas. Retiré par `57dfbe96`. |
+| **`LONGSHOT_LIGHT_PASSES`** #1002 `208d3bda` | 56 des 75 chunks compilés **sans les passes de module de -O1** (dont l'inliner) | échange temps de compilation contre code : ~15 % de build en moins, **+3-5 % de code**. Dans un build qu'on veut le plus rapide possible, il est **opt-in** : `LONGSHOT_LIGHT_PASSES=1` pour l'activer, rien par défaut (`nx2/build.py`, `light_passes_kb`). |
+
+Et un troisième, plus discret : le **cache des notes upscaler** comparait les cibles et la frame mais **pas la
+caméra** ; réactivé, il faut que `s.ubo[0][0]` (vue/projection) entre dans la comparaison, sinon l'upscaler
+dessine avec les mauvaises matrices une frame ou deux.
+
 ## 4. La méthode, pour ne rien casser
 
 1. **Ne jamais installer un build non testé** dans `F:\test`. On construit, on copie, on lance, on **lit le
