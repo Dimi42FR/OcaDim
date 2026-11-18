@@ -176,7 +176,17 @@ Performances), test de 10 s, application. Il pose aussi la DRS et le mode Petit 
   rééchantillonnage en 48 kHz.
 - **Export / import de profil** en un fichier.
 
-## Bugs connus à régler avant la 0.0.4
+## Leçon du 2026-11-18 : les champs d'options vont à la fin
+
+La DRS avait ajouté `int drs` **au milieu** de `struct Options` (`vk_menu.h`, juste après
+`resolution`). Avec ce build, le jeu reste à la première image (écran noir), trois lancements sur
+trois ; sans lui, il démarre à chaque fois. Le mutex `nn.npln` du log est un symptôme.
+
+**Règle : tout nouveau champ de `Options` s'ajoute à la fin de la structure, jamais au milieu.**
+Les features suivantes (budget VRAM, garde-fou, Petit PC) suivent cette règle, et la DRS sera
+retentée ainsi.
+
+
 
 ### Interblocage `nn.npln` au démarrage (écran noir)
 
