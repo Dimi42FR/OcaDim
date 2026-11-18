@@ -3998,6 +3998,13 @@ bool menu_env_on(const char* env_name, const char* ini_key_name, bool def = fals
 /// RX_VK_DESC_REUSE holds the level for the run
 std::atomic<int> desc_reuse_row{-1}, sampler_cache_row{-1};   // (the rows as the menu has them now; -1 before it has loaded)
 } // namespace
+// (OcaDim) prepares the pipeline state lists now and says how long it took, ms: called when a zone starts loading. Defined
+// outside the anonymous namespace, so vk_replay.cpp can reach it; state_list_prepare is in the same file.
+double precompile_zone() {
+    const int64_t t0 = prof_now();
+    state_list_prepare(nullptr);
+    return (prof_now() - t0) / 1e6;
+}
 void menu_debug_rows(int descriptor_reuse, int sampler_cache) {   // (vk_draw.h: the menu, when it loads and when either row changes)
     desc_reuse_row.store(descriptor_reuse != 0, std::memory_order_relaxed);
     sampler_cache_row.store(sampler_cache != 0, std::memory_order_relaxed);

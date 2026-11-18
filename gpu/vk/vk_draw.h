@@ -61,6 +61,8 @@ struct DrawArgs {
 void draw_begin_recording(int slot, VkCommandBuffer cmd, uint64_t value);
 /// (OcaDim) Variable rate shading: the scene's rate (2 or 4, 1 when off) and the command that applies it (vk_draw.cpp)
 uint32_t vrs_rate();
+/// (OcaDim) Prepares the pipeline state lists now (vk_draw.cpp); returns how long it took, ms. Blocking.
+double precompile_zone();
 void vrs_set(VkCommandBuffer cmd, uint32_t x, uint32_t y);
 extern PFN_vkCmdSetFragmentShadingRateKHR vrs_cmd;   // (OcaDim: loaded by vk_main.cpp after the device)/// Publish CPU writes from this slot's used streams before its commands reach the GPU (also for worker slots).
 void draw_flush_recording(int slot);
