@@ -183,6 +183,15 @@ const char* tx_vram_budget(int v) {
     static const char* const t[] = {"Auto", "2 Go", "3 Go", "4 Go", "6 Go", "8 Go"};
     return t[v < 0 ? 0 : v > 5 ? 5 : v];
 }
+const char* tx_vrs(int v) {
+    static const char* const t[] = {"Désactivé", "Auto (2x)", "2x", "4x"};
+    return t[v < 0 ? 0 : v > 3 ? 3 : v];
+}
+const char* hn_vrs(int, int k) {
+    if (k) return nullptr;
+    return "Ombrage réduit à l'intérieur des surfaces, fin sur les contours : soulage le GPU des petites cartes. Le HUD et le "
+           "texte restent nets. Désactivé : rien ne change.";
+}
 const char* tx_fps_cap(int v) {
     if (v == -1) return "30";
     static const char* const t[] = {"60 (the console's)", "90", "120", "144", "165", "240", "Uncapped"};
@@ -1959,6 +1968,9 @@ Row rows[] = {
      "Le plafond de mémoire vidéo à ne pas dépasser. Pour l'instant il se contente de le dire dans la ligne Mémoire vidéo "
      "(« PLAFOND DÉPASSÉ ») : l'éviction des textures vient ensuite. Auto : pas de plafond.",
      hn_vram, false, true},
+    {TAB_OCADIM, "Ombrage à taux variable", &opts.vrs, 0, 3, 1, tx_vrs,   // (OcaDim: VRS)
+     "Réduit la finesse d'ombrage à l'intérieur des surfaces, la garde fine sur les contours : le GPU travaille moins. Le HUD "
+     "et le texte restent nets. Désactivé : aucun changement. Auto et 2x visent les petites cartes.", hn_vrs, false, true},
     {TAB_DEBUG, "Robust buffers", &opts.robust, 0, 2, 1, tx_robust,
      "Bounds-checked buffer reads: a read past a buffer's end is dropped instead of stopping the GPU. Applies after a "
      "restart.", hn_robust, true, true},
@@ -2401,6 +2413,7 @@ const char* ini_key(const Row& r) {
     if (r.value == &opts.resolution) return "resolution";
     if (r.value == &opts.mem_guard) return "mem_guard";   // (OcaDim: French names, ASCII keys)
     if (r.value == &opts.drs) return "drs";
+    if (r.value == &opts.vrs) return "vrs";
     if (r.value == &opts.fps_cap) return "frame_rate_cap";   // (host/nn_vi.c reads it at the start, then HOS_OPT_FPS_CAP)
     if (r.value == &opts.upscale) return "upscaling";
     if (r.value == &opts.dlss) return "dlss";   // (as opts.dlss and RX_VK_DLSS)

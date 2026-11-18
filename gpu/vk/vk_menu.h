@@ -138,6 +138,7 @@ struct Options {
     int drs = 0;          // (OcaDim) dynamic resolution: 0 off, 1 60 fps, 2 120, 3 144 (vk_menu.cpp drs_tick)
     int vram_budget = 0;  // (OcaDim) video memory budget: 0 Auto, 1 2 Go, 2 3 Go, 3 4 Go, 4 6 Go, 5 8 Go. Read by the memory
                           // line to say when it is passed; the eviction comes next
+    int vrs = 0;          // (OcaDim) variable rate shading: 0 off, 1 Auto (2x), 2 2x, 3 4x (vk_draw.cpp vrs_set)
 };
 extern Options opts;
 constexpr int kAutoPreset = 6;   // (the Quality preset Auto (this PC): menu_auto_for_gpu, auto_settings.h)
