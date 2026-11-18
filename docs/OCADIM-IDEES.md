@@ -71,22 +71,33 @@ Un veilleur qui lit la mémoire toutes les secondes :
 - si la baisse ne suffit pas, on propose de quitter proprement plutôt que de laisser la machine
   swapper.
 
-## Priorité 6 — Les options de rendu, toutes dans OcaDim
+## Priorité 6 — Le catalogue des leviers de performance (tous dans OcaDim)
 
-Chaque levier ci-dessous est une ligne de la section **OcaDim**, en français, avec son aide et son
-état par défaut « Désactivé = comportement actuel » :
+Ta liste, **dédoublonnée** : tu avais répété trois fois l'ordonnanceur de vcores, deux fois le
+prépasse de profondeur et deux fois le tri des draws. Il reste **dix leviers uniques**, tous
+désactivables dans OcaDim (`Désactivé` = comportement actuel, aucune n'est active par défaut avant
+mesure).
 
-| Ligne (OcaDim) | Effet | Réglage |
-|---|---|---|
-| `Ombrage à taux variable` (VRS) | ombrage fin sur les contours, réduit à l'intérieur des surfaces | Désactivé / Auto / 2x / 4x |
-| `Occlusion` | ne pas dessiner ce qui est caché derrière un mur | Désactivé / Activé |
-| `Lots statiques` | la géométrie fixe d'une salle en une seule soumission | Désactivé / Activé |
-| `Prépasse de profondeur` | remplir la profondeur d'abord sur les scènes à fort recouvrement | Désactivé / Auto |
-| `Tri des rendus` | trier les draws par pipeline pour réduire les changements d'état | Désactivé / Activé |
+| Ligne (OcaDim) | Effet | Réglage | État dans le projet |
+|---|---|---|---|
+| `Ombrage à taux variable` (VRS) | ombrage fin sur les contours, réduit à l'intérieur des surfaces | Désactivé / Auto / 2x / 4x | **à faire** : rien aujourd'hui (`primitiveFragmentShadingRateMeshShader` à `VK_FALSE`, vk_main.cpp:730) |
+| `Occlusion` | ne pas dessiner ce qui est caché derrière un mur | Désactivé / Activé | **partiel** : le jeu culle lui-même ; `RX_VK_NOCULL` et `RX_VK_MESH_NOCULL` existent pour **désactiver** ce culling. L'occlusion GPU par-dessus reste à faire |
+| `Lots statiques` | la géométrie fixe d'une salle en une seule soumission | Désactivé / Activé | **à faire** |
+| `Prépasse de profondeur` | remplir la profondeur d'abord sur les scènes à fort recouvrement (herbe de la Plaine, eau) | Désactivé / Auto | **partiel** : le jeu a déjà son z-prepass (les draws « z-prepass » d'OoT, vk_draw.cpp:7548, le compteur d'occlusion de vk_replay.cpp:413) ; un prépasse **du renderer** par-dessus reste à faire |
+| `Tri des rendus` | trier les draws par pipeline pour réduire les changements d'état | Désactivé / Activé | **à faire** : le `stable_sort` de vk_draw.cpp:6624 ne trie que le **rapport** `draw_stats`, pas la soumission |
+| `Mips à la demande` | ne charger que les niveaux réellement affichés | Désactivé / Auto | **partiel** : le « mip trimming » existe dans le mode « Set up for a weak laptop » (`opts.budget`) |
+| `Mode mémoire réduite` | buffers audio plus courts, buffers de capture/replay plus petits, pas de rewind | Désactivé / Activé | **à faire** (les buffers de capture sont généreux) |
+| `Compilation selon les cœurs` | étaler la compilation des shaders sur les cœurs disponibles | Auto / Côte à côte / Un à la fois | **existe** : ligne « Intel shader compiles » (`opts.intel_compiles`, `intel_compiles.h`), à **piloter automatiquement** selon le nombre de cœurs |
+| `Précompilation au chargement` | compiler les shaders pendant l'écran de chargement, avec une barre de progression | Désactivé / Activé | **partiel** : `shaders_preparing()`, `programs_in_load()`, `jobs_pending()` ; la barre et le blocage au chargement restent à faire |
+| `Ordonnanceur de vcores` | un cœur libre prend la tâche suivante (work-stealing) au lieu d'attendre son tour | Désactivé / Activé | **partiel** : les vcores existent avec priorité et threads affamés (`host/hos_thread.c`, `vc_starved`, `HOS_VCORE_*`), et nos logs montrent des attentes de 100-200 ms ; le vol de tâches reste à faire |
 
-Règles : aucune de ces lignes ne change le rendu quand elle est sur « Désactivé » ; chacune est
-mesurable seule (temps de frame, 1 % low, VRAM) avant d'être laissée active par défaut ; et le mode
-« Petit PC » les active ensemble.
+Règles communes :
+
+- chaque levier se mesure **seul**, sur la même zone et 60 s : temps de frame, **1 % low**, temps
+  GPU, VRAM — build sauvegardé et tag avant le suivant ;
+- une ligne sur « Désactivé » ne change **rien** au rendu ni au comportement ;
+- le mode « Petit PC » les active ensemble, une fois qu'ils sont prouvés ;
+- tout est écrit en français, avec une aide qui dit ce que ça fait et ce que ça coûte.
 
 ## Priorité 7 — Cache de pipelines partagé
 
@@ -108,8 +119,6 @@ Performances), test de 10 s, application. Il pose aussi la DRS et le mode Petit 
 - **Mode photo / cinéma** : HUD masqué, FOV libre, ralenti, captures en supersampling.
 - **Diagnostic 1 clic** : rapport français prêt à coller (GPU, pilote, scène, 30 s de métriques).
 - **Vérificateur de build** : rejouer une séquence d'inputs et comparer images et temps par frame.
-- **RAM** : plafond du cache d'assets, buffers audio plus courts, pas de rewind en mode réduit.
-- **VRAM** : BC7/BC5 par texture, dédup entre scènes, mips à la demande, cibles transitoires aliasées.
 - **CPU** : affinité et priorité du thread de rendu, workers = cœurs physiques − 1, audio sans
   rééchantillonnage en 48 kHz.
 - **Export / import de profil** en un fichier.
