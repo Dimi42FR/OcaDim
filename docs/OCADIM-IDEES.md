@@ -222,3 +222,11 @@ affament le reste. Ce n'est pas un crash : le processus vit, mais rien n'est pr�
   FSR 4 inchangé dans Graphismes.
 - Le texte de release est prêt dans `docs/RELEASE-0.0.3.md`, la liste avant publication dans
   `docs/RELEASE-0.0.3-A-FINIR.md`. **Rien n'est poussé, tagué `v0.0.3` ni publié.**
+
+## Piste du 2026-11-18 (soir) : build incremental et vk_menu.h
+
+Les deux builds qui bloquent au demarrage (DRS, garde-fou) sont les seuls qui modifient `vk_menu.h` ;
+ceux qui ne touchent que `vk_menu.cpp` demarrent. Les objets dependent des en-tetes d'apres build.py, mais
+un build **propre** (tout recompiler) n'a pas encore ete essaye : a faire en premier avant de conclure.
+Code du garde-fou : `git stash` - « Garde-fou memoire (a retester en build propre: blocage au demarrage) ».
+
