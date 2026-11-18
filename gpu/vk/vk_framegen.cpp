@@ -1227,6 +1227,8 @@ bool hud_source(VkCommandBuffer cmd, int cur, uint32_t sw, uint32_t sh, int x0, 
 } // namespace
 
 void framegen_hud_before(VkCommandBuffer cmd, Texture* picture, uint32_t level) {
+    // (OcaDim) VRS: the HUD and the menus are drawn from here on; full rate, so text and icons stay sharp
+    vrs_set(cmd, 1, 1);
     if (!picture || level || !picture->image || picture->samples != VK_SAMPLE_COUNT_1_BIT || picture->levels != 1 ||
         picture->layers != 1 || picture->type != VK_IMAGE_TYPE_2D ||
         (picture->format != VK_FORMAT_B10G11R11_UFLOAT_PACK32 && picture->format != VK_FORMAT_R16G16B16A16_SFLOAT) ||

@@ -5868,6 +5868,17 @@ void draw_flush_recording(int slot) {
     }
 }
 
+/// (OcaDim) VRS: the scene's shading rate from the row (2x by default, 4x on the top choice, 1x when off) and the command that
+/// sets it on the frame's own command buffer. Silent when the driver has no VK_KHR_fragment_shading_rate.
+uint32_t vrs_rate() { return opts.vrs == 3 ? 4u : opts.vrs ? 2u : 1u; }
+PFN_vkCmdSetFragmentShadingRateKHR vrs_cmd = nullptr;   // (loaded by vk_main.cpp once the device exists)
+void vrs_set(VkCommandBuffer cmd, uint32_t x, uint32_t y) {
+    if (!dev.fragment_shading_rate || !vrs_cmd) return;
+    const VkExtent2D e{x, y};
+    const VkFragmentShadingRateCombinerOpKHR c[2] = {VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR,
+                                                     VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR};
+    vrs_cmd(cmd, &e, c);
+}
 void draw_begin_recording(int slot, VkCommandBuffer cmd, uint64_t value) {
     rec_cmd = cmd;
     rec_value = value;

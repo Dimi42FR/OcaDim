@@ -438,9 +438,8 @@ bool create_device() {
     optional(VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME, dev.depth_clip_control);
     // (OcaDim) VRS, step 1: just ask for the extension and say whether this driver has it. Nothing shades differently yet; the
     // per-draw rate (vk_draw.cpp) comes next, once the feature is enabled and the image has been compared.
-    bool fragment_shading_rate = false;   // (not a field of dev for now)
-    optional(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME, fragment_shading_rate);
-    if (fragment_shading_rate) logf("vk: VRS: VK_KHR_fragment_shading_rate is available here");
+    optional(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME, dev.fragment_shading_rate);
+    if (dev.fragment_shading_rate) logf("vk: VRS: VK_KHR_fragment_shading_rate is available here");
     optional(VK_EXT_ROBUSTNESS_2_EXTENSION_NAME, dev.null_descriptor);
     optional(VK_EXT_INDEX_TYPE_UINT8_EXTENSION_NAME, dev.index_uint8);
     optional(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME, dev.push_descriptor);
@@ -620,6 +619,13 @@ bool create_device() {
     if (dev.memory_priority) *tail = &mem_priority, tail = &mem_priority.pNext;
     VkPhysicalDeviceCooperativeMatrixFeaturesKHR coop{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
     if (dev.coop_matrix) *tail = &coop, tail = &coop.pNext;
+    // (OcaDim) VRS: the dynamic per-draw rate (vkCmdSetFragmentShadingRateKHR) needs this feature, enabled here with the
+    // extension; nothing else of the extension's is turned on
+    VkPhysicalDeviceFragmentShadingRateFeaturesKHR vsr_feat{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR};
+    if (dev.fragment_shading_rate) {
+        vsr_feat.pipelineFragmentShadingRate = VK_TRUE;
+        *tail = &vsr_feat, tail = &vsr_feat.pNext;
+    }
     VkPhysicalDeviceShaderAtomicFloatFeaturesEXT afloat{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT};
     if (atomic_float) *tail = &afloat, tail = &afloat.pNext;
     VkPhysicalDeviceDescriptorBufferFeaturesEXT descriptor_buffer{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_BUFFER_FEATURES_EXT};
@@ -847,13 +853,19 @@ bool create_device() {
     ci.pQueueCreateInfos = qs.data();
     ci.enabledExtensionCount = (uint32_t)want.size();
     ci.ppEnabledExtensionNames = want.data();
-    if (vkCreateDevice(dev.physical, &ci, nullptr, &dev.device) != VK_SUCCESS) {
-        logf("vk: vkCreateDevice failed");
+    if (vkCreateDevice(dev.physical, &ci, nullptr, &dev.device) != VK_SUCCESS) {        logf("vk: vkCreateDevice failed");
         return false;
     }
 
 
     load_device(dev.device);
+    // (OcaDim) VRS: the dynamic rate command, once the device exists; without it the extension stays unused and the row
+    // does nothing (dev.fragment_shading_rate false, vrs_set returns at once)
+    if (dev.fragment_shading_rate) {
+        vrs_cmd = (PFN_vkCmdSetFragmentShadingRateKHR)vkGetDeviceProcAddr(dev.device, "vkCmdSetFragmentShadingRateKHR");
+        if (!vrs_cmd) dev.fragment_shading_rate = false;
+        else logf("vk: VRS: dynamic fragment shading rate loaded");
+    }
     // (longshot: when programs are loaded, vk_programs.h. Without mesh shaders, or with the task + mesh draws through the
     // fallback, a start keeps the fallback's programs ready, and loads at create have not been shown to be as good there)
     programs_load_decide(dev.mesh_shader && !dev.mesh_fallback && !dev.task_mesh_fallback);
