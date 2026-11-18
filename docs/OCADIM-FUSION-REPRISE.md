@@ -1,4 +1,4 @@
-# Reprendre la fusion — notre base `v0.0.2-fusion-f1-fg-hdr`, la 0.0.2 comme référence
+# Reprendre la fusion — notre base `v0.0.3-f1-rail`, la 0.0.2 comme référence
 
 Ce document est pour la session qui reprend. Il dit **ce qui marche, ce qui a cassé, et dans quel ordre
 avancer sans rien perdre**. La règle du projet tient en une phrase : **un build testé à la fois, jamais deux
@@ -6,15 +6,16 @@ changements sans mesure entre eux.**
 
 ## 1. Notre base, et la référence d'origine
 
-**La base est maintenant `F:\OcaDim-SAVE-17-11\build-f1-fg-hdr-ok\`** (`longshot.exe` + `longshot_vk.dll`),
-posée le 2026-11-18 : le moteur fusionné avec **le F1** (onglets Display/NVIDIA, touche Run), **les deux
-générations AMD** (FSR 4 4.0.2 et FSR 3.1 3.1.6, choisissables et applicables à chaud) et le **HDR de la FG
-corrigé** (frames générées en PQ), vérifiés en jeu. Son commit est `734d217e` sur `merge-amont`, **tagué
-`v0.0.2-fusion-f1-fg-hdr`** ; ses empreintes, sa commande de build, ses preuves et ses limites sont dans
-`build-f1-fg-hdr-ok\BASE.md`.
+**La base est maintenant `F:\OcaDim-SAVE-17-11\build-0.0.3-f1-rail\`** (`ocadim.exe` + `ocadim_vk.dll`),
+posée le 2026-11-18 : **OcaDim 0.0.3**, les fichiers du jeu renommés en `ocadim_*` (avec migration des
+anciens `longshot_*`), **le F1 visuel** (rail des sections à gauche, en-tête OCADIM, OcaDim 0.0.3, colonne
+et aide décalées), **les deux générations AMD** (FSR 4 4.0.2 et FSR 3.1 3.1.6, applicables à chaud) et le
+**HDR de la FG corrigé**, vérifiés en jeu. Son commit est `0dfdc1cd` sur `merge-amont`, **tagué
+`v0.0.3-f1-rail`**.
 
-La base précédente, `build-fg-final-ok` (commit `588da818`, tag `v0.0.2-fusion-base`), reste la référence
-« FSR 4 seule » si un comportement de la nouvelle base surprend.
+Les bases précédentes restent : `build-0.0.3-rename` (`b4db818e`, `v0.0.3-rename`, le renommage seul),
+`build-f1-fg-hdr-ok` (`734d217e`, `v0.0.2-fusion-f1-fg-hdr`, la F1 fonctionnelle sans le rail) et
+`build-fg-final-ok` (`588da818`, `v0.0.2-fusion-base`, la FSR 4 seule).
 
 `F:\OcaDim-SAVE-17-11\build-0.0.2-1\` reste la **référence d'origine** : la 0.0.2 que le joueur connaît, avec
 la FSR 4 qui fonctionne. Tout ce qu'elle fait doit se retrouver dans le résultat final ; on la compare quand
@@ -113,10 +114,13 @@ dessine avec les mauvaises matrices une frame ou deux.
       puis `4.0.2`, et les frames sont générées (`... generated`).
 - [x] **Choix 3.1 / 4** dans `Génération d'images par` (0..3), et le log nomme la version à chaque création.
       La 3.1.6 est nommée puis refusée par AMD (`return 6`) : voir §3.
-- [ ] **Le F1 d'OcaDim** — à refaire **sur le `vk_menu.cpp` de l'amont** : notre fichier entier corrompt la
-      pile de ce moteur (le tout premier écran noir, avant même la FG). À reprendre par petites touches :
-      Display en premier, onglet NVIDIA conditionnel, touche Run + Run mode, ombres au 1600, les deux lignes
-      Debug, ids uniques.
+- [x] **Le F1 d'OcaDim** — fait sur le `vk_menu.cpp` de l'amont, par petites touches : Display en premier,
+      onglet NVIDIA conditionnel, touche Run + Run mode, ombres au 1600, les deux lignes Debug, et le
+      **rail des sections + l'en-tête OCADIM + OcaDim 0.0.3** (commit `0dfdc1cd`). Reste à surveiller :
+      les ids uniques si un cas se présente.
+- [ ] **Renommer les derniers chemins hors du dossier de jeu** : `%APPDATA%\Longshot` (dossier utilisateur
+      du launcher), `%LOCALAPPDATA%\Longshot` (tags NFC), et le `bin\longshot.exe` du builder/Setup.
+      Le dossier du jeu, lui, est déjà en `ocadim_*` (commit `b4db818e`).
 - [ ] **Ombres au 1600** (`vk_replay.cpp`, `HOS_OPT_SHADOW_RES` → 0) — déjà réappliqué.
 - [ ] **Nos opti perdues** : seed de shaders mappé (539 Mo de RAM) et budget d'uploads ×4 en chargement.
 - [ ] **Light passes OFF** par défaut (fait dans `nx2/build.py` : `LONGSHOT_LIGHT_PASSES=1` pour l'activer).
@@ -130,7 +134,9 @@ dessine avec les mauvaises matrices une frame ou deux.
 | `D:\Emulateur\Longshot-src\longshot-merge` | branche `merge-amont` : moteur de l'amont + notre couche + la FG qui marche (`588da818`, tag `v0.0.2-fusion-base`) |
 | `D:\Emulateur\Longshot-src\longshot` | la 0.0.2-1, base saine, `v0.0.2-1` |
 | `F:\test` | le même build que la base, installé ; ini du joueur intact |
-| `F:\OcaDim-SAVE-17-11\build-f1-fg-hdr-ok` | **NOTRE BASE** : F1 + FSR 4/3.1 + HDR, binaires + `BASE.md` + le log qui la valide |
+| `F:\OcaDim-SAVE-17-11\build-0.0.3-f1-rail` | **NOTRE BASE** : 0.0.3, fichiers `ocadim_*`, F1 rail/OCADIM, FSR 4/3.1, HDR |
+| `F:\OcaDim-SAVE-17-11\build-0.0.3-rename` | le renommage seul (`b4db818e`, `v0.0.3-rename`) |
+| `F:\OcaDim-SAVE-17-11\build-f1-fg-hdr-ok` | la F1 fonctionnelle + FSR 4/3.1 + HDR, avant le rail (`734d217e`) |
 | `F:\OcaDim-SAVE-17-11\build-fg-final-ok` | la base précédente, FSR 4 seule (`588da818`, `v0.0.2-fusion-base`) |
 | `F:\OcaDim-SAVE-17-11\build-hdr-ok`, `build-both-startup-ok` | les étapes HDR seule, puis 3.1/4 au démarrage |
 | `F:\OcaDim-SAVE-17-11\build-f1b-avant` | la version exacte avec l'ancien bug HDR (DLL `3EEC…`) |
@@ -163,3 +169,15 @@ dessine avec les mauvaises matrices une frame ou deux.
 - **Base posée** : `build-fg-final-ok` (+ `BASE.md`), commit `588da818`, tag `v0.0.2-fusion-base`. Le
   compteur nomme la génération du contexte créé (`FSR 4 FG` sur `4.0.2`), et ne nomme rien si le contexte
   est refusé.
+- **OcaDim 0.0.3** (`de28cefe`) : titre, premier log, écran de démarrage (`OCADIM`), bannière, pied du menu,
+  Discord, aides et liens de rapport ; plus de « Longshot » visible dans le jeu.
+- **Fichiers renommés** (`b4db818e`, `v0.0.3-rename`) : `ocadim.exe`, `ocadim_vk.dll`, `ocadim_options.ini`,
+  `ocadim_env.txt`, `logs/ocadim_log.txt`, `cache/ocadim_*` ; migration des anciens `longshot_*` (réglages,
+  env, logs, caches, pipeline states, shaders) ; le dossier de jeu est propre hors `romfs` (les noms
+  « Longshot » y sont ceux des objets du jeu).
+- **F1 visuel** (`0dfdc1cd`, `v0.0.3-f1-rail`) : rail des sections à gauche, en-tête OCADIM + section +
+  OcaDim 0.0.3, colonne et aide décalées, plus de bandeau d'onglets amont. Testé en jeu : F1 ouvre, E change
+  de section, Esc ferme.
+- **Reste hors du dossier de jeu** : `%APPDATA%\Longshot` (dossier utilisateur du launcher),
+  `%LOCALAPPDATA%\Longshot` (tags NFC), le `bin\longshot.exe` du builder/Setup, et les identifiants/sources
+  `LONGSHOT_*` (internes). CREDITS/LICENSE gardent l'attribution GPL, obligatoire.
