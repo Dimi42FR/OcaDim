@@ -40,7 +40,8 @@
 #include "oot_cheat_items.h"
 #include "vk_progress.h"   // (StartupView, version_text: the start-up screen)
 #include "vk_ui.h"
-#include "vk_menu_keys.h"   // (which gamepad buttons confirm and go back: those A and B are bound to)         // (how it looks: Dear ImGui, vk_imgui.h)
+#include "vk_menu_keys.h"   // (which gamepad buttons confirm and go back: those A and B are bound to)
+#include "vk_imgui.h"       // (ui::begin / ui::record_to: Dear ImGui over the window's image)
 #include "vk_dlss.h"
 #include "vk_framegen.h"   // (Frame generation by: who makes the frames now, framegen_maker)
 #include "vk_fg_amd.h"     // (Frame generation by: AMD's SDK's frames, and the FPS counter's name for them)
@@ -934,6 +935,14 @@ const char* hn_mic(int v, int variant) {
     const bool missing = variant < 0 ? mic_missing && v == 2 + mic_listed : variant == 1;
     if (variant > 1) return nullptr;
     return missing ? "Not plugged in: Default stands in until it is back." : "This microphone, by its name. A change applies at once.";
+}
+const char* tx_hud_layout(int v) { return v ? "Middle 16:9" : "Screen's edges"; }
+const char* hn_hud_layout(int v, int variant) {
+    static const char* const t[] = {"The hearts, the buttons and the minimap at the screen's own edges and corners.",
+                                    "The HUD where it is at 16:9, in the middle (fitted to the width on a narrower screen)."};
+    static const char* const held = "Set by HOS_WIDE_UI (longshot_env.txt or the environment): remove that line to choose here.";
+    const char* env = getenv("HOS_WIDE_UI");
+    return env && *env ? held : t[v ? 1 : 0];
 }
 const char* tx_rumble(int v) { return v ? tx_percent(v) : "Off"; }
 // (longshot) Menu size: how large the overlays are drawn (vk_ui.h unit), Medium unless the player chooses Small or Large. It
@@ -5613,6 +5622,13 @@ void menu_set_gpu_count(int count) {
         if (rows[i].value == &opts.gpu_device) restart_state.restart_value(restart_slot[i], opts.gpu_device);
 }
 
+/// (longshot) Once a present: the Rumble strength row changed with the menu open, and the new strength is felt at once, a
+/// short rumble, which also shows that the controller rumbles (Off is silent). Whatever changed it: the keys, the mouse.
+void menu_rumble_tick() {
+    static int was = -1;
+    if (was >= 0 && opts.rumble != was && menu_is_open() && host && host->version >= 32 && host->rumble_test) host->rumble_test();
+    was = opts.rumble;
+}
 bool menu_is_open() { return open_now.load(std::memory_order_relaxed); }
 bool scene_tonemap_on() { return dev.hdr && opts.hdr == 2 && opts.hdr_tonemap == 1; }
 // (the tools off on the Debug tab: flight, the free camera and heart protection put away; -1, heart protection never set, is the

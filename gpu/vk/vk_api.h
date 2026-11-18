@@ -100,7 +100,8 @@ enum { HOS_OPT_HUD_LAYOUT = 71 };
 enum { HOS_OPT_AUTO_RUN = 62 };
 enum { HOS_OPT_RUN_MODE = 63 };
 enum { HOS_OPT_ABOVE60_FIXES = 64 };
-enum { HOS_OPT_SHADOW_RES = 65 };
+/* (HOS_OPT_SHADOW_RES keeps the upstream's 56: the row is gone and vk_replay answers 0 — the game's own 1600 — where
+   Auto picked 3072 on a 16 GB card and cost Castle Town 6-7 fps.) */
 
 /* (longshot) the controls' names (host/nn_hid.c, host/pad_sdl.c, the pad_ and key_ lines of longshot_options.ini):
    the Switch's buttons in nn::hid's bit order, and a gamepad's inputs by position (the bottom face button first:
@@ -350,7 +351,7 @@ typedef struct MkwVkRenderer {
     void (*nvn_write_texels)(const nvn_tex *t, unsigned level, unsigned layer0, const NVNcopyRegion *r,
                              const uint8_t *src, uint64_t row_pitch, uint64_t image_pitch);
     void (*nvn_invalidate)(uint64_t gpu, uint64_t size);
-    void (*nvn_pool_created)(uint64_t gpu, uint64_t size);   /* a memory pool made (non-virtual): imported early */
+    void (*nvn_pool_created)(uint64_t gpu, uint64_t size, uint32_t flags);   /* a memory pool made (non-virtual): imported early */
     /* whether the GPU may use guest memory in [lo, hi) through an import (the host keeps such pages committed) */
     int (*guest_imported)(uint64_t lo, uint64_t hi);
     /* virtual pages [gpu, gpu + size) mapped now are about to be unmapped or remapped (the old mapping still in place):

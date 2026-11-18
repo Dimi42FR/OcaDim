@@ -934,13 +934,14 @@ int swapchain_framegen() { const int framegen = framegen_now(); return framegen 
 /// at that + 1 while DLSS-G makes the frames. swapchain_framegen stops at 4, for the images)
 bool swapchain_dlssg() { return swapchain_framegen() >= 2 && dlss_fg_runs(framegen_now() - 1); }
 
-void retire_swapchain() {
+void retire_swapchain(bool destroy_handle) {
     if (!dev.swapchain) return;
     device_wait_idle_locked();
     reflex_swapchain_destroyed();
     swap_views_drop();
     for (auto semaphore : dev.swap_rendered) vkDestroySemaphore(dev.device, semaphore, nullptr);
-    vkDestroySwapchainKHR(dev.device, dev.swapchain, nullptr);
+    // (OcaDim: false for AMD's frame generation swapchain, which its own context owns: ours must not destroy it)
+    if (destroy_handle) vkDestroySwapchainKHR(dev.device, dev.swapchain, nullptr);
     dev.swapchain = VK_NULL_HANDLE;
     ++dev.swapchain_generation;
     dev.swap_rendered.clear();
