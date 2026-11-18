@@ -143,6 +143,7 @@ bool create_swapchain(unsigned width,unsigned height) {
 bool reflex_swapchain_stale() {return stale;}
 int menu_vsync() {return 0;}   // (vk_menu.cpp: the V-Sync row, Auto)
 int swapchain_framegen() {return 0;}   // (vk_main.cpp: frame generation's multiplier as the swapchain was made, none)
+int framegen_now() {return 0;}   // (vk_framegen.cpp: frame generation's setting as it runs, Off)
 bool swapchain_dlssg() {return false;}   // (vk_main.cpp: and DLSS-G makes its sets: no)
 std::mutex present_image_mu;
 struct PendingPresent {
