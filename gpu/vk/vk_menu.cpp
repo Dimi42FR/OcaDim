@@ -1562,6 +1562,11 @@ const char* nfc_scan_says(int variant) {
 
 const char* const kFpsDevLineHelp = "Whether the FPS counter's Dev level shows this line.";   // (the details page's rows)
 const char* petit_hint(int v, int variant);   // (OcaDim: the Petit PC row's line, defined with its toggle below)
+// (OcaDim) The memory guard's line: static text only, no renderer call (vram_usage before the device is ready is the suspect)
+const char* hn_guard(int, int k) {
+    if (k) return nullptr;   // (measure_help asks k = 0, 1, ... until nullptr: one line, then nothing)
+    return "Au-delà de 90 % de RAM ou de mémoire vidéo, la 3D baisse d'un cran et le même appui annule ce changement.";
+}
 Row rows[] = {
     // Graphics, in sections: a heading row is a section's title (draw_options draws it, the selection steps over it). The
     // Quality preset first, as it sets rows in every section. (Reflex, Anti-Lag 2, the Upscaler and the DLSS model only where
@@ -1904,6 +1909,10 @@ Row rows[] = {
      "Pour une petite carte : moitié de résolution interne (720p depuis du 1440p), filtre Lanczos, netteté 30, ombres du "
      "jeu, génération d'images coupée. Aucun redémarrage. Appuyez sur Entrée pour l'appliquer, encore pour revenir "
      "exactement aux réglages d'avant.", petit_hint, false, true},
+    {TAB_OCADIM, "Garde-fou mémoire", &opts.mem_guard, 0, 1, 1, tx_onoff,   // (OcaDim: RAM or VRAM past 90 %)
+     "Quand la mémoire vidéo ou la RAM passe 90 %, baisse la résolution de la 3D d'un cran et le dit ici, sans redémarrage. "
+     "Entrée annule ce changement ; sans changement à annuler, elle active ou désactive le garde-fou.",
+     hn_guard, false, true},
     {TAB_DEBUG, "Robust buffers", &opts.robust, 0, 2, 1, tx_robust,
      "Bounds-checked buffer reads: a read past a buffer's end is dropped instead of stopping the GPU. Applies after a "
      "restart.", hn_robust, true, true},
