@@ -5624,6 +5624,7 @@ void menu_set_gpu_count(int count) {
 
 /// (longshot) Once a present: the Rumble strength row changed with the menu open, and the new strength is felt at once, a
 /// short rumble, which also shows that the controller rumbles (Off is silent). Whatever changed it: the keys, the mouse.
+int menu_memory_tier() { return 0; }   // (OcaDim: pas de ligne Texture cache ici: 0 = l'Auto de vk_texture.cpp)
 void menu_rumble_tick() {
     static int was = -1;
     if (was >= 0 && opts.rumble != was && menu_is_open() && host && host->version >= 32 && host->rumble_test) host->rumble_test();

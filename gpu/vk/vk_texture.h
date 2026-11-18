@@ -22,15 +22,6 @@ namespace mkwvk {
 struct Texture {
     VkImage image = VK_NULL_HANDLE;
     VmaAllocation allocation = nullptr;
-    // (longshot, OcaDim) bumped whenever this texture's views die (the retirement, the BC reformat, the compaction's
-    // move): the views' caches stamp it at resolve and re-resolve when it moved, instead of the global destroy
-    // generation that one retirement of another texture sent everyone back through the slow path
-    std::atomic<uint64_t> view_gen{1};
-    // (longshot, OcaDim) the texture's identity: fresh at every creation, and the recycled objects' entries in the
-    // views' caches cannot match it. retired: set at its retirement, before its views die — a resolve in that window
-    // is refused, and the caches' checks read it
-    uint64_t serial = 0;
-    std::atomic<bool> retired{false};
     VkFormat format = VK_FORMAT_UNDEFINED;   // the image's own format (views may be others of its class)
     VkImageType type = VK_IMAGE_TYPE_2D;
     VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -56,7 +47,6 @@ struct Texture {
     bool astc = false;        // ASTC blocks decoded into RGBA8 (block_w x block_h)
     bool bc = false;          // (and kept as BC3 or BC7: big ones, re-encoded on the GPU after decoding; vk_texture.cpp)
     bool bc_resized = false;  // (longshot-amd: its BC image is a resized copy, uneven block levels on AMD; vk_texture.cpp)
-    uint8_t bc1 = 0;          // (longshot: of a BC3 image, 0 not decided yet, 1 kept BC3 (alpha seen), 2 BC1: every block opaque)
     int block_w = 1, block_h = 1, bpb = 0;   // the storage's blocks
     // the game's texture
     uint64_t gpu = 0, guest = 0, guest_size = 0;   // storage (GPU address, guest address, bytes)
@@ -66,11 +56,7 @@ struct Texture {
     // contents
     bool uploaded = false;    // from guest memory, as of upload_gen
     uint32_t upload_gen = 0;
-    uint64_t retry_frame = 0;   // (longshot) an image whose upload failed: tried again from this frame (vk_texture.cpp)
-    // (longshot, OcaDim, RX_VK_MEM_CENSUS) the same storage, size and format went through the budget within 600 frames:
-    // this object is a make again, and its decode is one the eviction cost. evicted_ago: the frames since it went
-    bool made_again = false;
-    uint32_t evicted_ago = 0;
+    uint64_t bc_retry_frame = 0;   // (longshot) a BC3 image whose upload failed: tried again from this frame (vk_texture.cpp)
     uint64_t map_sig = 0;     // (a texture in a virtual pool: its pages' mapping when last uploaded)
     std::vector<uint64_t> page_map;   // (and each 64 KB page's guest address then: what a remap changed)
     struct Run { uint64_t off, guest, n; };   // (and its storage as runs of contiguous guest memory)
@@ -242,8 +228,6 @@ uint64_t texture_bytes();
 /// A full memory barrier (all commands, all accesses): what separates dependent work for now
 /// (why: its label in RX_VK_PASS_TIMING's barrier lines)
 void full_barrier(VkCommandBuffer cmd, const char* why = "barrier (other)");
-/// (longshot) RX_VK_GAME_ORDER: the game's own barriers order back-to-back passes and dispatches (on NVIDIA by default; vk_texture.cpp)
-bool game_order();
 /// Full barriers recorded and left out (RX_VK_BARRIER_DEDUPE_OFF=1: none), since the start
 void barrier_stats(int64_t* made, int64_t* left_out);
 /// (longshot) Set around a draw's sampled-texture lookups (vk_draw.cpp): a new ASTC texture there may wait for a later frame
@@ -259,10 +243,6 @@ void pass_start_barrier(VkCommandBuffer cmd);
 /// Pass starts with the fragment-stage barrier, since the start
 int64_t pass_barriers_relaxed();
 void texture_stats(int64_t* uploads, int64_t* astc_gpu, int64_t* bytes_uploaded);
-/// (longshot, OcaDim, RX_VK_MEM_CENSUS) the uploads of textures made again after an eviction, against the first ones: whether
-/// the budget's thrashing is what the decode costs, and the line it logs every 120 presents
-bool texture_census_on();
-void texture_census_log();
 /// (longshot) whether texture_read_texels' walk of r at that row stride (0: the region's own) and its own image stride
 /// stays within avail bytes of the data it is given (overflow-checked: the stride is the game's)
 bool texels_fit(const nvn_tex* t, const NVNcopyRegion* r, uint64_t row, uint64_t avail);

@@ -208,6 +208,9 @@ int menu_link_speed();   // (Movement speed in percent, 100 while the tools are 
 int menu_transition_autosave();
 int menu_wb_diff();     // (OcaDim) the Debug rows' values, for vk_memory.cpp and vk_draw.cpp
 int menu_notes_keep();
+void menu_rumble_tick();
+/// (l'amont: la ligne Texture cache du menu, lue par vk_texture.cpp; notre menu n'a pas cette ligne, 0 la laisse a l'Auto)
+int menu_memory_tier();
 int menu_damage_taken();   // (Damage taken, HOS_OPT_DAMAGE_TAKEN: 1, Normal, while the tools are off)
 int menu_take_cheat_action();
 void menu_note_frame(bool game_frame, int shown = 1);   // (the frame rates the FPS counter shows)
