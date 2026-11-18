@@ -1970,9 +1970,6 @@ Row rows[] = {
      "l'image, le HUD reste net. Paliers de l'upscaler, un changement toutes les 2 s au plus, jamais au-dessus de la "
      "résolution choisie dans Graphismes, et celle-ci revient dès que la ligne est sur Désactivée.",
      hn_drs, false, true},
-    {TAB_OCADIM, "Mémoire vidéo", nullptr, 0, 0, 0, nullptr,   // (OcaDim: étape 0 du budget VRAM, lecture seule)
-     "Affiche dans cette aide la mémoire vidéo utilisée, ce que le pilote autorise, le pic depuis le lancement, et le nombre "
-     "et la taille des textures. Rien n'est modifié : c'est la mesure qui servira au budget.", hn_vram, false, true},
     {TAB_OCADIM, "Budget VRAM", &opts.vram_budget, 0, 5, 1, tx_vram_budget,   // (OcaDim: the cap, measured for now)
      "Le plafond de mémoire vidéo à ne pas dépasser. Pour l'instant il se contente de le dire dans la ligne Mémoire vidéo "
      "(« PLAFOND DÉPASSÉ ») : l'éviction des textures vient ensuite. Auto : pas de plafond.",
