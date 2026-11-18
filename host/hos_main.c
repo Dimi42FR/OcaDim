@@ -1976,7 +1976,10 @@ static int game_main(int argc, char **argv) {
         }
 #endif
         HANDLE err = GetStdHandle(STD_ERROR_HANDLE);
-        if (!err || err == INVALID_HANDLE_VALUE || GetFileType(err) == FILE_TYPE_UNKNOWN) {
+        // (OcaDim) The log file is written whatever the game was started from: a run from a terminal lost it, and a report
+        // then had nothing to attach. HOS_LOG_STDERR=1 keeps the console alone, as before, for a developer reading it live.
+        const int console = err && err != INVALID_HANDLE_VALUE && GetFileType(err) != FILE_TYPE_UNKNOWN;
+        if (!console || !env_on("HOS_LOG_STDERR")) {
             char path[MAX_PATH + 32];
             DWORD n = hos_game_path_a(path, MAX_PATH);
             while (n && path[n - 1] != 92 && path[n - 1] != 47) n--;

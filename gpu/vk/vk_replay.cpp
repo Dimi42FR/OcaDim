@@ -34,6 +34,7 @@
 #include "status_line.h"
 #include "vk_reflex.h"
 #include "vk_antilag.h"
+#include "vk_fg_amd.h"   // (OcaDim) AMD FSR 4 frame generation: its own swapchain, acquire and present
 #include "vk_draw.h"
 #include "vk_dump.h"
 #include "vk_paths.h"   // (log_path: the frame trace in the game folder's logs/)
@@ -5827,7 +5828,10 @@ void present_image(VkImage src, uint32_t sw, uint32_t sh, const int crop[4], VkI
     if (!was_held && !acquire_fence_ready()) return;   // (no fence to acquire with: the frame is not shown)
     if (was_held) index = held_image.index;   // (acquired at an earlier present, not free then: no other acquire meanwhile)
     VkResult res = VK_SUCCESS;
-    if (!was_held) res = vkAcquireNextImageKHR(dev.device, dev.swapchain, acquire_timeout, VK_NULL_HANDLE, acquire_fence, &index);
+    // (OcaDim, RX_VK_FG_AMD) AMD's frame generation swapchain acquires through its own function: the handle it handed back
+    // is not the Vulkan device's
+    if (fg_amd_active()) res = fg_amd_acquire(dev.swapchain, acquire_timeout, VK_NULL_HANDLE, &index);
+    else if (!was_held) res = vkAcquireNextImageKHR(dev.device, dev.swapchain, acquire_timeout, VK_NULL_HANDLE, acquire_fence, &index);
     if (res == VK_ERROR_DEVICE_LOST) device_lost();
     if (acquire_t0) fps_wait(fps_stats::kPace, fps_clock() - acquire_t0);
     if (res == VK_ERROR_SURFACE_LOST_KHR) {
@@ -6064,7 +6068,12 @@ static bool present_out(uint32_t index, std::unique_lock<std::mutex>& qk) {
     const auto copy_done = [&] { return (::vkx::vkWaitForFences)(dev.device, 1, &copy, VK_TRUE, 0) == VK_SUCCESS; };
     const bool copy_was_done = copy && copy_done();
     const int64_t present_t0 = fps_breakdown_on() ? fps_clock() : 0;
-    if (dev.present_queue_supported) {
+    if (fg_amd_active()) {
+        // (OcaDim, RX_VK_FG_AMD) AMD's swapchain presents through its own function, on the queue no other thread submits to:
+        // the replay's lock is let go, as for the presents' own queue below
+        qk.unlock();
+        res = fg_amd_present(&pi);
+    } else if (dev.present_queue_supported) {
         qk.unlock();
         std::lock_guard pq(dev.present_queue_mu);
         res = vkQueuePresentKHR(dev.present_queue, &pi);

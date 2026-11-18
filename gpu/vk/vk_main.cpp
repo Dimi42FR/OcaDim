@@ -32,6 +32,10 @@ static_assert(mkwvk::kQueueGraphics == VK_QUEUE_GRAPHICS_BIT && mkwvk::kQueueCom
 #include "vk_bug_report.h"
 #include "auto_settings.h"
 #include "vk_dlss.h"
+#include "vk_fg_amd.h"   // (OcaDim) AMD FSR 4 frame generation: its own swapchain, acquire and present
+
+// (OcaDim, RX_VK_FG_AMD) whether this device got the three queues AMD's frame generation asks for
+static bool g_fg_queues = false;   // (OcaDim)
 #include "vk_fsr4.h"
 #include "vk_xess.h"
 #include "vk_reflex.h"
@@ -552,6 +556,11 @@ bool create_device() {
         qs.push_back(x);
     };
     queues(dev.queue_family, 1);
+    // (OcaDim, RX_VK_FG_AMD) AMD's frame generation wants three queues of its own, different from the
+    // replay's: the SDK refuses a context whose game, present and image-acquire queues are not three
+    // different queues. Asked in every run so the row can turn it on at once.
+    g_fg_queues = families[dev.queue_family].queueCount >= 4;
+    if (g_fg_queues) queues(dev.queue_family, 4);
     if (compute_family != UINT32_MAX) queues(compute_family, 1);
     if (presenter_family != UINT32_MAX) queues(presenter_family, presenter_index + 1);
     (void)q;
@@ -860,6 +869,17 @@ bool create_device() {
     }
     if (dev.buffer_marker) buffer_markers_init();
     coopmat_init();
+    // (OcaDim, RX_VK_FG_AMD) AMD's frame generation swapchain's queues: indices 1 to 3 of the graphics family, never the
+    // replay's (index 0)
+    dev.fg_game_queue = dev.fg_present_queue = dev.fg_acquire_queue = VK_NULL_HANDLE;
+    dev.fg_family = 0;
+    if (g_fg_queues) {
+        vkGetDeviceQueue(dev.device, dev.queue_family, 1, &dev.fg_game_queue);
+        vkGetDeviceQueue(dev.device, dev.queue_family, 2, &dev.fg_present_queue);
+        vkGetDeviceQueue(dev.device, dev.queue_family, 3, &dev.fg_acquire_queue);
+        dev.fg_family = dev.queue_family;
+        logf("vk: AMD FG: three queues of family %u asked for and taken", dev.queue_family);
+    }
     reflex_device_created();
     antilag_device_created();
     // (longshot: on the Steam Deck the GPU held at amdgpu's peak power state while the game runs (RX_VK_GPU_CLOCK=0: not), gpu_clock.h;
@@ -952,7 +972,14 @@ void retire_swapchain(bool destroy_handle) {
 
 bool invalidate_lost_surface(VkResult result) {
     if (result != VK_ERROR_SURFACE_LOST_KHR) return false;
-    retire_swapchain();
+    // (OcaDim) AMD's frame generation has a swapchain of its own on this surface: its presents wait and it goes first, then
+    // ours is retired without touching its handle, which its context owns
+    const bool fg = fg_amd_active();
+    if (fg) {
+        device_wait_idle_locked();
+        fg_amd_surface_lost();
+    }
+    retire_swapchain(!fg);
     if (dev.surface) vkDestroySurfaceKHR(dev.instance, dev.surface, nullptr);
     dev.surface = VK_NULL_HANDLE;
     dev.present_queue_supported = false;
@@ -1162,23 +1189,55 @@ bool create_swapchain(uint32_t width, uint32_t height) {
         ci.pNext = &format_list;
     }
     reflex_swapchain_info(ci);   // (NVIDIA Reflex: latency mode on)
-    VkSwapchainKHR sc;
-    result = vkCreateSwapchainKHR(dev.device, &ci, nullptr, &sc);
-    // Passing oldSwapchain retires it even when creation fails. Nothing may acquire from it again.
-    retire_swapchain();
+    // (OcaDim, RX_VK_FG_AMD) AMD's frame generation swapchain, when it takes the window's over: the handle it hands back is
+    // the window's from here on, and every swapchain call goes through it (vk_fg_amd.cpp). Turning it on or off from the
+    // Frame generation by row remakes here: its context makes its own swapchain for the surface, and a window has one.
+    if (fg_amd_active() && !fg_amd_wanted()) {
+        device_wait_idle_locked();
+        fg_amd_surface_lost();
+        retire_swapchain(false);
+    } else if (!fg_amd_active() && fg_amd_wanted() && dev.swapchain) {
+        retire_swapchain();
+    }
+    const bool fg_remake = fg_amd_active();
+    if (fg_remake) {
+        device_wait_idle_locked();   // (our blits done: they signal the semaphores AMD's presents wait on)
+        fg_amd_wait_presents();      // (then AMD's presents done with them, before retire drops them)
+        retire_swapchain(false);
+    }
+    VkSwapchainKHR sc = VK_NULL_HANDLE;
+    const VkResult fg_result = fg_amd_create_swapchain(ci, &sc);
+    const bool fg_owned = fg_result == VK_SUCCESS;
+    if (fg_owned) {
+        result = VK_SUCCESS;
+    } else if (fg_remake) {   // (AMD's handle is the window's swapchain: the Vulkan calls must never see it)
+        logf("vk: AMD FG: AMD's swapchain could not be remade; the frame generation swapchain stays");
+        return false;
+    } else {
+        result = vkCreateSwapchainKHR(dev.device, &ci, nullptr, &sc);
+        // Passing oldSwapchain retires it even when creation fails. Nothing may acquire from it again.
+        retire_swapchain();
+    }
     if (invalidate_lost_surface(result)) return false;
     if (result != VK_SUCCESS) {
         logf("vk: vkCreateSwapchainKHR failed (VkResult %d, extent %ux%u, format %d, usage %#x, mode %d, images %u)",
              (int)result, width, height, (int)fmt.format, ci.imageUsage, (int)mode, ci.minImageCount);
         return false;
     }
-    if (vkGetSwapchainImagesKHR(dev.device, sc, &n, nullptr) != VK_SUCCESS || !n) {
-        vkDestroySwapchainKHR(dev.device, sc, nullptr);
+    const auto swapchain_images = [&](uint32_t* count, VkImage* out) {
+        return fg_owned ? fg_amd_get_images(sc, count, out) : vkGetSwapchainImagesKHR(dev.device, sc, count, out);
+    };
+    const auto drop_new = [&] {
+        if (fg_owned) fg_amd_surface_lost();   // (its context, and the swapchain it made)
+        else vkDestroySwapchainKHR(dev.device, sc, nullptr);
+    };
+    if (swapchain_images(&n, nullptr) != VK_SUCCESS || !n) {
+        drop_new();
         return false;
     }
     std::vector<VkImage> images(n);
-    if (vkGetSwapchainImagesKHR(dev.device, sc, &n, images.data()) != VK_SUCCESS || !n) {
-        vkDestroySwapchainKHR(dev.device, sc, nullptr);
+    if (swapchain_images(&n, images.data()) != VK_SUCCESS || !n) {
+        drop_new();
         return false;
     }
     images.resize(n);

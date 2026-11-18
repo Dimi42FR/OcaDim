@@ -135,6 +135,27 @@ int list_versions(uint64_t type, char* out, size_t size) {
     return (int)n;
 }
 
+/// (OcaDim) The id of the frame generation version whose name starts with `want_major` ("4" or "3"), from what AMD's
+/// loader lists for this device; 0 when it lists none like that (the SDK's own version is then used)
+uint64_t pick_fg_version(int want_major) {
+    const VkDeviceContext context{dev.device, dev.physical, vkGetDeviceProcAddr};
+    ffxQueryDescGetVersions q{};
+    q.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
+    q.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION;
+    q.device = (void*)&context;
+    uint64_t n = 0;
+    q.outputCount = &n;
+    if (st().query(nullptr, &q.header) != FFX_API_RETURN_OK || !n) return 0;
+    std::vector<uint64_t> ids(n);
+    std::vector<const char*> names(n);
+    q.versionIds = ids.data();
+    q.versionNames = names.data();
+    if (st().query(nullptr, &q.header) != FFX_API_RETURN_OK) return 0;
+    for (uint64_t i = 0; i < n; i++)
+        if (atoi(names[i] ? names[i] : "") == want_major) return ids[i];
+    return 0;
+}
+
 /// Loads AMD's loader once and asks it what this device can run. False: no library, or nothing for this GPU.
 bool load() {
     State& s = st();
@@ -233,7 +254,13 @@ bool create_fg(uint32_t w, uint32_t h, VkFormat fmt, bool depth_reversed, float 
     s.backend.deviceContext = VkDeviceContext{dev.device, dev.physical, vkGetDeviceProcAddr};
     s.fg_version = {};
     s.fg_version.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION_VERSION;
-    s.fg_version.version = FFX_FRAMEGENERATION_VERSION;
+    // (OcaDim) the version the Frame generation by row asks for: index 3 is AMD FSR 4's generation, 2 AMD FSR 3.1's;
+    // anything else (Auto, the game's own, DLSS) leaves the SDK's own choice, the newest it lists.
+    const int want_major = opts.framegen_by == 3 ? 4 : opts.framegen_by == 2 ? 3 : 0;
+    const uint64_t picked = want_major ? pick_fg_version(want_major) : 0;
+    s.fg_version.version = picked ? picked : FFX_FRAMEGENERATION_VERSION;
+    if (want_major && !picked)
+        logf("vk: AMD FG: no FSR %d frame generation listed for this device; the SDK's own version is made instead", want_major);
     s.fg_version.header.pNext = &s.backend.header;
     s.fg_desc = {};
     s.fg_desc.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION;
@@ -289,7 +316,7 @@ bool fg_amd_requested() {
     // (the "by" row alone: AMD's makes one frame between each two of the game's, whatever Frame generation's multiplier
     // says (2x to 8x is the renderer's own and DLSS's). Reading the multiplier here too tore its swapchain down when a
     // quality preset changed that row mid-run, and the next context was refused)
-    return opts.framegen_by == 2;
+    return opts.framegen_by == 2 || opts.framegen_by == 3;   // (OcaDim: 2 FSR 3.1's generation, 3 FSR 4's)
 }
 
 bool fg_amd_wanted() {
