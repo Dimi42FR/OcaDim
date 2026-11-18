@@ -230,3 +230,8 @@ ceux qui ne touchent que `vk_menu.cpp` demarrent. Les objets dependent des en-te
 un build **propre** (tout recompiler) n'a pas encore ete essaye : a faire en premier avant de conclure.
 Code du garde-fou : `git stash` - « Garde-fou memoire (a retester en build propre: blocage au demarrage) ».
 
+
+## Decision 2026-11-18 : budget VRAM manuel
+
+Le budget VRAM reste **manuel** (Auto / 2 / 3 / 4 / 6 / 8 Go) et se contente de dire« PLAFOND DEPASSE » dans la ligne Memoire video. Pas d'eviction automatique des textures pour l'instant : on garde ce qui marche. L'eviction LRU, les formats compacts et la dedup restent notes pour plus tard, si un cas reel le demande.
+
