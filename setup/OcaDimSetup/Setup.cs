@@ -22,6 +22,10 @@ sealed class Setup
     public string? Romfs { get; private set; }
     public string? Exefs { get; private set; }
     public bool Fsr { get; set; }
+    /// (OcaDim) NVIDIA's DLSS SDK, fetched before the build and shipped as ngx/ beside the game: DLSS, DLAA and DLSS Frame
+    /// Generation live there. Without it the renderer is built without any of them, so an RTX card finds no DLSS and no
+    /// NVIDIA frame generation at all — and the F1 menu shows no NVIDIA page.
+    public bool Ngx { get; set; } = true;
     /// (OcaDim) The hottest game functions compiled at -O2 with their callees inlined (nx2/make_game.py's hot list, from
     /// assets/profiles/), and the renderer built with its play profile: the CPU is this game's frame's wall. Off only if a
     /// build or the game misbehaves (the whole lifted code at -O1, as before). Added by Dimi42FR.
@@ -293,6 +297,9 @@ sealed class Setup
             args.AddRange(new[] { "--out", InstallDir });
             if (Fsr) args.AddRange(new[] { "--fsr", "--fetch-fsr-runtime", "--accept-amd-license" });
         }
+        // (OcaDim) NVIDIA's DLSS SDK, for an install and for an update alike: ngx/ is what DLSS and DLSS Frame Generation
+        // read at run time, and a build made without it has neither. The tick in the wizard is the accepted licence.
+        if (Ngx) args.AddRange(new[] { "--fetch-ngx-sdk", "--accept-nvidia-license" });
         string? error = null;
         var tail = new List<string>();
         var code = await RunAsync(source, args, p => progress(p.Item1, p.Item2), l =>

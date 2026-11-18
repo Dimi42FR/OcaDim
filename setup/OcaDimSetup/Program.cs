@@ -45,7 +45,7 @@ static class Program
 }
 
 /// The same install without a window: scripts, the six tests, and a player who prefers a command line.
-/// OcaDimSetup.exe --cli --nup <file> --out <folder> [--fsr] [--check] [--update] [--tools-from <folder>] [--log <file>]
+/// OcaDimSetup.exe --cli --nup <file> --out <folder> [--fsr] [--no-ngx] [--check] [--update] [--tools-from <folder>] [--log <file>]
 static class Cli
 {
     public static int Run(string[] args)
@@ -67,6 +67,8 @@ static class Cli
                 case "--check": check = true; break;
                 case "--fsr": fsr = true; break;
                 case "--no-fsr": fsr = false; break;
+                case "--ngx": setup.Ngx = true; break;
+                case "--no-ngx": setup.Ngx = false; break;
                 case "--no-hot": setup.HotCode = false; break;
                 case "--hot": setup.HotCode = true; break;
                 case "--tools-from": setup.ToolsFrom = Next(); break;
@@ -164,7 +166,7 @@ static class Cli
 
     static void Usage()
     {
-        Console.WriteLine("OcaDimSetup.exe [--cli] --nup <fichier> --out <dossier> [--fsr] [--no-hot] [--check] [--update]");
+        Console.WriteLine("OcaDimSetup.exe [--cli] --nup <fichier> --out <dossier> [--fsr] [--no-ngx] [--no-hot] [--check] [--update]");
         Console.WriteLine("               [--game <fichier|dossier>] [--romfs <dossier> --exefs <dossier>]");
         Console.WriteLine("               [--tools-from <dossier>] [--log <fichier>] [--no-shortcuts]");
     }

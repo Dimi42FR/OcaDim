@@ -229,6 +229,17 @@ sealed class WizardForm : Form
         var fsrBox = Check("Compiler avec AMD FSR 4 (cartes RDNA 4 ; sinon, la mise à l'échelle du pilote)", setup.Fsr);
         fsrBox.CheckedChanged += (_, _) => setup.Fsr = fsrBox.Checked;
         Add(fsrBox);
+        // (OcaDim) Without NVIDIA's DLSS SDK the renderer is built without DLSS and without DLSS Frame Generation: an RTX
+        // card then finds neither, and the F1 menu has no NVIDIA page at all. The tick fetches the SDK (NVIDIA's licence is
+        // accepted here, by ticking it) and ships ngx/ beside the game.
+        var ngxBox = Check("Compiler avec NVIDIA DLSS et la frame generation (cartes RTX : DLSS, DLAA, DLSS-G)", setup.Ngx);
+        ngxBox.CheckedChanged += (_, _) => setup.Ngx = ngxBox.Checked;
+        Add(ngxBox);
+        var ngxNote = Paragraph("Télécharge le SDK NVIDIA au premier build et livre le dossier ngx/ avec le jeu. Sans cette case, " +
+                                "le jeu compile sans DLSS : l'onglet NVIDIA n'existe pas et la frame generation de NVIDIA non plus. " +
+                                "Sur AMD, la case ne change rien.");
+        ngxNote.ForeColor = Muted;
+        Add(ngxNote);
         var hotBox = Check("Optimisations CPU maximales — recommandé (chunk chaud à -O2, profil de jeu)", setup.HotCode);
         hotBox.CheckedChanged += (_, _) => setup.HotCode = hotBox.Checked;
         Add(hotBox);
