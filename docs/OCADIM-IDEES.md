@@ -176,7 +176,32 @@ Performances), test de 10 s, application. Il pose aussi la DRS et le mode Petit 
   rééchantillonnage en 48 kHz.
 - **Export / import de profil** en un fichier.
 
-## Où en est la 0.0.3
+## Bugs connus à régler avant la 0.0.4
+
+### Interblocage `nn.npln` au démarrage (écran noir)
+
+Vu le 2026-11-18 en testant la DRS : le jeu reste à `frame 1, state intro`, écran noir, et le log
+montre
+
+```
+[hos nn.npln.Worker] mutex 0x100ac110c8 (obj ...): nn.npln.Worker waiting 10 s;
+held by nn.npln.Worker (count 2, 1 waiting)
+```
+
+puis des attentes de 2 s des autres threads (`PreActorModelCompose`, `rmbl::VibrationThread`) qui
+tournent sans cœur. Le thread réseau se bloque lui-même (mutex récursif, compte 2) et les vcores
+affament le reste. Ce n'est pas un crash : le processus vit, mais rien n'est présenté.
+
+- **Reproductible** avec le build DRS (2 lancements sur 2), **pas** avec le build `ca-rame`
+  (4 lancements sur 4). Le timing du build semble exposer la course ; le bug est dans l'hôte, pas
+  dans le menu.
+- **Contournement** : relancer le jeu ; il démarre alors normalement.
+- **Piste** : `host/nn_os_sync.c:496` (le log du mutex) et les fibres de `host/hos_thread.c:1528`
+  (`nn::async` sur les threads `nn.npln`). À traiter avec la vague « ordonnanceur de vcores ».
+- La DRS v1 est **mise de côté** (`git stash` : « DRS v1 (a retester: blocage au demarrage) ») et
+  sera réintroduite par petits morceaux, avec un test de démarrage à chaque étape.
+
+
 
 - Base testée : `F:\OcaDim-SAVE-17-11\build-0.0.3-ocadim-tab` (commit `5061c946`, tag
   `v0.0.3-ocadim-tab`) : section OcaDim (4 interrupteurs), menu entièrement en français,
