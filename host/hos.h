@@ -127,7 +127,7 @@ void hos_slow_frame_present(void);
 void hos_slow_sample(int64_t sweep_ns, const char *text);
 void hos_slow_sweep_done(void);
 /* (longshot) the profiling mode (host/profiling.c, HOS_PROFILE=1): its folder (NULL: off), its switches set (after
-   longshot_env.txt), its threads started (hos_prof_start), a timed event into its events.txt, and a sampler's line written
+   ocadim_env.txt), its threads started (hos_prof_start), a timed event into its events.txt, and a sampler's line written
    (packed with HOS_SAMPLE_PACKED) */
 const char *hos_profiling_dir(void);
 void hos_profiling_env(void);

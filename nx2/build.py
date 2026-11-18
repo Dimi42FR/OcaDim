@@ -1,4 +1,4 @@
-"""Compile the lifted game (work/gen, from `lift.py --write`) into work/build/longshot_game.dll.
+﻿"""Compile the lifted game (work/gen, from `lift.py --write`) into work/build/longshot_game.dll.
 
 The flags are a64-kit's for lifted code (its build.py, cmd_native): -O1, LoopRotate's header copies capped (most of
 the compile time in goto-dense giant functions otherwise), capture tracking past LLVM's 100 uses (the context
@@ -76,8 +76,8 @@ PGO = os.environ.get("RX_PGO", "")
 LINUX = not toolchain.windows()   # (longshot: RX_TARGET=windows on Linux builds the Windows game, with llvm-mingw)
 POSIX = os.path.join(kit.HERE, "..", "host", "posix")
 SYSROOT = os.environ.get("LONGSHOT_SYSROOT", "")
-EXE = "longshot" if LINUX else "longshot.exe"
-VK_LIB = "longshot_vk.so" if LINUX else "longshot_vk.dll"
+EXE = "ocadim" if LINUX else "ocadim.exe"
+VK_LIB = "ocadim_vk.so" if LINUX else "ocadim_vk.dll"
 
 
 def check_vk_symbols(so):
@@ -1149,7 +1149,7 @@ LIGHT_FLAGS = ["-mllvm", "-opt-disable=" + ",".join(LIGHT_PASSES), "-mllvm", "-o
 
 def light_passes_kb():
     """The largest function (KB of C) a lifted chunk may hold and still compile without the module passes; None: off.
-    (OcaDim: off by default. The trade is compile time for code — ~15% of a first build for +3-5% code — and this game's
+    (OcaDim: off by default. The trade is compile time for code â€” ~15% of a first build for +3-5% code â€” and this game's
     frame is the CPU's: we keep every pass on the lifted code. `LONGSHOT_LIGHT_PASSES=1` turns it on for a faster build.)"""
     if os.environ.get("LONGSHOT_LIGHT_PASSES", "").strip().lower() not in ("1", "true", "on", "yes"):
         return None
@@ -2099,13 +2099,13 @@ def main():
             import shutil
             shutil.copyfile(sdl, os.path.join(out, "libSDL2-2.0.so.0"))
     elif a.standalone and not vk_only:
-        exe = os.path.join(out, "longshot.exe")   # (+ longshot.map: crash offsets -> f_<guest address>)
+        exe = os.path.join(out, "ocadim.exe")   # (+ longshot.map: crash offsets -> f_<guest address>)
         t = time.time()
         r = run_link([cc] + toolchain.native_target() + toolchain.native_link() +
                            ["-o", exe] + linker("/map:" + exe[:-4] + ".map") + [toolchain.link_opt("/stack:8388608"), "@" + rsp] + HOT_ORDER() + HOST_LIBS +
                            ([toolchain.link_opt("/nodefaultlib:clang_rt.profile.lib")] if PGO == "gen" else []) +
                            exe_resources() +   # (the exe's icon and name: nx2/game_title.py, nx2/make_icon.py)
-                           [win_manifest.write(os.path.join(out, "longshot_manifest.res"))] +   # (UTF-8 paths: nx2/win_manifest.py)
+                           [win_manifest.write(os.path.join(out, "ocadim_manifest.res"))] +   # (UTF-8 paths: nx2/win_manifest.py)
                            ([toolchain.link_opt("/subsystem:windows"), toolchain.link_opt("/entry:mainCRTStartup")] if os.environ.get("RX_RELEASE") == "1" else []) +   # (no console window)
                            ([os.path.join(FFMPEG, "lib", l + ".lib") for l in ("avcodec", "swscale", "swresample", "avutil")] +
                             ["-lbcrypt", "-lmfplat", "-lmfuuid", "-lstrmiids", "-lole32"] if FFMPEG else []) +

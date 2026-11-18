@@ -1,9 +1,9 @@
-/* The player's settings, longshot_options.ini (options_path.h): in the user folder the game is given, the saves' (host/hos_main.c),
+/* The player's settings, ocadim_options.ini (options_path.h): in the user folder the game is given, the saves' (host/hos_main.c),
    not beside the game. The launcher starts every build with the same one (--user: %APPDATA%\Longshot on Windows, a portable
    launcher's own folder), so an update, a new build or another channel keeps the Insert menu's choices and the controls; a
    build in its own folder kept its own before, and an update into a new folder started from the defaults. Where it is:
    - HOS_OPTIONS_FILE=<path>: that file (a scripted or test run brings its own and leaves the player's as it is, as HOS_ENV_FILE
-     does for longshot_env.txt);
+     does for ocadim_env.txt);
    - --user <folder>: in that folder. A relative folder is made whole against the folder the game will run in (the game folder
      when it is started with nothing: hos_main.c goes there), so the crash window's helper, started before that, reads the same
      file;
@@ -30,7 +30,8 @@
 
 void hos_log(const char *fmt, ...);   /* (hos.h; declared here so a test builds this file alone) */
 
-static const char options_name[] = "longshot_options.ini";
+static const char options_name[] = "ocadim_options.ini";
+static const char old_options_name[] = "longshot_options.ini";   /* (the merge's name before OcaDim's) */
 static char file[MAX_PATH];
 static int chosen;
 
@@ -72,6 +73,19 @@ static void put(const char *base, const char *folder, const char *name) {
         file[0] = 0;
 }
 
+/* A build before the rename's settings file beside the new one: renamed once, so the player keeps every choice and binding */
+static void migrate_options(const char *path) {
+    if (!path[0] || GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES) return;
+    char from[MAX_PATH];
+    if (snprintf(from, sizeof from, "%s", path) >= (int)sizeof from) return;
+    char *slash = strrchr(from, SEP);
+    if (!slash) return;
+    const size_t room = sizeof from - (size_t)(slash + 1 - from);
+    if (snprintf(slash + 1, room, "%s", old_options_name) >= (int)room) return;
+    if (GetFileAttributesA(from) != INVALID_FILE_ATTRIBUTES && MoveFileExA(from, path, 0))
+        hos_log("options: %s was renamed to %s", from, path);
+}
+
 void hos_options_choose(int argc, char **argv) {
     if (chosen) return;
     chosen = 1;
@@ -93,13 +107,14 @@ void hos_options_choose(int argc, char **argv) {
     char game[MAX_PATH], probe[MAX_PATH];
     const size_t g = game_folder(game, sizeof game);
     if (!user) {
-        if (g) put(game, options_name, NULL);   /* (beside the game, as before) */
+        if (g) put(game, options_name, NULL), migrate_options(file);   /* (beside the game, as before) */
         return;
     }
     /* (started with nothing and image.bin beside: hos_main.c goes into the game folder, where a relative --user is) */
     const int beside = !image && g && snprintf(probe, sizeof probe, "%simage.bin", game) < (int)sizeof probe &&
                        GetFileAttributesA(probe) != INVALID_FILE_ATTRIBUTES;
     put(beside ? game : "", user, options_name);
+    migrate_options(file);
 }
 
 const char *hos_options_file(void) { return file; }
@@ -130,6 +145,7 @@ void hos_options_carry(void) {
     char from[MAX_PATH];
     const size_t g = game_folder(from, sizeof from);
     if (!g || snprintf(from + g, sizeof from - g, "%s", options_name) >= (int)(sizeof from - g)) return;
+    migrate_options(from);   /* (the game folder's own file from before the rename, copied below) */
 #ifdef _WIN32
     if (!_stricmp(from, file)) return;   /* (beside the game: the file is already where it is read) */
 #else

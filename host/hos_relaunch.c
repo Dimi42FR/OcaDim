@@ -2,12 +2,12 @@
    restart (WM_APP + 9: host/display.c, host/posix/display_sdl.c). The window closes as when the player closes it, and at
    the very end of that, instead of only exiting, the game is started again:
      Linux: the process becomes the game again (execve) with the arguments and the environment it started with
-     (/proc/self/cmdline and /proc/self/environ: longshot_env.txt's lines are read again, not kept), so whatever waits
+     (/proc/self/cmdline and /proc/self/environ: ocadim_env.txt's lines are read again, not kept), so whatever waits
      for it (the launcher, a stream, a test) still has it. The game is bin/longshot on disk, never run from inside the
      AppImage (longshot-launch starts it with the AppImage's variables taken away), so /proc/self/exe is the game;
      argv[0] on the PATH if that is gone (the folder built again meanwhile).
      Windows: a new process of this executable (GetModuleFileNameW) with this one's command line (GetCommandLineW), in
-     the same folder, with the environment this one started with (kept by hos_relaunch_keep_env before longshot_env.txt
+     the same folder, with the environment this one started with (kept by hos_relaunch_keep_env before ocadim_env.txt
      was read: the file's lines are read again, and its edits since are taken, not left out as the environment's own),
      and the standard handles it was started with when it was given a stderr (a run's log.txt), inherited alone;
      then this one exits. */
@@ -27,7 +27,7 @@ static wchar_t *start_env;   /* (the environment block at the start: hos_relaunc
 static HANDLE start_std[3];  /* (the standard handles the game was given, if it was given a stderr: hos_relaunch_keep_env) */
 
 void hos_relaunch_keep_env(void) {
-    /* (kept before hos_main.c opens longshot_log.txt as stderr for a game given none, by the same test as hos_main.c's:
+    /* (kept before hos_main.c opens ocadim_log.txt as stderr for a game given none, by the same test as hos_main.c's:
        only handles the game was started with are passed on to the game started again, never its own log, which the new
        run moves to .1 and opens for itself) */
     const HANDLE err = GetStdHandle(STD_ERROR_HANDLE);
@@ -61,7 +61,7 @@ static void relaunch(void) {
     PROCESS_INFORMATION pi;
     memset(&si, 0, sizeof si);
     si.cb = sizeof si;
-    /* (the new process waits for this one to end before it moves longshot_log.txt to .1 and opens its own: this one still
+    /* (the new process waits for this one to end before it moves ocadim_log.txt to .1 and opens its own: this one still
        has it open until it exits, and a rename of an open file fails on Windows, so the new run overwrote the old run's
        log. hos_main.c reads HOS_RESTART_OF) */
     wchar_t pid[16];
@@ -71,7 +71,7 @@ static void relaunch(void) {
     /* (a game given its standard handles (a run of scripts/longshot_ctl.py, whose log.txt is the game's stderr) passes
        them on, so the game started again logs where this one did. Only those handles are inherited
        (PROC_THREAD_ATTRIBUTE_HANDLE_LIST), never another this process holds open, and each only while it is still the
-       one the game was started with. A game that opened its own longshot_log.txt passes none, as before. Should the
+       one the game was started with. A game that opened its own ocadim_log.txt passes none, as before. Should the
        start with them fail, the game is started as before, without them) */
     HANDLE pass[3];
     DWORD npass = 0;
@@ -140,7 +140,7 @@ extern char **environ;
 static int start_err_given = 1;   /* (whether the game was started with a stderr: hos_relaunch_keep_env) */
 
 void hos_relaunch_keep_env(void) {
-    /* (the environment is read again from /proc/self/environ; kept here, before hos_main.c opens longshot_log.txt as stderr
+    /* (the environment is read again from /proc/self/environ; kept here, before hos_main.c opens ocadim_log.txt as stderr
        for a game given none, by the same test as hos_main.c's, is whether it was given one) */
     const HANDLE err = GetStdHandle(STD_ERROR_HANDLE);
     start_err_given = err && err != INVALID_HANDLE_VALUE && GetFileType(err) != FILE_TYPE_UNKNOWN;

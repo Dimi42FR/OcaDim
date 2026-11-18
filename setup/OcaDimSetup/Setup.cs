@@ -15,7 +15,7 @@ sealed class Setup
 {
     public const string Name = "OcaDim";
     public const string Version = "0.0.2-1";
-    public const string GameExe = "longshot.exe";
+    public const string GameExe = "ocadim.exe";
 
     public string InstallDir { get; set; } = DefaultInstallDir;
     public string? Nup { get; private set; }
@@ -195,14 +195,14 @@ sealed class Setup
         }
     }
 
-    /// <summary>(OcaDim) The driver's fault list, moved aside before an update: cache/longshot_driver_faults.txt keeps, for
+    /// <summary>(OcaDim) The driver's fault list, moved aside before an update: cache/ocadim_driver_faults.txt keeps, for
     /// good, every program the driver faulted on — keyed by vendor and driver version (gpu/vk/driver_faults.h). A program
     /// on it is never asked of the driver again, which is what a player sees as "the shaders do not compile": the game
     /// misses those shaders with no message. A new build may have fixed what faulted, so it gets one more try; if the
     /// driver faults again the file comes back with the same lines.</summary>
     public string? ForgetDriverFaults()
     {
-        var path = Path.Combine(InstallDir, "cache", "longshot_driver_faults.txt");
+        var path = Path.Combine(InstallDir, "cache", "ocadim_driver_faults.txt");
         try
         {
             if (!File.Exists(path)) return null;
@@ -218,7 +218,7 @@ sealed class Setup
     }
 
     /// The game exe's own icon: nx2/make_icon.py writes work's longshot.res from OcaDim's .ico, and nx2/build.py links
-    /// it into longshot.exe (the taskbar, Alt-Tab and the shortcut when it has no icon of its own). A missing Pillow or
+    /// it into ocadim.exe (the taskbar, Alt-Tab and the shortcut when it has no icon of its own). A missing Pillow or
     /// .ico only means the exe keeps its generic icon: the build goes on.
     public void MakeIcon(string source, Action<string> line)
     {

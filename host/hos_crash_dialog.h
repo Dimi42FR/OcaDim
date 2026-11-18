@@ -3,7 +3,7 @@
    tests/test_crash_dialog.py.
 
    The game starts a small helper of itself early, `longshot --crash-watch <pid> <run id> <game folder> <log> <options>`
-   (<options> the run's longshot_options.ini, host/options_path.c; "-" none, and left out the game folder's), which waits for
+   (<options> the run's ocadim_options.ini, host/options_path.c; "-" none, and left out the game folder's), which waits for
    the game to end and then reads what it left: a crash record of its run in bug-reports/pending (hos_crash_record.c), an
    unclean-end record (the game ended without its crash handler: killed, out of memory), the quit the player asked for, and
    the run's log. From those it decides whether to say anything (hos_crash_verdict), when it happened (hos_crash_stage) and
@@ -36,7 +36,7 @@ typedef struct HosCrashArgs {
     const char *record;    /* (show) a record's file name in bug-reports/pending */
     const char *dir;       /* the game folder */
     const char *log;       /* the run's log, NULL when it logged to no file ("-") */
-    const char *options;   /* the run's longshot_options.ini (host/options_path.c), NULL when not given ("-", or left out): the
+    const char *options;   /* the run's ocadim_options.ini (host/options_path.c), NULL when not given ("-", or left out): the
                               game folder's */
 } HosCrashArgs;
 
@@ -605,11 +605,11 @@ static inline size_t hos_crash_ready_text(char *out, size_t cap, int copied, int
         copied ? "The report is on your clipboard. "
         : saved ? "The report could not be put on the clipboard. Click Open the report, select all of it and copy it. "
                 : "The report could not be put on the clipboard, nor saved. ",
-        opened ? "In the issue form that opened in your browser, paste it into the longshot_log.txt box, say what you were doing, "
+        opened ? "In the issue form that opened in your browser, paste it into the ocadim_log.txt box, say what you were doing, "
                  "and fill in the rest."
                : "Open ",
         opened ? "" : issues,
-        opened ? "" : ", choose Game problem, and paste it into the longshot_log.txt box.",
+        opened ? "" : ", choose Game problem, and paste it into the ocadim_log.txt box.",
         saved ? "\n\nIt is saved as " : "", saved ? saved : "");
     size_t used = n < 0 ? 0 : (size_t)n < cap ? (size_t)n : cap ? cap - 1 : 0;
     const char *tail = saved ? "." : "";

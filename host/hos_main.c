@@ -162,7 +162,7 @@ static void *reserve_large(SIZE_T size) {
 
 #if !defined(_WIN32) && !defined(A64_MEM_ZERO)
 extern int hos_guest_memfd;   /* (below) */
-static int startup_stderr = -1;   /* (keep startup warnings visible if stderr becomes longshot_log.txt) */
+static int startup_stderr = -1;   /* (keep startup warnings visible if stderr becomes ocadim_log.txt) */
 #endif
 /* The guest window lives at the constant A64_HOST_BASE (rt/a64.h), so lifted code never loads its base. */
 static int reserve_guest(void) {
@@ -487,12 +487,12 @@ static void recover_writes(void) {
     hos_atomic_remove_stale(path);
 }
 
-/* longshot_env.txt beside the game: NAME=VALUE lines set as environment variables before anything reads them, for the
+/* ocadim_env.txt beside the game: NAME=VALUE lines set as environment variables before anything reads them, for the
    switches players are asked to test (RX_VK_NOOPT and the rest). Lines starting with # are notes. On Linux this runs
    before the window, so HOS_HEADLESS and HOS_WINDOW_SIZE are already set when the window is made.
    HOS_ENV_FILE=<path> reads that file instead: a scripted or A/B test run brings its own switches and leaves the
-   player's longshot_env.txt as it is.
-   (longshot) longshot_env.txt is a file players pass around, so it sets only the game's own switches (RX_, HOS_,
+   player's ocadim_env.txt as it is.
+   (longshot) ocadim_env.txt is a file players pass around, so it sets only the game's own switches (RX_, HOS_,
    LONGSHOT_, EDEN_, NVN_ and SDL_ names), never HOS_ENV_FILE, HOS_CONTROL_PEER_SID or SDL's library override, and no
    value that is a path but RX_VK_DLSS_DIR's: the system's variables (the Vulkan loader's layers, PATH and the like) can
    load code, and the dump switches write files where they name. The file HOS_ENV_FILE names sets anything. */
@@ -510,7 +510,7 @@ static int env_line_allowed(const char *name, const char *value) {
     for (const char *p = name; *p; p++)
         if (!((*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9') || *p == '_')) return 0;
     /* (longshot) the switches that name a file to write or a folder take no value here, not even a bare name: one
-       resolves in the game's folder (HOS_SAMPLE_FILE=longshot_vk.dll emptied the renderer) */
+       resolves in the game's folder (HOS_SAMPLE_FILE=ocadim_vk.dll emptied the renderer) */
     const size_t nl = strlen(name);
     int names_file = (nl > 5 && (!strcmp(name + nl - 5, "_FILE") || !strcmp(name + nl - 4, "_DIR"))) ||
                      !strcmp(name, "RX_VK_FRAME_LOG") || !strcmp(name, "HOS_PRESENT_TRACE");
@@ -538,7 +538,13 @@ static void load_longshot_env(void) {
     } else {
         DWORD n = hos_game_path_a(path, MAX_PATH);
         while (n && path[n - 1] != 92 && path[n - 1] != 47) n--;
-        memcpy(path + n, "longshot_env.txt", 17);
+        memcpy(path + n, "ocadim_env.txt", 17);
+        /* (a file a build before the rename left: renamed once, so the switches a player set stay) */
+        char old[MAX_PATH + 32];
+        snprintf(old, sizeof old, "%.*s%s", (int)n, path, "longshot_env.txt");
+        if (GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES && GetFileAttributesA(old) != INVALID_FILE_ATTRIBUTES &&
+            MoveFileExA(old, path, 0))
+            fprintf(stderr, "env: longshot_env.txt was renamed to ocadim_env.txt\n");
     }
     FILE *f = fopen(path, "r");
     if (!f) return;
@@ -560,14 +566,14 @@ static void load_longshot_env(void) {
         char *eq = strchr(s, '=');
         *eq = 0;
         if (!(other && *other) && !env_line_allowed(s, eq + 1)) {
-            fprintf(stderr, "env: longshot_env.txt: %s left out (only the game's switches, and no paths, are taken from it)\n", s);
+            fprintf(stderr, "env: ocadim_env.txt: %s left out (only the game's switches, and no paths, are taken from it)\n", s);
             continue;
         }
         int ours = 0;
         for (int i = 0; i < from_file_n && !ours; i++) ours = !strcmp(from_file[i], s);
         if (!ours && getenv(s)) {
             fprintf(stderr, "env: %s: %s left out (set in the environment, which goes first)\n",
-                    other && *other ? "HOS_ENV_FILE" : "longshot_env.txt", s);
+                    other && *other ? "HOS_ENV_FILE" : "ocadim_env.txt", s);
             continue;
         }
         if (!ours && from_file_n < (int)(sizeof from_file / sizeof *from_file) && strlen(s) < sizeof from_file[0])
@@ -582,7 +588,7 @@ static void load_longshot_env(void) {
     fclose(f);
 }
 
-/* Switches this build no longer reads, still set (in the environment or longshot_env.txt, as older issues told players):
+/* Switches this build no longer reads, still set (in the environment or ocadim_env.txt, as older issues told players):
    one log line each, naming what took its place, so a bug report shows the switch did nothing. Only the names of
    another family are left here: a removed RX_ or HOS_ switch is a GONE row of gpu/vk/switches.def, said by the
    renderer's start (switches.h) */
@@ -1946,7 +1952,7 @@ static int game_main(int argc, char **argv) {
     hos_profiling_env();   /* (HOS_PROFILE=1, host/profiling.c: after the file, which may set it) */
 #endif
     /* (the settings file, in the user folder: chosen before the crash window's helper, the Discord status and the renderer read
-       it, and after longshot_env.txt, which may set HOS_OPTIONS_FILE; Linux's main chose it already: host/options_path.c) */
+       it, and after ocadim_env.txt, which may set HOS_OPTIONS_FILE; Linux's main chose it already: host/options_path.c) */
     hos_options_choose(argc, argv);
     {
         const char *protect_hearts = getenv("HOS_OOT_PROTECT_HEARTS");
@@ -1962,7 +1968,7 @@ static int game_main(int argc, char **argv) {
 #endif
     void hos_crash_record_prepare(const char *log_path);
     int hos_log_redact_file(const char *path, const char *run_id);   /* (host/log_redact.h) */
-    {   // (started from its icon the game has nowhere to log to: longshot_log.txt in the game folder's logs/ (host/game_layout.c), for players to send in)
+    {   // (started from its icon the game has nowhere to log to: ocadim_log.txt in the game folder's logs/ (host/game_layout.c), for players to send in)
 #ifdef _WIN32
         {   /* (started again by the Insert menu's Restart now (host/hos_relaunch.c): the run before still has its log open until
                it exits, so wait for it (up to 10 s) before the log moves to .1, or the move fails and its log is overwritten) */
@@ -1987,15 +1993,15 @@ static int game_main(int argc, char **argv) {
                 memcpy(path + n, "logs", 5);
                 if (GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES) path[n + 4] = path[n - 1], n += 5;
             }
-            memcpy(path + n, "longshot_log.txt", 17);
+            memcpy(path + n, "ocadim_log.txt", 17);
             hos_crash_record_prepare(path);   /* recovery before rotation; keep this run's actual destination */
-            /* (the four runs before stay as longshot_log.1.txt (the last) to .4.txt: a player who started the game again after a
+            /* (the four runs before stay as ocadim_log.1.txt (the last) to .4.txt: a player who started the game again after a
                crash sent in the new run's log, and the crash was gone) */
             char from[MAX_PATH + 32], to[MAX_PATH + 32];
             for (int k = 4; k >= 1; k--) {
-                if (k == 1) memcpy(from + n, "longshot_log.txt", 17), memcpy(from, path, n);
-                else memcpy(from, path, n), snprintf(from + n, 32, "longshot_log.%d.txt", k - 1);
-                memcpy(to, path, n), snprintf(to + n, 32, "longshot_log.%d.txt", k);
+                if (k == 1) memcpy(from + n, "ocadim_log.txt", 17), memcpy(from, path, n);
+                else memcpy(from, path, n), snprintf(from + n, 32, "ocadim_log.%d.txt", k - 1);
+                memcpy(to, path, n), snprintf(to + n, 32, "ocadim_log.%d.txt", k);
                 MoveFileExA(from, to, MOVEFILE_REPLACE_EXISTING);
             }
             /* (longshot) the run before's log without the player's user name: its own lines were written so, and what wrote to
@@ -2029,7 +2035,7 @@ static int game_main(int argc, char **argv) {
     hos_crash_watch_start(argc, argv);
     const char *image = NULL;
     /* (longshot) --compile-shaders all or most: what a preparation of this run builds (gpu/vk/vk_draw.cpp compile_all), over
-       compile_shaders= in longshot_options.ini; as RX_VK_COMPILE_SHADERS, set before --prepare-shaders runs, wherever it stands */
+       compile_shaders= in ocadim_options.ini; as RX_VK_COMPILE_SHADERS, set before --prepare-shaders runs, wherever it stands */
     for (int i = 1; i + 1 < argc; i++)
         if (!strcmp(argv[i], "--compile-shaders")) {
 #ifdef _WIN32
@@ -2260,10 +2266,10 @@ static DWORD WINAPI game_thread(void *p) {
     ExitProcess(result);
 }
 /* (longshot, linux) Room in the drivers' own shader caches for what the preparation builds. The pipelines the notes predict (~43,000
-   in OoT, vk_draw.cpp predict_run) are built into the driver's disk cache alone, not into longshot_vk_pipelines.bin, which is read in whole
+   in OoT, vk_draw.cpp predict_run) are built into the driver's disk cache alone, not into ocadim_vk_pipelines.bin, which is read in whole
    at every start. NVIDIA's cache holds 1 GiB by default and cleans itself down to that as it is written: a full preparation filled
    it to the limit (1026 MB) and the pipelines it dropped were compiled again in play. Mesa's (RADV, ANV) has the same 1 GiB default.
-   Raised for this process only, before anything loads Vulkan; a value the player set (or longshot_env.txt) is kept. Windows: the
+   Raised for this process only, before anything loads Vulkan; a value the player set (or ocadim_env.txt) is kept. Windows: the
    NVIDIA driver takes its size from the control panel's Shader Cache Size, which a program cannot set (readme) */
 static void driver_cache_room(void) {
     setenv("__GL_SHADER_DISK_CACHE_SIZE", "10737418240", 0);   /* (10 GiB, bytes) */

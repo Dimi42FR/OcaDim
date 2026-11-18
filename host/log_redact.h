@@ -1,11 +1,11 @@
-/* The game's logs written without the player's user name (host/log_redact.c). Players pass longshot_log.txt around, in issues
+/* The game's logs written without the player's user name (host/log_redact.c). Players pass ocadim_log.txt around, in issues
    and in chats, so what the game saves holds what a Bug report's copy holds: the home folder written ~ (%USERPROFILE% on
    Windows) and the user's name as a folder of any path <user>, the rest of each path as it was (gpu/vk/compat/longshot_redact.h).
    - each line the game and the renderer log (hos_log, hos_log_at, the renderer's logf, hos_fatal) is redacted before it is
      written (host/hos_thread.c hos_vlog);
    - what other code writes to stderr itself (the Vulkan loader, SDL, a printf before the log started) is redacted in the file
      once its run has ended: by the crash watch (host/hos_crash_dialog.c, as soon as the game is gone) and, for a run that had
-     none, by the next start, on the log it rotates to longshot_log.1.txt (host/hos_main.c). */
+     none, by the next start, on the log it rotates to ocadim_log.1.txt (host/hos_main.c). */
 #pragma once
 #include <stddef.h>
 

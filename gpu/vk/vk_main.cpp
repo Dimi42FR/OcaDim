@@ -113,7 +113,7 @@ std::string options_path() {
         const char* p = host->options_path();
         return p ? p : "";
     }
-    return game_folder_path() + "longshot_options.ini";
+    return game_folder_path() + "ocadim_options.ini";
 }
 int64_t prof_ns[PROF_COUNT];
 Device dev;
@@ -391,15 +391,15 @@ bool create_device() {
     // (#1001: how task and mesh programs run, mesh_mode.h: RX_VK_MESH_SHADERS=native or compute, a launch switch; unset,
     // Automatic. RX_VK_FORCE_MESH_FALLBACK=1, a test, is Compute over it: mesh shaders not used where they are, so the no-mesh
     // fallback the GTX 10xx and RX 5000 cards run (issue 640) can be tried on any GPU. The Graphics tab's row it was, and its
-    // mesh_shaders= in longshot_options.ini, no longer choose: the line is only told of in the log)
+    // mesh_shaders= in ocadim_options.ini, no longer choose: the line is only told of in the log)
     static const mesh_rule::Choice mesh_choice = [] {
         if (FILE* fl = fopen(options_path().c_str(), "r")) {   // (vk_paths.h)
             char line[80];
             int old = 0;
             while (fgets(line, sizeof line, fl))
                 if (mesh_rule::old_ini_choice(line, &old)) {
-                    logf("vk: mesh_shaders=%d in longshot_options.ini is no longer read (the Mesh shaders row left the menu): "
-                         "set RX_VK_MESH_SHADERS=native or compute in longshot_env.txt to choose", old);
+                    logf("vk: mesh_shaders=%d in ocadim_options.ini is no longer read (the Mesh shaders row left the menu): "
+                         "set RX_VK_MESH_SHADERS=native or compute in ocadim_env.txt to choose", old);
                     break;
                 }
             fclose(fl);
@@ -655,7 +655,7 @@ bool create_device() {
     // (bounds-checked buffer access: an out-of-range access dropped instead of faulting the device. On by default: the GPU
     // culling pass 53caac5f faulted the device while a save loaded, about one start in three, and the scene's lighting read garbage
     // for single frames (the black flashes); with it, neither in A/B runs at the same GPU time. Lichii's OoT branch keeps it on too.
-    // The 'Robust buffers' row of longshot_options.ini chooses (0 Auto: on, on every vendor; 1 Off; 2 On); RX_VK_ROBUST=0 or 1
+    // The 'Robust buffers' row of ocadim_options.ini chooses (0 Auto: on, on every vendor; 1 Off; 2 On); RX_VK_ROBUST=0 or 1
     // over it. Off is null descriptors only: some NVIDIA cards ran slower with it on, issues 394, 418, 419)
     static const bool robust = []() -> bool {
         if (const char* e = getenv("RX_VK_ROBUST")) return atoi(e) != 0;
@@ -1272,10 +1272,10 @@ namespace {
 
 HWND main_window = nullptr;
 // (longshot) longshot --prepare-shaders (a builder, after a build): the same work with no game, its progress as
-// "@@progress" lines on stdout. A skip there leaves longshot_prepare_skipped beside the game: its own starts then
+// "@@progress" lines on stdout. A skip there leaves ocadim_prepare_skipped beside the game: its own starts then
 // leave the work out too (what was not prepared is built when first drawn), until a --prepare-shaders run ends it
 bool prepare_only() { return env_on("LONGSHOT_PREPARE_ONLY"); }
-std::string skipped_path() { return cache_path("longshot_prepare_skipped"); }
+std::string skipped_path() { return cache_path("ocadim_prepare_skipped"); }
 // (longshot) The --prepare-shaders run's watchdog, for any GPU and any part of it.
 // - What it waits on, in the log the builder shows: every 30 s that nothing has moved, the part, its count, and whether the
 //   GPU driver faulted; a driver fault as soon as it is caught. (The pipeline steps log their own progress every 10 s,
@@ -1291,7 +1291,7 @@ std::string skipped_path() { return cache_path("longshot_prepare_skipped"); }
 //   abccf81b45c5eb50, a program MKW dispatches in play, was not done after 15 minutes held to 32 lanes. A compile that uses no
 //   CPU is stuck on a lock, and stops at the ordinary limit on every driver, as before),
 //   the run says where it stopped and why, leaves
-//   longshot_prepare_skipped so the game's own starts do not stop in the same place (what was not prepared is built when first
+//   ocadim_prepare_skipped so the game's own starts do not stop in the same place (what was not prepared is built when first
 //   drawn), and ends at once with exit status 4 (make_game.py: "the GPU driver stopped responding"). Not through exit(): that
 //   unloads the driver, which can wait on the same lock. Before, it waited until make_game.py stopped it after 15 minutes with no
 //   line, and the game's first start then stopped in the same place

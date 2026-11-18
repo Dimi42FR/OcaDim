@@ -1,4 +1,4 @@
-"""A game folder from the user's own dump: what the builder app (builder/) runs.
+﻿"""A game folder from the user's own dump: what the builder app (builder/) runs.
 
     python -I nx2/make_game.py --nup <file.nup> --out <folder> [--work <folder>] [--jobs <n>]
     python -I nx2/make_game.py --romfs <dir> --exefs <dir> --out <folder> [--work <folder>] [--jobs <n>]
@@ -67,7 +67,7 @@ import log_redact as _log_redact
 LINUX, CROSS = not _toolchain.windows(), _toolchain.windows() and os.name != "nt"
 # (SDL2.dll is sdl2-compat: it loads SDL3.dll from beside the exe. Left out of bin\ since v2.0.0, it said "Failed loading SDL3
 # library" three times and no controller worked: Discord #bug-reporting, 11-08)
-BESIDE = ["longshot", "longshot_vk.so", "libSDL2-2.0.so.0"] if LINUX else ["longshot.exe", "longshot_vk.dll", "SDL2.dll", "SDL3.dll"]
+BESIDE = ["longshot", "longshot_vk.so", "libSDL2-2.0.so.0"] if LINUX else ["ocadim.exe", "ocadim_vk.dll", "SDL2.dll", "SDL3.dll"]
 LANGUAGES = [("en-US", "English (US)"), ("en-GB", "English (UK)"), ("fr", "French (France)"), ("fr-CA", "French (Canada)"), ("de", "German"),
              ("it", "Italian"), ("es", "Spanish (Spain)"), ("es-419", "Spanish (Latin America)"), ("pt-BR", "Portuguese (Brazil)"), ("nl", "Dutch"),
              ("pl", "Polish"), ("ru", "Russian"), ("ja", "Japanese"), ("ko", "Korean"), ("zh-Hans", "Chinese (Simplified)"),
@@ -123,7 +123,7 @@ def check_writable(out):
     place) only takes them with administrator rights, and the build used to stop minutes later inside nup.py with a bare
     "PermissionError: [WinError 5]" on its .game folder. A write refused another way (#2792: a FileNotFoundError in a folder
     just made) gets the same plain reason"""
-    probe = os.path.join(out, ".longshot_write_check")
+    probe = os.path.join(out, ".ocadim_write_check")
     try:
         os.makedirs(out, exist_ok=True)
         with open(probe, "w") as f:
@@ -541,7 +541,7 @@ def file_progress(verb, clock=time.monotonic):
     return progress
 
 
-HEADS = ".longshot_romfs_heads"   # (the extraction's damaged .zs list, under the stamp of the unpack that made it)
+HEADS = ".ocadim_romfs_heads"   # (the extraction's damaged .zs list, under the stamp of the unpack that made it)
 
 
 def read_stamp(path):
@@ -582,7 +582,7 @@ DAMAGED_NOTE = "longshot_damaged_files.txt"   # (in the game folder: the damaged
 SHOWN_DAMAGED = 50   # (damaged files named in the log, the rest only in DAMAGED_NOTE: #1275's 1896 filled the launcher's log)
 
 
-ROMFS_MARKS = (".longshot_romfs_checked", HEADS, DAMAGED_NOTE)   # (what stand_in_damaged_files left in a folder, about its romfs)
+ROMFS_MARKS = (".ocadim_romfs_checked", HEADS, DAMAGED_NOTE)   # (what stand_in_damaged_files left in a folder, about its romfs)
 
 
 def exefs_problem(exefs):
@@ -621,7 +621,7 @@ def replace_file(src, target):
 
 
 def romfs_from_build(other, out, stamp, romfs, kept, exefs):
-    """--romfs-from: the game files of another game folder this builder unpacked from the same .nup (its .longshot_romfs stamp
+    """--romfs-from: the game files of another game folder this builder unpacked from the same .nup (its .ocadim_romfs stamp
     is this one's), hard-linked into this one where the disk allows (link_or_copy), its kept exefs copied, and what its
     damaged-texture check found carried over with them: the .nup's ~25 GB is not read and written again for each version
     (about 3 minutes, and the disk space, on a PC's own drive). False, and nothing changed, when it is not such a folder, when
@@ -631,7 +631,7 @@ def romfs_from_build(other, out, stamp, romfs, kept, exefs):
         return False
     if os.path.normcase(os.path.realpath(other)) == os.path.normcase(os.path.realpath(out)):
         return False
-    src_romfs, src_kept, src_stamp = (os.path.join(other, n) for n in ("romfs", ".longshot_exefs", ".longshot_romfs"))
+    src_romfs, src_kept, src_stamp = (os.path.join(other, n) for n in ("romfs", ".ocadim_exefs", ".ocadim_romfs"))
     if not (os.path.isdir(src_romfs) and os.path.isdir(src_kept) and os.path.isfile(src_stamp)):
         return False
     if read_stamp(src_stamp).strip() != stamp:
@@ -659,7 +659,7 @@ def romfs_from_build(other, out, stamp, romfs, kept, exefs):
     # usable copy as it was. The marks' paths are checked too: a link there would carry their write out of the build folder)
     staged_romfs, staged_kept = romfs + ".from.part", kept + ".from.part"
     marks = [os.path.join(out, name) for name in ROMFS_MARKS]
-    check_cache_paths(out, [staged_romfs, staged_kept, os.path.join(out, ".longshot_romfs")] + marks)
+    check_cache_paths(out, [staged_romfs, staged_kept, os.path.join(out, ".ocadim_romfs")] + marks)
     for staged in (staged_romfs, staged_kept):
         if os.path.lexists(staged):
             shutil.rmtree(staged)
@@ -677,7 +677,7 @@ def romfs_from_build(other, out, stamp, romfs, kept, exefs):
         print("linking the game files from %s stopped (%s): this .nup is read" % (other, e.strerror or e), flush=True)
         return False
     with contextlib.suppress(FileNotFoundError):   # (a new romfs: what was said about the old one goes with it)
-        os.remove(os.path.join(out, ".longshot_romfs"))
+        os.remove(os.path.join(out, ".ocadim_romfs"))
     for staged, final in ((staged_romfs, romfs), (staged_kept, kept)):
         if os.path.exists(final):
             shutil.rmtree(final)
@@ -689,7 +689,7 @@ def romfs_from_build(other, out, stamp, romfs, kept, exefs):
         else:
             with contextlib.suppress(FileNotFoundError):
                 os.remove(target)
-    write_stamp(os.path.join(out, ".longshot_romfs"), stamp + chr(10))
+    write_stamp(os.path.join(out, ".ocadim_romfs"), stamp + chr(10))
     return True
 
 
@@ -713,9 +713,9 @@ def link_problem(src_romfs, probe):
 def stand_in_damaged_files(out, romfs):
     """An incomplete dump's damaged textures replaced by whole ones of the same kind, and said: without them the game
     leaves out the walls and floors that use them (the Water Temple, #1002). Only in a romfs this builder unpacked (its
-    .longshot_romfs stamp), and once per unpack: .longshot_romfs_checked holds the stamp it was checked under"""
-    good = os.path.join(out, ".longshot_romfs")
-    checked = os.path.join(out, ".longshot_romfs_checked")
+    .ocadim_romfs stamp), and once per unpack: .ocadim_romfs_checked holds the stamp it was checked under"""
+    good = os.path.join(out, ".ocadim_romfs")
+    checked = os.path.join(out, ".ocadim_romfs_checked")
     if not os.path.isfile(good) or not os.path.isdir(romfs):
         return
     check_cache_paths(out, (good, checked, romfs))
@@ -2436,7 +2436,7 @@ def ngx_built():
     return bool(sdk) and os.path.isfile(ngx_script().library(sdk, ngx_platform()))
 
 
-FSR_MARK = ".longshot_fsr"   # (in a game folder built with AMD FSR 4: --update builds it with FSR again)
+FSR_MARK = ".ocadim_fsr"   # (in a game folder built with AMD FSR 4: --update builds it with FSR again)
 
 
 def fsr_wanted(a, out):
@@ -2654,7 +2654,7 @@ def stale_copies(found, parents, visible):
     return [pid for pid in found if pid not in visible and parents.get(pid) not in visible]
 
 
-INSTALLED_NOTE = ".longshot_installed.json"   # (in the game folder: what the finish copied in, each file's hash and stat)
+INSTALLED_NOTE = ".ocadim_installed.json"   # (in the game folder: what the finish copied in, each file's hash and stat)
 
 
 def file_sha1(path):
@@ -2845,7 +2845,7 @@ def main(a=None):
 
     say("stage", "read", "Reading your game files")
     clear_folder(exefs)
-    kept = os.path.join(out, ".longshot_exefs")   # (the game's code as read, kept in the folder: what an update builds from again)
+    kept = os.path.join(out, ".ocadim_exefs")   # (the game's code as read, kept in the folder: what an update builds from again)
     if a.update:
         if not os.path.isdir(kept) or not os.path.isdir(romfs):
             fail("This game folder has no copy of the game files to update from: it was built before updates came in. Choose your game files "
@@ -2859,7 +2859,7 @@ def main(a=None):
         # (what an earlier build left is not kept without a reason to trust it: builders before the compressed .nup fix wrote those files as
         # they lay, so a folder they left held broken game data, and the game crashed at start over its empty dictionaries)
         game = os.path.join(out, ".game")
-        good = os.path.join(out, ".longshot_romfs")
+        good = os.path.join(out, ".ocadim_romfs")
         check_cache_paths(out, (game, good, kept, romfs))
         # (an update of the builder over the same .nup: nothing to read again, only what the build needs. Issues 21 and 28)
         try:
@@ -2880,7 +2880,7 @@ def main(a=None):
         else:
             shutil.rmtree(game, ignore_errors=True)
             with contextlib.suppress(FileNotFoundError):   # (a new unpack is checked again)
-                os.remove(os.path.join(out, ".longshot_romfs_checked"))
+                os.remove(os.path.join(out, ".ocadim_romfs_checked"))
             # Keep the last usable cache until the new package has been read and validated.
             staged_exefs = os.path.join(game, "exefs")
             try:

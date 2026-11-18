@@ -565,7 +565,7 @@ void hos_movie_stats(int64_t out[5]) {
 void hos_movie_fallback(void) { __atomic_add_fetch(&movie_totals[4], 1, __ATOMIC_RELAXED); }
 /* (longshot, issue 2316) one line when a movie stops: its decoder, the time it took for each submission against the time
    between the movie's pictures, and the pictures the catch-up skipped. A decoder slower than the movie leaves the picture
-   behind the sound, whatever the catch-up does: the line says which it was in a report's longshot_log.txt */
+   behind the sound, whatever the catch-up does: the line says which it was in a report's ocadim_log.txt */
 static void movie_report(Dec *d) {
     if (d->decoded > 1) {
         const double each = (double)d->decode_ns / d->decoded / 1e6,

@@ -4,7 +4,7 @@
 
    Discord shows the *application's* name above the status ("Playing <name>") and its art: the status needs a Discord application
    of its own (discord.com/developers/applications, named OcaDim, its art uploaded under Rich Presence > Art Assets with the key
-   below). Its Application ID goes into LONGSHOT_DISCORD_APP_ID_DEFAULT; longshot_options.ini's discord_app_id= or
+   below). Its Application ID goes into LONGSHOT_DISCORD_APP_ID_DEFAULT; ocadim_options.ini's discord_app_id= or
    HOS_DISCORD_APP_ID override it. With no id the thread stays idle and says so once in the log: Longshot's application id
    made Discord say "Playing Longshot", which is not this build's name.
 
@@ -137,7 +137,7 @@ static int valid_app_id(const char *s) {
         if (*s < '0' || *s > '9') return 0;
     return 1;
 }
-/* the application id: HOS_DISCORD_APP_ID, then longshot_options.ini's discord_app_id=, then the default */
+/* the application id: HOS_DISCORD_APP_ID, then ocadim_options.ini's discord_app_id=, then the default */
 static void read_app_id(char *out, size_t cap) {
     snprintf(out, cap, "%s", LONGSHOT_DISCORD_APP_ID_DEFAULT);
     FILE *f = fopen(hos_options_file(), "r");   /* (host/options_path.c) */
@@ -262,7 +262,7 @@ static void presence_main(void) {
         }
         if (!app_id[0]) {
             if (!said_no_app)
-                hos_log("discord: no application id: discord_app_id= in longshot_options.ini or HOS_DISCORD_APP_ID (the "
+                hos_log("discord: no application id: discord_app_id= in ocadim_options.ini or HOS_DISCORD_APP_ID (the "
                         "Discord application named OcaDim); the status stays off");
             said_no_app = 1;
             continue;

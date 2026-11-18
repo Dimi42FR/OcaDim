@@ -442,7 +442,7 @@ namespace dm = display_modes;
 // display modes and its own size, each side rounded down to 8, those the game accepts, with the common sizes of the shapes
 // they have, 1440p, 4K and 5K at 16:9 on a 1080p screen too, by width then height; HOS_DISPLAY_MODES=<w>x<h>,... for a run;
 // where they are not known, the sizes offered before: 1920x1080, 2560x1440, 3840x2160, 5120x1440, 5120x2880), then, last,
-// a size of the player's own from longshot_options.ini (output_res=<width>x<height>, host/nn_applet.c hos_output_parse: the
+// a size of the player's own from ocadim_options.ini (output_res=<width>x<height>, host/nn_applet.c hos_output_parse: the
 // same rules) when it is none of them. The ini keeps the size, not the choice's number: output_res=3840x2160
 constexpr Out kGameOutput{2048, 1152};
 // (the sizes offered before the screen's: output_res=0 to 5 as saved then, and where the screen's are not known, by width then
@@ -967,7 +967,7 @@ size_t text_char_start(const std::string& text, size_t at) {
 }
 std::string mic_key(const char* name) {
     std::string k(name ? name : "");
-    for (char& c : k)   // (a device's name goes into longshot_options.ini: a line break in it would add lines there)
+    for (char& c : k)   // (a device's name goes into ocadim_options.ini: a line break in it would add lines there)
         if ((unsigned char)c < 0x20 || c == 0x7f) c = ' ';
     if (k.size() > kMicNameKept) k = k.substr(0, text_char_start(k, kMicNameKept));
     // (and no spaces at the end: a saved line's end, made one above, and those an older build saved with the name)
@@ -1377,21 +1377,21 @@ const char* tx_hud_layout(int v) { return v ? "Middle 16:9" : "Screen's edges"; 
 const char* hn_hud_layout(int v, int variant) {
     static const char* const t[] = {"The hearts, the buttons and the minimap at the screen's own edges and corners.",
                                     "The HUD where it is at 16:9, in the middle (fitted to the width on a narrower screen)."};
-    static const char* const held = "Set by HOS_WIDE_UI (longshot_env.txt or the environment): remove that line to choose here.";
+    static const char* const held = "Set by HOS_WIDE_UI (ocadim_env.txt or the environment): remove that line to choose here.";
     const char* env = getenv("HOS_WIDE_UI");
     if (variant < 0) return env && *env ? held : t[v ? 1 : 0];
     return variant == 0 ? t[v ? 1 : 0] : variant == 1 && env && *env ? held : nullptr;
 }
-/// (the ASTC as RGBA8 row's line while RX_VK_ASTC_RGBA8 holds it: the old readme's way, still in some longshot_env.txt files)
+/// (the ASTC as RGBA8 row's line while RX_VK_ASTC_RGBA8 holds it: the old readme's way, still in some ocadim_env.txt files)
 const char* hn_astc_rgba8(int, int variant) {
-    return variant <= 0 && getenv("RX_VK_ASTC_RGBA8") ? "Set by RX_VK_ASTC_RGBA8 (longshot_env.txt or the environment): remove that line to choose here."
+    return variant <= 0 && getenv("RX_VK_ASTC_RGBA8") ? "Set by RX_VK_ASTC_RGBA8 (ocadim_env.txt or the environment): remove that line to choose here."
                                        : nullptr;
 }
 const char* tx_intel_compiles(int v) { return v == 1 ? "Side by side" : v == 2 ? "One at a time" : "Auto"; }
 /// (the Intel shader compiles row's line: RX_VK_NO_INTEL_SERIAL holds it, as RX_VK_ASTC_RGBA8 the ASTC row)
 const char* hn_intel_compiles(int v, int variant) {
     if (variant <= 0 && getenv("RX_VK_NO_INTEL_SERIAL"))
-        return "Set by RX_VK_NO_INTEL_SERIAL: the launcher's build settings (Intel shader compiles), longshot_env.txt or the "
+        return "Set by RX_VK_NO_INTEL_SERIAL: the launcher's build settings (Intel shader compiles), ocadim_env.txt or the "
                "environment. Change it there to choose here.";
     static const char* const t[] = {"Side by side on the Arc B-series (driver 101.9154 or newer), where it was measured; one at "
                                     "a time on other Intel graphics.",
@@ -2286,7 +2286,7 @@ bool stops_at_ends(const Row& r) { return !strcmp(r.name, "Microphone gain") || 
 int rumble_step(int v) { return (std::min(std::max(v, 0), 150) + 12) / 25 * 25; }
 // (longshot) A run's environment over a saved row (RX_VK_PACE=1, HOS_OUTPUT_RES=...): for that run only. save() writes the
 // player's own value while the row still holds the environment's; once the player changes the row, theirs is kept. (These
-// were copied into the row and the next save wrote them into longshot_options.ini, so a test run's switch stayed for good)
+// were copied into the row and the next save wrote them into ocadim_options.ini, so a test run's switch stayed for good)
 struct EnvOverride {
     int* value;
     int saved, forced;
@@ -2699,7 +2699,7 @@ void prompts_at_once(const Row& r) {
 }
 
 
-// ---- (longshot) Save my pipeline list (the Debug tab, under Developer): longshot_pipeline_states.bin and the "Submit your pipelines" issue's
+// ---- (longshot) Save my pipeline list (the Debug tab, under Developer): ocadim_pipeline_states.bin and the "Submit your pipelines" issue's
 // template, filled in from this run, zipped into the Downloads folder (pipeline_share.h; the builders do the same with
 // nx2/pipeline_share.py). Then the report on the clipboard, the folder shown and the issue opened in the browser, where the platform
 // has them; never with HOS_HEADLESS (no screen to show them on). Nothing is uploaded: the player attaches the zip ----
@@ -2830,7 +2830,7 @@ std::string share_os() {
 #endif
 }
 #ifdef _WIN32
-/// A function of shell32 or ole32, loaded at its first use: longshot_vk.dll imports only kernel32, user32, gdi32, advapi32 and the
+/// A function of shell32 or ole32, loaded at its first use: ocadim_vk.dll imports only kernel32, user32, gdi32, advapi32 and the
 /// UCRT (the DLSS workflow's import check), and these two are needed only here
 FARPROC share_proc(const wchar_t* dll, const char* name) {
     HMODULE m = LoadLibraryExW(dll, nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -3208,7 +3208,7 @@ void set_row(Row& r, int v, int dir, bool keep = true) {
 
 // ---- (longshot) the rows that are text fields (text_edit): their fields, what Enter on each sets, the one being edited ----
 /// Custom output size: the Output resolution's size of the player's own (custom_output), typed, as output_res= in
-/// longshot_options.ini sets it (parse_output: the same rules)
+/// ocadim_options.ini sets it (parse_output: the same rules)
 bool output_size_char(char c) { return (c >= '0' && c <= '9') || c == 'x' || c == 'X'; }
 const char* output_pad_chars(const TextField& f) {
     // (one separator, after 1 to 5 width digits; partial text is fine until Done)
@@ -5854,7 +5854,7 @@ void menu_option_set(int id, int value) {
 
 // ---- (longshot) the control bridge's option_get and option_set (host/control.c, docs/control.md) ----
 // The settings rows (a value, not a heading or a debug tool, shown on this PC: row_shown), found by their key in
-// longshot_options.ini (ini_key), which stays the same while rows come and go or are renamed. The bridge calls these from
+// ocadim_options.ini (ini_key), which stays the same while rows come and go or are renamed. The bridge calls these from
 // its own thread: menu_mu keeps them apart from menu_tick (the present's thread) and from menu_option_set (the game's)
 bool bridge_row(int i) { return rows[i].value && !rows[i].heading && rows[i].cheat < 0 && row_shown(i); }
 void bridge_fill(int i, MkwVkSetting* out) {

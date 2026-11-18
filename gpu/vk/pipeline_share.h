@@ -3,7 +3,7 @@
    The builders make the same zip with nx2/pipeline_share.py: the same two files, the same checks of the list (nx2/pipeline_states.py
    --check), the same template lines.
 
-   The zip holds longshot_pipeline_states.bin as the game wrote it and longshot_pipeline_report.txt (the issue's template filled
+   The zip holds ocadim_pipeline_states.bin as the game wrote it and longshot_pipeline_report.txt (the issue's template filled
    in), nothing else. Nothing is uploaded: the player attaches the zip to the issue and pastes the template. */
 #pragma once
 
@@ -16,7 +16,7 @@
 namespace mkwvk::pipeline_share {
 
 constexpr const char* kIssueUrl = "https://git.magicbean.dev/MagicBeanDev/Longshot/issues/14";
-constexpr const char* kListName = "longshot_pipeline_states.bin";
+constexpr const char* kListName = "ocadim_pipeline_states.bin";
 constexpr const char* kReportName = "longshot_pipeline_report.txt";
 // (the issue's template, its lines in its order: nx2/pipeline_share.py FIELDS, the same)
 constexpr const char* kFields[] = {"Longshot version", "OS, GPU and driver", "Output resolution", "Upscaler + render resolution",
@@ -92,10 +92,10 @@ inline std::string output_text(unsigned w, unsigned h, bool handheld, bool game_
     if (ultrawide && !handheld) extra += std::string(extra.empty() ? "" : ", ") + "Ultrawide on";
     return std::to_string(w) + "x" + std::to_string(h) + (extra.empty() ? "" : " (" + extra + ")");
 }
-/// longshot-pipelines-<date>.zip
+/// ocadim-pipelines-<date>.zip
 inline std::string zip_name(int year, int month, int day) {
     char b[48];
-    snprintf(b, sizeof b, "longshot-pipelines-%04d-%02d-%02d.zip", year, month, day);
+    snprintf(b, sizeof b, "ocadim-pipelines-%04d-%02d-%02d.zip", year, month, day);
     return b;
 }
 

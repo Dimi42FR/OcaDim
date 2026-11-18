@@ -1,5 +1,5 @@
 // (longshot) The performance summary (perf_report.h): on only when the launcher's "Send performance statistics" tick wrote
-// send=1 to the game folder's longshot_perf.ini. Then the FPS counter's Breakdown measures every frame whatever level the
+// send=1 to the game folder's ocadim_perf.ini. Then the FPS counter's Breakdown measures every frame whatever level the
 // counter shows (vk_fps.h fps_breakdown_on), and each frame is added here, on the thread that presents, to its map's totals:
 // a bucket, a few sums and the renderer's counters read since the frame before. No allocation, no file and no lookup a
 // frame: the map is asked of the host about once a second, the memory once a summary, and a summary's JSON is made and
@@ -71,7 +71,7 @@ int64_t l_failed = 0;   // (the renderer's counts at the summary before: at the 
 uint64_t l_swap = 0;
 
 bool ticked(const std::filesystem::path& dir) {
-    std::ifstream f(dir / "longshot_perf.ini");
+    std::ifstream f(dir / "ocadim_perf.ini");
     bool on = false;
     for (std::string line; std::getline(f, line);)
         if (!line.compare(0, 5, "send=")) on = atoi(line.c_str() + 5) == 1;

@@ -20,7 +20,7 @@
    message box, and Windows' MessageBoxW without SDL; the clipboard and the browser are Windows' own there; on Linux the clipboard is wl-copy, xclip or
    xsel's (SDL's X11 one the last resort) and the browser SDL's or xdg-open.
    HOS_CRASH_TEST=start (just after the crash handlers are set up) or =<seconds> (that long after) crashes the game on
-   purpose, from the environment only (not longshot_env.txt), to see the window. */
+   purpose, from the environment only (not ocadim_env.txt), to see the window. */
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
@@ -278,7 +278,7 @@ static int log_is_run(const char *path, const char *run_id) {
     free(head);
     return yes;
 }
-/* This run's log: the path it named, else its first rotated name (longshot_log.1.txt: a start since moved it), when its run
+/* This run's log: the path it named, else its first rotated name (ocadim_log.1.txt: a start since moved it), when its run
    id is the one wanted */
 static int find_run_log(RunLog *r, const char *log, const char *run_id) {
     if (!log || !run_id || !run_id[0]) return 0;
@@ -532,21 +532,21 @@ static void put_switches(Buf *b) {
 #endif
     qsort(lines, (size_t)n, sizeof lines[0], cmp_text);
     if (!n) put(b, "Switches set: none.\n");
-    else put(b, "Switches set (the environment and longshot_env.txt; a value only when it is a number or on/off, and never for a "
+    else put(b, "Switches set (the environment and ocadim_env.txt; a value only when it is a number or on/off, and never for a "
                 "name with TOKEN, KEY, ROOM, SECRET, PASS, SERVER or USER in it):\n");
     for (int i = 0; i < n; i++) put(b, lines[i]), put(b, "\n"), free(lines[i]);
 }
-/* longshot_options.ini's settings, key=value, a value only when it is a number, a size or on/off (a device's name is left
+/* ocadim_options.ini's settings, key=value, a value only when it is a number, a size or on/off (a device's name is left
    out); not the controls' bindings, nor the file itself */
 static void put_options(Buf *b, const char *options, const char *dir) {
     char path[PATH_MAX_UTF8];   /* (the run's, in the user folder: host/options_path.c; not given, the game folder's) */
     char *text = options ? read_text(options, 256 << 10, NULL)
-                         : join(path, sizeof path, dir, "longshot_options.ini") ? read_text(path, 256 << 10, NULL) : NULL;
+                         : join(path, sizeof path, dir, "ocadim_options.ini") ? read_text(path, 256 << 10, NULL) : NULL;
     if (!text) {
-        put(b, "longshot_options.ini: none (every Insert menu option at its default).\n");
+        put(b, "ocadim_options.ini: none (every Insert menu option at its default).\n");
         return;
     }
-    put(b, "longshot_options.ini (a value only when it is a number or on/off; the controls' bindings left out):\n");
+    put(b, "ocadim_options.ini (a value only when it is a number or on/off; the controls' bindings left out):\n");
     for (char *line = text, *next; line && *line; line = next) {
         next = strchr(line, '\n');
         if (next) *next++ = 0;
@@ -561,7 +561,7 @@ static void put_options(Buf *b, const char *options, const char *dir) {
     }
     free(text);
 }
-/* The settings as Report automatically counts them (put_settings): longshot_options.ini's, or the defaults
+/* The settings as Report automatically counts them (put_settings): ocadim_options.ini's, or the defaults
    when there is none yet; changed when longshot_defaults.ini has the key with another value. The changed ones go to list as
    key=value lines, as many as fit */
 static void count_settings(Report *in) {
@@ -577,7 +577,7 @@ static void count_settings(Report *in) {
     }
     /* (the run's file, as put_options reads it: in the user folder since host/options_path.c; not given, the game folder's) */
     char *current = in->options ? read_text(in->options, 256 << 10, NULL)
-                    : join(path, sizeof path, in->dir, "longshot_options.ini") ? read_text(path, 256 << 10, NULL) : NULL;
+                    : join(path, sizeof path, in->dir, "ocadim_options.ini") ? read_text(path, 256 << 10, NULL) : NULL;
     if (!current) in->settings = nd;
     size_t used = 0;
     for (char *line = current; line && *line;) {
@@ -610,7 +610,7 @@ static char *report_text(const Report *in, size_t *len) {
     char now[17];
     utc_now(now);
     putf(&b, "Longshot crash report, made by the window Longshot shows after a crash (%s UTC). Longshot sent nothing: paste "
-             "this into the issue form, and attach the game folder's logs/longshot_log.txt if you can.\n\n", now);
+             "this into the issue form, and attach the game folder's logs/ocadim_log.txt if you can.\n\n", now);
     put(&b, "### What happened\n\n");
     char message[1024];
     hos_crash_message(message, sizeof message, in->verdict, in->stage, in->cause, 0);
@@ -657,7 +657,7 @@ static char *report_text(const Report *in, size_t *len) {
         put(&b, "None: the game's crash handler wrote no record (it stopped before the game could run, or ended normally).\n\n");
     }
     if (in->log->found) {
-        putf(&b, "### The end of longshot_log.txt\n\nIts last %d lines (the home folder written %s, the user's name <user>):\n\n```\n",
+        putf(&b, "### The end of ocadim_log.txt\n\nIts last %d lines (the home folder written %s, the user's name <user>):\n\n```\n",
              in->log->count, in->who->windows ? "%USERPROFILE%" : "~");
         for (int i = 0; i < in->log->count; i++) {
             const char *line = in->log->lines[(in->log->next - in->log->count + i + HOS_CRASH_LOG_LINES) % HOS_CRASH_LOG_LINES];
@@ -666,7 +666,7 @@ static char *report_text(const Report *in, size_t *len) {
         }
         put(&b, "```\n\n");
     } else {
-        put(&b, "### longshot_log.txt\n\nNot found: the game logged to no file (started from a terminal or by a program that "
+        put(&b, "### ocadim_log.txt\n\nNot found: the game logged to no file (started from a terminal or by a program that "
                 "reads its output), or its log was moved since.\n\n");
     }
     put(&b, "### Not in this report\n\nSaves, game files, the game's executable and caches, memory dumps, keys, the options file "
@@ -766,9 +766,9 @@ static int window_load(void) {   /* (1 when the module has the window: whether a
     if (!window.tried) {
         window.tried = 1;
 #ifdef _WIN32
-        void *m = sdl_load() ? sdl_lib("longshot_vk.dll") : NULL;
+        void *m = sdl_load() ? sdl_lib("ocadim_vk.dll") : NULL;
 #else
-        void *m = sdl_load() ? sdl_lib("longshot_vk.so") : NULL;
+        void *m = sdl_load() ? sdl_lib("ocadim_vk.so") : NULL;
 #endif
         window.page = m ? (mkwvk_crash_page_fn)sdl_fn(m, "mkwvk_crash_page") : NULL;
         window.close = m ? (mkwvk_crash_close_fn)sdl_fn(m, "mkwvk_crash_close") : NULL;
@@ -1202,7 +1202,7 @@ static void put_settings(Buf *b, const Shown *s, char *mic, size_t mic_cap) {
     for (char *line = dtext; line && *line && nd < MAX; line = strchr(line, '\n'), line = line ? line + 1 : NULL)
         if (hos_crash_setting(line, defaults[nd].key, sizeof defaults[nd].key, defaults[nd].value, sizeof defaults[nd].value)) nd++;
     char *ctext = s->options ? read_text(s->options, 256 << 10, NULL)
-                  : join(path, sizeof path, s->dir, "longshot_options.ini") ? read_text(path, 256 << 10, NULL) : NULL;
+                  : join(path, sizeof path, s->dir, "ocadim_options.ini") ? read_text(path, 256 << 10, NULL) : NULL;
     for (char *line = ctext; line && *line && n < MAX; line = strchr(line, '\n'), line = line ? line + 1 : NULL) {
         if (!strncmp(line, "microphone_device=", 18)) hos_crash_take(mic, mic_cap, line + 18), mic[strcspn(mic, "\r\n")] = 0;
         if (!hos_crash_setting(line, rows[n].key, sizeof rows[n].key, rows[n].value, sizeof rows[n].value)) continue;

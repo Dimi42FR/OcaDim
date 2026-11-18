@@ -1,4 +1,4 @@
-/* (longshot) HOS_PROFILE=1: the profiling mode. One switch (allowed in longshot_env.txt) that records, for the whole run,
+/* (longshot) HOS_PROFILE=1: the profiling mode. One switch (allowed in ocadim_env.txt) that records, for the whole run,
    what it takes to find where the time goes and what each stutter was, into a folder of its own, logs/profile-<date>-<time>/:
 
      all.txt       every game and renderer thread's stack every 2 ms (HOS_SAMPLE_ALL, from the start; deleting all.txt.go
@@ -9,7 +9,7 @@
                    thread's CPU, blocked and virtual-core time, with at_ns, the present on this clock
      cpu.csv       every second: the process's CPU time and resident memory, and the system's available memory
      events.txt    timed events the log has no time for: each wait of HOS_VCORE_LOG_MS or more for a virtual core, its cause
-     process.json  the run's switches (RX_, HOS_, LONGSHOT_), and longshot_options.ini, the settings as the run started
+     process.json  the run's switches (RX_, HOS_, LONGSHOT_), and ocadim_options.ini, the settings as the run started
 
    and in the log, every 5 s the busiest threads (HOS_PROFILE_EVERY=5, which also lets HOS_SAMPLE=<thread> sample one
    thread) and the threads' CPU (HOS_THREAD_TIMES=5), HOS_FPS_LOG, RX_VK_PASS_TIMING=1 (GPU time a pass: its timestamps make the GPU finish
@@ -46,7 +46,7 @@ static char prof_dir[MAX_PATH + 64];   /* (the run's profile folder; "" when the
 const char *hos_profiling_dir(void) { return prof_dir[0] ? prof_dir : NULL; }
 
 static void set_default(const char *name, const char *value) {
-    if (getenv(name)) return;   /* (the environment's or longshot_env.txt's value goes first) */
+    if (getenv(name)) return;   /* (the environment's or ocadim_env.txt's value goes first) */
 #ifdef _WIN32
     char put[MAX_PATH + 160];
     snprintf(put, sizeof put, "%s=%s", name, value);
@@ -79,7 +79,7 @@ static void json_string(FILE *f, const char *s) {
     fputc('"', f);
 }
 
-/* (hos_main.c, after longshot_env.txt and hos_game_layout: logs/ is made) the folder chosen and the switches set, before
+/* (hos_main.c, after ocadim_env.txt and hos_game_layout: logs/ is made) the folder chosen and the switches set, before
    anything reads them */
 void hos_profiling_env(void) {
     if (!env_on("HOS_PROFILE")) return;
@@ -274,7 +274,7 @@ void hos_profiling_start(void) {
     const char *ini = hos_options_file();
     if (ini && *ini) {
         FILE *from = fopen(ini, "rb");
-        in_dir(path, sizeof path, "longshot_options.ini");
+        in_dir(path, sizeof path, "ocadim_options.ini");
         FILE *to = from ? fopen(path, "wb") : NULL;
         char buf[4096];
         size_t got;

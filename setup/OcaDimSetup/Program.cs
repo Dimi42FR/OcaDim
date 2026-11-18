@@ -140,7 +140,7 @@ static class Cli
                 writer.Info("échec : " + (built.Error ?? "le build s'est arrêté (code " + built.Code + ")"));
                 return built.Code == 0 ? 1 : built.Code;
             }
-            if (!setup.Installed) throw new InvalidOperationException("Le build a rendu 0 mais longshot.exe n'est pas là.");
+            if (!setup.Installed) throw new InvalidOperationException("Le build a rendu 0 mais ocadim.exe n'est pas là.");
             setup.WriteVersion(source);
             if (keepShortcuts) Shell.MakeShortcuts(setup, desktop, startMenu);
             writer.Info("installé : " + Path.Combine(setup.InstallDir, Setup.GameExe));

@@ -288,7 +288,7 @@ sealed class WizardForm : Form
         Begin(Page.Done, "Terminé");
         Add(Heading("C'est prêt."));
         Add(Paragraph(Setup.Name + " " + setup.InstalledVersion() + " est installé dans " + setup.InstallDir + "."));
-        Add(Paragraph("Le jeu se lance par le raccourci, ou par le bouton ci-dessous. Vos réglages (longshot_options.ini) et " +
+        Add(Paragraph("Le jeu se lance par le raccourci, ou par le bouton ci-dessous. Vos réglages (ocadim_options.ini) et " +
                       "vos sauvegardes vivent dans le dossier du jeu."));
         var play = GoldButton("Jouer");
         play.Width = 150; play.Height = 40;

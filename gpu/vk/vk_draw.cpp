@@ -5,7 +5,7 @@
 // and storage images as views of vk_texture.cpp's images, texel buffers), passes kept open while the targets stay,
 // and the draws themselves.
 //
-// Pipelines persist in a VkPipelineCache in the game folder's cache/ (longshot_vk_pipelines.bin).
+// Pipelines persist in a VkPipelineCache in the game folder's cache/ (ocadim_vk_pipelines.bin).
 #include <algorithm>
 #include <filesystem>
 #include <iterator>
@@ -753,9 +753,9 @@ struct PcacheUse {
 // added: NVIDIA's driver copies into the cache a pipeline is made with each pipeline it takes from its own disk cache, so a first
 // visit grew it at each new pipeline, and the save every 32 of them wrote 0.5-1.2 GB to add a few MB (497-539 MB written six times
 // in a 4-minute walk, 1.4-3.2 s each, 3 GB in all to keep 42 MB). In play a pipeline goes into the generation's own cache (or comes
-// from pcache, create_cached), and a save writes that generation alone, to longshot_vk_pipelines_play_<n>.bin, while play goes on into
+// from pcache, create_cached), and a save writes that generation alone, to ocadim_vk_pipelines_play_<n>.bin, while play goes on into
 // a new one. The next start merges those files into pcache as it reads it; at kPlayFilesKept of them they are written into
-// longshot_vk_pipelines.bin there, once, and removed. RX_VK_PLAY_CACHE=0: everything into pcache, as before
+// ocadim_vk_pipelines.bin there, once, and removed. RX_VK_PLAY_CACHE=0: everything into pcache, as before
 struct PlayCache {
     VkPipelineCache cache = VK_NULL_HANDLE;
     std::atomic<int> users{0};       // (pipelines being made with it now)
@@ -767,7 +767,7 @@ std::atomic<PlayCache*> play_cache{nullptr};   // (null before play, and without
 uint32_t play_seq = 0;                         // (the highest play file number read or written)
 constexpr size_t kPlayFilesKept = 16;
 std::string play_path(uint32_t n) {
-    return pcache_dir + "longshot_vk_pipelines_play_" + std::to_string(n) + ".bin";
+    return pcache_dir + "ocadim_vk_pipelines_play_" + std::to_string(n) + ".bin";
 }
 /// A cache's data written whole to path, through a .tmp moved over it: its size, 0 when it is not in place (also when the
 /// fetch lock was not had within wait_ms, PcacheFetch: the file's write is outside it)
@@ -796,7 +796,7 @@ size_t play_files_merge() {
     std::vector<std::string> merged;
     size_t merged_kb = 0;
     std::error_code ec;
-    static const std::string pre = "longshot_vk_pipelines_play_", suf = ".bin";
+    static const std::string pre = "ocadim_vk_pipelines_play_", suf = ".bin";
     for (const auto& e : std::filesystem::directory_iterator(pcache_dir, ec)) {
         const std::string name = e.path().filename().string();
         if (name.size() <= pre.size() + suf.size() || name.compare(0, pre.size(), pre) ||
@@ -1044,7 +1044,7 @@ void pcache_init() {
     const std::string dir = pcache_dir = cache_path("");   // (the game folder's cache/, with its separator: vk_paths.h)
     if (const size_t removed = PipelineCacheFile::cleanup_temporaries(dir))
         logf("vk: pipeline cache: %zu old temporary files removed", removed);
-    pcache_path = dir + "longshot_vk_pipelines.bin";
+    pcache_path = dir + "ocadim_vk_pipelines.bin";
     const bool off = pcache_load_off();
     pcache_no_save = off;
     pcache_drop_stale();   // (before the files are read)
@@ -1160,7 +1160,7 @@ bool depth_aspect(VkFormat f) {
 }
 
 // (longshot) The programs the driver faulted on (driver_faults.h): not asked of it again in this run, nor in later runs on the
-// same driver (longshot_driver_faults.txt beside the executable). One program's builds go to the driver one at a time on AMD,
+// same driver (ocadim_driver_faults.txt beside the executable). One program's builds go to the driver one at a time on AMD,
 // where a build behind a faulted one hung (issue 996); other drivers keep building a program's variants in parallel.
 // RX_VK_DRIVER_FAULTS=0: off; =1: the default; =2: one at a time on every driver
 constexpr VkResult kDriverFault = (VkResult)-77;   // (what the guards below answer for a fault in the driver)
@@ -1169,7 +1169,7 @@ int driver_faults_mode() {
     return mode;
 }
 bool driver_faults_on() { return driver_faults_mode() != 0; }
-std::string driver_faults_path() { return cache_path("longshot_driver_faults.txt"); }
+std::string driver_faults_path() { return cache_path("ocadim_driver_faults.txt"); }
 driver_faults::Quarantine& fault_quarantine() {
     static driver_faults::Quarantine q;
     static std::once_flag once;
@@ -1678,7 +1678,7 @@ VkComputePipelineCreateInfo compute_pipeline_info(const Program& q, bool noopt) 
 /// (longshot) Before play on Intel's one-at-a-time builds (precompile_run, precompile_warm): ci asked without the optimizer, the
 /// pipeline a dispatch's first build asks for (Intel quick compute builds), so that a dispatch finds it in the cache. With the
 /// optimizer, one of the game's compute pipelines took Intel's compiler up to 389.5 s on a UHD Graphics (i3-1115G4), past the
-/// shader preparation's 300 s with nothing finished: the preparation was stopped (longshot_prepare_skipped) and every later
+/// shader preparation's 300 s with nothing finished: the preparation was stopped (ocadim_prepare_skipped) and every later
 /// start built each shader when first drawn. true: asked so (the optimized build is then owed to its first dispatch)
 bool precompile_compute_quick(VkComputePipelineCreateInfo& ci) {
     if (!serial_builds_on() || !intel_quick_compute() || (ci.flags & VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT)) return false;
@@ -1732,15 +1732,15 @@ uint64_t program_wm_sig(const Program& p) {
 }
 
 // ---- (longshot) The precompile, as TotK Recomp's (runtime/vk_pipeline.c vk_pipeline_prewarm, keys in pipeline-keys.bin): each
-// pipeline the game asks for is noted in longshot_pipelines.bin, by what built it; a release build, before the game starts,
-// makes every kept program ready and builds every noted pipeline on all the CPUs (the driver's own cache, longshot_vk_pipelines.bin,
+// pipeline the game asks for is noted in ocadim_pipelines.bin, by what built it; a release build, before the game starts,
+// makes every kept program ready and builds every noted pipeline on all the CPUs (the driver's own cache, ocadim_vk_pipelines.bin,
 // makes that quick), so that nothing is built during play. RX_VK_PRECOMPILE=1: in any build; =0: off. A build with
 // RX_RELEASE=1 (nx2/build.py) has it on. The notes are written in every build ----
 std::mutex note_mu;
 FILE* note_file = nullptr;
 std::unordered_set<uint64_t> noted;   // (a pipeline once in the file, however many runs meet it)
-std::string pipe_notes_path() { return cache_path("longshot_pipelines.bin"); }
-/// (longshot) longshot_pipelines.bin.built: a precompile that got to its end built every note there was into the pipeline cache
+std::string pipe_notes_path() { return cache_path("ocadim_pipelines.bin"); }
+/// (longshot) ocadim_pipelines.bin.built: a precompile that got to its end built every note there was into the pipeline cache
 /// (its stamp, and how many). RX_VK_LOAD=create loads pipelines from the caches alone, and only once this says they are there.
 /// What adds notes without building them (state_list_prepare) removes it; a note play adds was built by play, into its cache
 std::string precompile_built_path() { return pipe_notes_path() + ".built"; }
@@ -1755,7 +1755,7 @@ void precompile_built_write(size_t notes) {
         fclose(f);
     }
 }
-/// The notes of this build (longshot_pipelines.bin), each pipeline once
+/// The notes of this build (ocadim_pipelines.bin), each pipeline once
 /// (longshot) Targets a pipeline can be made with: at most 8 colour targets, a sample count Vulkan has, a topology it has.
 /// The notes and the state list are files: what they say is checked before a pipeline is made from it
 bool targets_ok(uint32_t n, uint32_t samples, uint32_t topo) {
@@ -1776,7 +1776,7 @@ bool formats_ok(uint32_t n, const uint32_t color[8], uint32_t has_depth, uint32_
     return !has_depth || depth == VK_FORMAT_UNDEFINED ||
            (is_depth_format((VkFormat)depth) && supports(depth, VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT));
 }
-/// (longshot) a note read from longshot_pipelines.bin: its counts in range, its booleans 0 or 1, and no host pointers (the
+/// (longshot) a note read from ocadim_pipelines.bin: its counts in range, its booleans 0 or 1, and no host pointers (the
 /// render targets' objects of the run that wrote it mean nothing here)
 bool note_sane(PipeNote& n) {
     if (!targets_ok(n.n, n.samples, n.topo) || n.s.nvattr < 0 || n.s.nvattr > 16 ||
@@ -1879,7 +1879,7 @@ bool pipeline_note(uint64_t key, const Program& p, const NvnState& s, const Targ
     return true;
 }
 
-// ---- (longshot) The compute programs play dispatches, each key once, in longshot_computes.bin beside the executable. The precompile
+// ---- (longshot) The compute programs play dispatches, each key once, in ocadim_computes.bin beside the executable. The precompile
 // made every kept compute program ready and kept a pipeline for each: 10,328 of them, a few GB of RAM that grew a 16 GB PC out of memory
 // ("memory busted", out-of-memory crashes, Discord and issues 1228/1245, 2026-11-09), where play dispatches a few hundred. With the list
 // only those are kept ready; the rest stay on disk and are made when first dispatched, from the driver's and our pipeline cache (the
@@ -1893,7 +1893,7 @@ constexpr char kComputesMagic[8] = {'H', 'K', 'C', 'O', 'M', 'P', '1', 0};
 std::mutex compute_note_mu;
 FILE* compute_note_file = nullptr;
 std::unordered_set<uint64_t> computes_noted;
-std::string computes_path() { return cache_path("longshot_computes.bin"); }
+std::string computes_path() { return cache_path("ocadim_computes.bin"); }
 std::unordered_set<uint64_t> computes_read() {
     std::unordered_set<uint64_t> keys;
     if (FILE* f = fopen(computes_path().c_str(), "rb")) {
@@ -1917,7 +1917,7 @@ void compute_note(uint64_t key) {
     if (compute_note_file && computes_noted.insert(key).second) fwrite(&key, 8, 1, compute_note_file), fflush(compute_note_file);
 }
 
-// ---- (longshot) The variants of compute programs play dispatches, each once, in longshot_compute_variants.bin beside the
+// ---- (longshot) The variants of compute programs play dispatches, each once, in ocadim_compute_variants.bin beside the
 // executable: a program's key and the variant's hash (Program::variant, the hash of its texture answers). A compute program
 // has up to 64 kept variants and which one a dispatch runs is only known from what is bound then; with RX_VK_LOAD=create the
 // variants this install's play ran before get their code and pipeline when the game makes the program (vk_programs.cpp), the
@@ -1926,7 +1926,7 @@ constexpr char kComputeVariantsMagic[8] = {'H', 'K', 'C', 'V', 'A', 'R', '1', 0}
 std::mutex compute_variant_mu;
 FILE* compute_variant_file = nullptr;
 std::unordered_set<uint64_t> compute_variants_noted;   // (mix(key, variant))
-std::string compute_variants_path() { return computes_path().substr(0, computes_path().size() - strlen("longshot_computes.bin")) + "longshot_compute_variants.bin"; }
+std::string compute_variants_path() { return computes_path().substr(0, computes_path().size() - strlen("ocadim_computes.bin")) + "ocadim_compute_variants.bin"; }
 std::vector<std::pair<uint64_t, uint64_t>> compute_variants_read() {
     std::vector<std::pair<uint64_t, uint64_t>> pairs;
     if (FILE* f = fopen(compute_variants_path().c_str(), "rb")) {
@@ -1955,11 +1955,11 @@ void compute_variant_note(uint64_t key, uint64_t variant) {
 
 // ---- (longshot) The pipeline state list: each pipeline the game asks for, by what it is made of and nothing of the game's code
 // (its stages' code keys, the vertex input and colour output types its program was translated for, the draw state baked into it), in
-// longshot_pipeline_states.bin beside the executable. Unlike longshot_pipelines.bin it is good for any build of the back end: when
+// ocadim_pipeline_states.bin beside the executable. Unlike ocadim_pipelines.bin it is good for any build of the back end: when
 // the shaders are prepared for a new one (prepare_run), every pipeline in it is noted for the precompile, its program translated
 // first when the seed's are not that one, so that a new release, or a new install with a list from someone else's play
-// (longshot_pipeline_states_shipped.bin, nx2/make_game.py: merged from assets/pipeline_states/), builds them before the game and not in
-// play. Only hashes, formats and state: the stages themselves come from the player's own game (longshot_shaders.bin).
+// (ocadim_pipeline_states_shipped.bin, nx2/make_game.py: merged from assets/pipeline_states/), builds them before the game and not in
+// play. Only hashes, formats and state: the stages themselves come from the player's own game (ocadim_shaders.bin).
 // Version 2 (HKSTATE2) holds what the game asked for, not what this GPU made of it: the targets' NVN formats (version 1 had the
 // Vulkan formats this device chose: decoded ASTC, widened formats), the draw's own topology and whether it was a mesh draw (not the
 // mesh fallback's topology), and the program variant's answers with its stages numbered as every GPU numbers them (the mesh
@@ -1969,7 +1969,7 @@ void compute_variant_note(uint64_t key, uint64_t variant) {
 // nothing bound makes (seed_plain_of: each texture as its instruction declares it), as lists converted from records that hold no
 // texture answers have them. Version 1 lists (a play folder's own from an older build) are still read.
 // A version 2 record of kind kCompute names a compute program play dispatched, by its compute stage's code key in code[0] and
-// nothing else (every other field 0): no pipeline state, a compute pipeline has none. It is the key longshot_computes.bin holds,
+// nothing else (every other field 0): no pipeline state, a compute pipeline has none. It is the key ocadim_computes.bin holds,
 // a hash of the game's stage like the others, the same on every GPU and with any settings. The record's size and the magic are
 // unchanged: lists without such records are what they were, and a build from before them drops one (its sample count, 0, is
 // not one a pipeline can have: targets_ok), so it never takes one for a graphics pipeline ----
@@ -2127,14 +2127,14 @@ std::vector<uint64_t> state_list_computes(const std::string& path) {
     return keys;
 }
 /// The compute programs the precompile keeps ready before play (precompile_run). which: RX_VK_PRECOMPILE_COMPUTES, null when not set.
-/// keys, each once: those this install's play dispatched (longshot_computes.bin: learned) and those the shipped state list names
+/// keys, each once: those this install's play dispatched (ocadim_computes.bin: learned) and those the shipped state list names
 /// (every one of them: a list is bounded where it is made, nx2/pipeline_states.py check and read_sent, never cut short here, where
 /// a program left out would only show as a stall in play; not when state_lists is false or which is "learned").
 /// all: every kept compute program instead:
 ///  - a first start, with nothing learned yet (and whenever nothing names any, or which is "all"). The shipped list names what
 ///    someone's play dispatched, not what this player's will: a program it misses would be loaded and its pipeline made at its
 ///    first dispatch, which a first start has never done. It costs that start the memory of every program (the comment at
-///    longshot_computes.bin); from the second start on only the listed ones are kept, as before;
+///    ocadim_computes.bin); from the second start on only the listed ones are kept, as before;
 ///  - which "listed" takes the shipped list's alone on a first start too: far less memory there, and a program the list
 ///    misses is made at its first dispatch.
 /// none: which is "none"
@@ -2159,7 +2159,7 @@ ComputePlan computes_plan(const char* which, bool state_lists) {
     plan.learned = plan.keys.size();
     if (state_lists && !plan.learned_only) {
         std::unordered_set<uint64_t> seen;
-        for (const uint64_t k : state_list_computes(state_list_path("longshot_pipeline_states_shipped.bin")))
+        for (const uint64_t k : state_list_computes(state_list_path("ocadim_pipeline_states_shipped.bin")))
             if (seen.insert(k).second) plan.shipped++, plan.fresh += plan.keys.insert(k).second;
     }
     const bool listed = which && !strcmp(which, "listed");
@@ -2172,10 +2172,10 @@ FILE* state_file = nullptr;
 std::unordered_set<uint64_t> state_seen;
 /// (state_mu held) the state list opened for this run's new pipelines, the records it holds hashed. precompile_run opens it before
 /// play: the first new pipeline in play read and hashed the whole list on the thread replaying, 8-18 ms. A version 1 list (an older
-/// build's) is kept as longshot_pipeline_states_v1.bin, which the prepare reads too, and this build's records start a version 2 one.
+/// build's) is kept as ocadim_pipeline_states_v1.bin, which the prepare reads too, and this build's records start a version 2 one.
 /// RX_VK_NO_STATE_LIST=1: never called
 void state_open_locked() {
-    const std::string path = state_list_path("longshot_pipeline_states.bin");
+    const std::string path = state_list_path("ocadim_pipeline_states.bin");
     bool keep = false;
     if (FILE* f = fopen(path.c_str(), "rb")) {
         char magic[8];
@@ -2189,7 +2189,7 @@ void state_open_locked() {
         }
         fclose(f);
         if (v1) {
-            const std::string old = state_list_path("longshot_pipeline_states_v1.bin");
+            const std::string old = state_list_path("ocadim_pipeline_states_v1.bin");
             remove(old.c_str());
             if (rename(path.c_str(), old.c_str()) == 0) logf("vk: state list: the version 1 list kept as %s", old.c_str());
         }
@@ -2200,7 +2200,7 @@ void state_open_locked() {
         const uint32_t size = sizeof(StateRec2);
         fwrite(kStateMagic2, 8, 1, state_file), fwrite(&size, 4, 1, state_file);
     }
-    // (the compute programs this install's play dispatched before, longshot_computes.bin: in the list too, each once, so that
+    // (the compute programs this install's play dispatched before, ocadim_computes.bin: in the list too, each once, so that
     // the list a player sends (Save my pipeline list) names them all, not only those of the runs since this build)
     if (state_file) {
         bool added = false;
@@ -2264,7 +2264,7 @@ std::string state_list_bytes(bool* present) {
     if (state_file) fflush(state_file);
     std::string bytes;
     *present = false;
-    if (FILE* f = fopen(state_list_path("longshot_pipeline_states.bin").c_str(), "rb")) {
+    if (FILE* f = fopen(state_list_path("ocadim_pipeline_states.bin").c_str(), "rb")) {
         *present = true;
         char b[1 << 16];
         for (size_t n; (n = fread(b, 1, sizeof b, f)) > 0;) bytes.append(b, n);
@@ -2273,18 +2273,18 @@ std::string state_list_bytes(bool* present) {
     return bytes;
 }
 /// Every pipeline of the state lists (the player's own and the shipped one): its program translated
-/// when the program cache lacks it, then noted in longshot_pipelines.bin for precompile_run to build. RX_VK_NO_STATE_LIST=1: off
+/// when the program cache lacks it, then noted in ocadim_pipelines.bin for precompile_run to build. RX_VK_NO_STATE_LIST=1: off
 void state_list_prepare(void (*progress)(size_t done, size_t total), bool open_seed = false) {
     if (env_on("RX_VK_NO_STATE_LIST")) return;
-    remove((pipe_notes_path().substr(0, pipe_notes_path().find_last_of("\\/") + 1) + "longshot_load_start.txt").c_str());
-    remove((pipe_notes_path().substr(0, pipe_notes_path().find_last_of("\\/") + 1) + "longshot_load_start.txt.waited").c_str());   // (a preparation: loads at create are tried again, load_default.h load_fallback_path)
+    remove((pipe_notes_path().substr(0, pipe_notes_path().find_last_of("\\/") + 1) + "ocadim_load_start.txt").c_str());
+    remove((pipe_notes_path().substr(0, pipe_notes_path().find_last_of("\\/") + 1) + "ocadim_load_start.txt.waited").c_str());   // (a preparation: loads at create are tried again, load_default.h load_fallback_path)
     const auto t0 = std::chrono::steady_clock::now();
     int shipped_version = 0;
     // (the shipped list's compute programs are not pipelines to note: precompile_run keeps them ready, computes_plan)
-    std::vector<StateRec> recs = state_list_read(state_list_path("longshot_pipeline_states_shipped.bin"), &shipped_version);
+    std::vector<StateRec> recs = state_list_read(state_list_path("ocadim_pipeline_states_shipped.bin"), &shipped_version);
     const size_t shipped = recs.size();
     // (the player's own: this build's, and an older build's version 1 list, state_open_locked)
-    for (const char* own : {"longshot_pipeline_states.bin", "longshot_pipeline_states_v1.bin"})
+    for (const char* own : {"ocadim_pipeline_states.bin", "ocadim_pipeline_states_v1.bin"})
         for (const StateRec& r : state_list_read(state_list_path(own))) recs.push_back(r);
     if (recs.empty() || (open_seed && !seed_open())) return;
     // the programs: each once (by its stages and the types it was translated for)
@@ -3965,8 +3965,8 @@ bool slow_desc_timing() {
 }
 
 // (longshot) one switch read two ways, like the Robust buffers row of vk_main.cpp: the environment variable says it for test
-// runs (any value, 0 off); else the row's line in longshot_options.ini in the user folder; else off.
-/// (the row's value in longshot_options.ini, read before the menu has loaded it; the environment's switch first. def: no
+// runs (any value, 0 off); else the row's line in ocadim_options.ini in the user folder; else off.
+/// (the row's value in ocadim_options.ini, read before the menu has loaded it; the environment's switch first. def: no
 /// file, no line, or a file older than options_version since (one whose line was only ever the old default, vk_menu.cpp
 /// load))
 bool menu_env_on(const char* env_name, const char* ini_key_name, bool def = false, int since = 0) {
@@ -4591,7 +4591,7 @@ bool uniform_snapshot_on() {   // (vk_internal.h: ub_snapshot_wanted's answer fo
     return on;
 }
 /// (longshot) A compute pipeline of the back end's own, made elsewhere (vk_fsr3.cpp), through the pipeline cache the game's are kept
-/// in across runs (longshot_vk_pipelines.bin), as theirs are: in play through the play caches (create_cached), so that it does not grow
+/// in across runs (ocadim_vk_pipelines.bin), as theirs are: in play through the play caches (create_cached), so that it does not grow
 /// the start's cache; before the cache is loaded, with none. (Outside the unnamed namespace: vk_fsr3.cpp links to it)
 VkResult shared_compute_pipeline(const VkComputePipelineCreateInfo* ci, VkPipeline* out) {
     // (not a game program: ComputeTurn must not weigh, refuse or name it as the game program this thread described last)
@@ -8733,7 +8733,7 @@ std::atomic<bool> movie_networks_slow{false};
 bool gameplay_network(uint64_t key) { return key == 0xfd029a317a9a4b94ull || key == 0x9dc98871eb7fc101ull; }
 
 static movie_upscale_policy::Mode movie_upscale_mode() {
-    // Read on first dispatch, after host/hos_main.c has loaded longshot_env.txt.
+    // Read on first dispatch, after host/hos_main.c has loaded ocadim_env.txt.
     static const auto mode = movie_upscale_policy::parse(getenv("RX_VK_MOVIE_UPSCALE"));
     return mode;
 }
@@ -9251,10 +9251,10 @@ std::atomic<bool> prepare_saving_now{false};   // (precompile_warm: the pipeline
 void prepare_stop() { prepare_halt.store(true); }
 bool prepare_stopped() { return prepare_halt.load(std::memory_order_relaxed); }
 bool prepare_saving() { return prepare_saving_now.load(std::memory_order_relaxed); }
-std::string prepared_path() { return cache_path("longshot_prepared.bin"); }
-// (longshot) What the last prepare here was made for, in longshot_prepared.bin: the translator (program_cache_stamp), and since the
+std::string prepared_path() { return cache_path("ocadim_prepared.bin"); }
+// (longshot) What the last prepare here was made for, in ocadim_prepared.bin: the translator (program_cache_stamp), and since the
 // seed grows apart from it (4221050d: networks, the movie upscaler, the particle sets, 19 compute programs more) the seed it went
-// through (longshot_shaders.bin), by a hash of its contents. By the translator alone, a folder prepared before such an update never
+// through (ocadim_shaders.bin), by a hash of its contents. By the translator alone, a folder prepared before such an update never
 // prepared the new programs: each was translated in play when first met, 200-400 ms apiece. The seed is 500 MB and more: its hash is
 // taken again only when its size or write time is not the recorded one, and a hash that is still the same records the new time.
 // A write time says nothing of a write that came within its resolution of the one recorded (whole seconds from libstdc++'s
@@ -9634,7 +9634,7 @@ bool prepare_run(void (*progress)(size_t done, size_t total), bool background, b
     // (the translator is the same: what the program cache keeps stays, and seed_translate and seed_compute leave it out. The
     // programs the seed has gained are what is made)
     if (why == PrepareWhy::Seed)
-        logf("vk: the game's shader list (longshot_shaders.bin) is not the one the shaders were prepared from: preparing again "
+        logf("vk: the game's shader list (ocadim_shaders.bin) is not the one the shaders were prepared from: preparing again "
              "(only the programs not kept yet)");
     const size_t programs = seed_open();
     if (!programs) return false;
@@ -9685,7 +9685,7 @@ bool prepare_run(void (*progress)(size_t done, size_t total), bool background, b
         // (as a dispatch, a load and the precompile ask for it: the same pin, so the same pipeline in the caches)
         const VkComputePipelineCreateInfo ci = compute_pipeline_info(p, true);
         VkPipeline pl = VK_NULL_HANDLE;
-        // (into the app's pipeline cache, saved to longshot_vk_pipelines.bin: without it the next start compiled them again in play
+        // (into the app's pipeline cache, saved to ocadim_vk_pipelines.bin: without it the next start compiled them again in play
         // where the driver's own cache missed them, AMD's 15 s culling compiles each time)
         {
             const ComputeTurn turn(ci);   // (as cached_compute: as many of the driver's compiles at once as the memory holds)
@@ -10215,7 +10215,7 @@ void precompile_run(void (*progress)(size_t done, size_t total)) {
     }
     std::unordered_set<uint64_t> wanted, wanted_variants;
     for (const auto& n : notes) wanted.insert(n->prog), wanted_variants.insert(mix(n->prog, n->variant));
-    // (the compute programs: those this install's play dispatched (longshot_computes.bin) and those the shipped state list names,
+    // (the compute programs: those this install's play dispatched (ocadim_computes.bin) and those the shipped state list names,
     // each once; every kept one on a first start, with nothing dispatched yet: computes_plan)
     const ComputePlan plan = computes_plan(precompile_computes_which(), !env_on("RX_VK_NO_STATE_LIST"));
     if (!plan.all && !plan.none) wanted.insert(plan.keys.begin(), plan.keys.end());
@@ -10405,8 +10405,8 @@ void precompile_run(void (*progress)(size_t done, size_t total)) {
 }
 
 // (longshot) The pipelines the notes predict for the programs no note names (vk_predict.cpp), after a prepare that prepared: each built
-// once for the driver's own cache and let go. Not into ours (longshot_vk_pipelines.bin, read whole at every start: ~40000 more pipelines made
-// it 1.7 GB), nor kept: each program is borrowed from longshot_programs.bin for its pipelines and let go
+// once for the driver's own cache and let go. Not into ours (ocadim_vk_pipelines.bin, read whole at every start: ~40000 more pipelines made
+// it 1.7 GB), nor kept: each program is borrowed from ocadim_programs.bin for its pipelines and let go
 /// (longshot) The preparation's three parts as the files on disk count them before it runs: PrepareBar's guesses, so that the bar
 /// has every part in its total from the start. The seed's programs (its header); the pipelines the notes will predict, about one and
 /// a half a seed program (56,588 for 38,809 programs with the shipped list of 25,251 states); the pipelines the notes and state
@@ -10431,8 +10431,8 @@ void prepare_guess(size_t out[3]) {
         out[0] = programs, out[1] = programs + programs / 2;
     }
     const int64_t notes = size_of(pipe_notes_path()), computes = size_of(computes_path());
-    const int64_t lists = std::max<int64_t>(0, size_of(state_list_path("longshot_pipeline_states_shipped.bin")) - 12) +
-                          std::max<int64_t>(0, size_of(state_list_path("longshot_pipeline_states.bin")) - 12);
+    const int64_t lists = std::max<int64_t>(0, size_of(state_list_path("ocadim_pipeline_states_shipped.bin")) - 12) +
+                          std::max<int64_t>(0, size_of(state_list_path("ocadim_pipeline_states.bin")) - 12);
     out[2] = (size_t)(std::max<int64_t>(0, notes - 16) / (int64_t)sizeof(PipeNote) + lists / (int64_t)sizeof(StateRec) +
                       std::max<int64_t>(0, computes - 8) / 8);
 }
@@ -10443,7 +10443,7 @@ void note_color_types(const PipeNote& n, uint8_t types[8]) {
 
 void predicted_sample_write(const std::vector<std::unique_ptr<PipeNote>>& predicted);
 void predicted_keys_write(std::vector<uint64_t> keys);
-// (longshot) The prediction under way: longshot_pipelines.bin.predicting from its start to its end. A start closed (or ended) in it
+// (longshot) The prediction under way: ocadim_pipelines.bin.predicting from its start to its end. A start closed (or ended) in it
 // left the rest of the predicted pipelines unbuilt for good: the next start found the programs prepared, so it skipped the
 // prediction, and play compiled them as they were drawn. With the marker there, the next start runs it again; what the driver
 // kept from the first try comes back from its cache at once (a second prediction over a full driver cache: 7.9 s for 43,414)
@@ -10455,7 +10455,7 @@ bool predict_pending() {
     return true;
 }
 // (longshot) Compile shaders, the Builder's, make_game.py's and the launcher's choice (compile_shaders= in the game folder's
-// longshot_options.ini, where make_game.py writes it: the build's, not the player's settings in the user folder, vk_paths.h
+// ocadim_options.ini, where make_game.py writes it: the build's, not the player's settings in the user folder, vk_paths.h
 // options_path; 0 Most, the default; 1 All; any other number is Most). All builds the predicted pipelines too: about 50,000 for the driver's own cache, over 40 % more time (a full preparation on an RTX
 // 3090 with 24 threads: 415 and 413 s against 292 s without them), for pipelines play almost never draws ("vk: predicted
 // pipelines met in play"). RX_VK_COMPILE_SHADERS=all or most over the file (the game's --compile-shaders sets it, host/hos_main.c).
@@ -10473,13 +10473,13 @@ bool compile_all() {
             char exe[MAX_PATH];
             const DWORD n = game_module_path(exe, MAX_PATH);
             std::string ini(exe, n);
-            ini = ini.substr(0, ini.find_last_of("\\/") + 1) + "longshot_options.ini";
+            ini = ini.substr(0, ini.find_last_of("\\/") + 1) + "ocadim_options.ini";
             if (FILE* f = fopen(ini.c_str(), "r")) {
                 char line[80];
                 while (fgets(line, sizeof line, f))
                     if (!strncmp(line, "compile_shaders=", 16)) {
                         v = atoi(line + 16) == 1 ? 1 : 0;
-                        why = "compile_shaders in longshot_options.ini";
+                        why = "compile_shaders in ocadim_options.ini";
                         break;
                     }
                 fclose(f);
@@ -10671,7 +10671,7 @@ void predict_run(void (*progress)(size_t done, size_t total)) {
 
 // ---- (longshot) Whether the driver kept the predicted pipelines. predict_run builds them for the driver's own disk cache alone and
 // lets them go: on a driver without one, or with one too small (Windows NVIDIA takes its size from the control panel), minutes of the
-// preparation leave nothing, and nothing said so. A sample of them (longshot_pipelines.bin.predicted) is asked of the driver at the
+// preparation leave nothing, and nothing said so. A sample of them (ocadim_pipelines.bin.predicted) is asked of the driver at the
 // next start, without compiling, as play asks: "the driver kept N of M". Also the driver cache folder's size in the log ----
 namespace {
 bool predicted_this_run = false;   // (asked in the process that built them, the driver answers from memory: no check then)
@@ -10690,7 +10690,7 @@ void predicted_sample_write(const std::vector<std::unique_ptr<PipeNote>>& predic
         if (fclose(f) != 0 || !ok) remove(path.c_str());
     }
 }
-// ---- (longshot) How often play meets a pipeline only the prediction made: longshot_pipelines.bin.predicted_keys holds the keys of
+// ---- (longshot) How often play meets a pipeline only the prediction made: ocadim_pipelines.bin.predicted_keys holds the keys of
 // the pipelines the last prediction built (sorted, as graphics_pipeline looks them up). A pipeline play makes that no note named and
 // whose key is there is counted once, by how it was made: from the driver's cache (the prediction saved its compile), compiled
 // (the driver did not keep it), or from the start's cache. The line "vk: predicted pipelines met in play" follows each play file
@@ -11426,7 +11426,7 @@ void pipeline_cache_play() {
     // (longshot) On Linux with <= 20 GB of RAM (the Steam Deck's 16 GB shared memory and 16 GB PCs) or when memory pressure is
     // already active (or RX_VK_DROP_MODULES=1), the VkShaderModules of ready programs whose pipelines were built in precompile_run
     // (~37,000 modules, ~1.5-1.8 GB of uncompressed SPIR-V in the driver's heap) have done their work once precompile_run finishes.
-    // Any graphics program whose noted pipelines were built remakes its module from longshot_programs.bin
+    // Any graphics program whose noted pipelines were built remakes its module from ocadim_programs.bin
     // (program_cache_complete_graphics) if play ever builds a new state variant; programs without a built graphics pipeline (not
     // noted by program_cache_note_built) keep their vertex and fragment modules so in-play pipeline builds do not read the disk.
     // 32-64 GB Linux desktops keep their modules by default so new pipeline variants in play never touch the disk.
@@ -11540,7 +11540,7 @@ bool pipeline_keep_ready(uint64_t key, VkPipeline pl) {
 }
 std::string load_fallback_path() {
     const std::string notes = pipe_notes_path();
-    return notes.substr(0, notes.find_last_of("\\/") + 1) + "longshot_load_start.txt";
+    return notes.substr(0, notes.find_last_of("\\/") + 1) + "ocadim_load_start.txt";
 }
 void program_layout(Program& p) { ensure_layout(p); }
 std::vector<std::pair<uint64_t, uint64_t>> compute_variants_learned() { return compute_variants_read(); }

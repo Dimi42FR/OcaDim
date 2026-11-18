@@ -92,7 +92,7 @@ HLE(_ZN2nn2oe18GetDesiredLanguageEv) {
    (MKW docked composes 3840 x 2160) */
 int hos_ini_option(const char *key, int otherwise);
 #define ini_option hos_ini_option
-/* (longshot) An option's text in longshot_options.ini (the Insert menu's choices, gpu/vk/vk_menu.cpp; where it is:
+/* (longshot) An option's text in ocadim_options.ini (the Insert menu's choices, gpu/vk/vk_menu.cpp; where it is:
    host/options_path.c), the last line that sets it, its line end cut: whether there was one */
 static int ini_text(const char *key, char *out, size_t size) {
     if (!size) return 0;

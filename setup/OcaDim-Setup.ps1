@@ -12,7 +12,7 @@ param([switch]$Install, [switch]$Play, [switch]$Uninstall, [string]$From)
 $ErrorActionPreference = 'Stop'
 $name = 'OcaDim'
 $version\ = '0.0.3'
-$exe = 'longshot.exe'
+$exe = 'ocadim.exe'
 $root = Join-Path $env:LOCALAPPDATA $name
 
 function Banner {

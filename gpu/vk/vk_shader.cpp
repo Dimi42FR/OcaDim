@@ -2143,8 +2143,8 @@ bool key_listed(const char* hex, const char* var) {
     return false;
 }
 // ---- (longshot) Every shader of the game before it starts, as TotK Recomp's tools/prepare_shaders.py and totk.exe --prepare-shaders: the
-// builder writes longshot_shaders.bin (nx2/shader_census.py) from the archives, each program's stages, and here each is translated
-// for the default state (nothing bound, float inputs and outputs) and kept in longshot_programs.bin. What a draw then asks for is on
+// builder writes ocadim_shaders.bin (nx2/shader_census.py) from the archives, each program's stages, and here each is translated
+// for the default state (nothing bound, float inputs and outputs) and kept in ocadim_programs.bin. What a draw then asks for is on
 // disk, whatever part of the game it is first met in ----
 namespace {
 struct SeedStage {
@@ -2177,7 +2177,7 @@ void seed_stage_failed(const Code& c, uint64_t program) {
 }
 } // namespace
 
-std::string seed_path() { return beside_exe("longshot_shaders.bin"); }
+std::string seed_path() { return beside_exe("ocadim_shaders.bin"); }
 
 size_t seed_open() {
     if (FILE* f = fopen(seed_path().c_str(), "rb")) {
@@ -2349,7 +2349,7 @@ bool seed_is_compute(size_t i) {
 // (longshot) The seed's compute programs, each with its texture variants. A program's texture questions are answered in play by the
 // textures bound (Program::answers), which nothing before the game knows; the questions themselves are few, so each is tried with every
 // answer it can get, and an answer that changes the SPIR-V makes a variant. Variants of two answers and more are taken fewest first, up
-// to cap: one of them is the variant play makes, which still_valid then finds kept. All go to longshot_programs.bin, as play keeps them,
+// to cap: one of them is the variant play makes, which still_valid then finds kept. All go to ocadim_programs.bin, as play keeps them,
 // and each new one is given to made (its modules live until it returns)
 SeedVariants seed_compute(size_t i, size_t cap, const std::function<void(Program&)>& made) {
     static const uint8_t no_types[8]{};

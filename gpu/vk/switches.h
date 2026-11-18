@@ -11,7 +11,7 @@
 //   kill    turns off, or back to an older way, something that is on for every PC
 //   attempt turns on something that is off for every PC: an experiment nobody ships
 //   hw      unset, it follows the PC: the GPU's vendor or driver, its VRAM, the CPU count, the OS
-//   player  a setting the player has (the Insert menu, longshot_options.ini), or one the launcher or the Builder sets
+//   player  a setting the player has (the Insert menu, ocadim_options.ini), or one the launcher or the Builder sets
 //
 // A new switch needs a row here. A switch that is done with goes: its reads are deleted and its row becomes GONE(name, since,
 // what became of it), so a run that still sets it is told. Plain code with no Vulkan calls: the test compiles it alone.
