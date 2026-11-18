@@ -35,19 +35,43 @@ expliquée, avec annulation :
 - Le compteur FPS affiche la résolution interne courante (`DRS 82 %`) pour que ce soit vérifiable.
 - Compatible FSR 4 et frame generation (les motion vectors restent à la résolution interne).
 
-## Priorité 3 — Mode « Petit PC »
+## Priorité 3 — Budget VRAM
+
+Un plafond de mémoire vidéo, mesurable et réglable dans OcaDim (`Budget VRAM` : Auto / 2 Go / 3 Go /
+4 Go / 6 Go / 8 Go) :
+
+- les textures vraiment utilisées restent, les autres sont évincées (LRU) et rechargées au besoin ;
+- à l'approche du plafond, on préfère un format plus compact (BC7 pour la couleur, BC5 pour les
+  normales) au lieu de tout garder en RGBA8 ;
+- « ASTC en RGBA8 » se coupe tout seul quand la VRAM est juste (c'est un contournement qui coûte
+  très cher en mémoire) ;
+- déduplication des textures identiques entre scènes.
+
+Mesure à chaque étape : **temps de frame, VRAM utilisée, 1 % low** — avant/après, sur la même zone.
+
+## Priorité 4 — Mode « Petit PC »
 
 Un interrupteur qui applique un paquet cohérent : 720p interne + FSR Qualité, ombres moyennes,
-budget textures 2 Go, pas de FG sous 40 fps, workers = cœurs physiques − 1, pas de rewind.
-Plus un **garde-fou mémoire** : au-delà de 90 % de RAM ou de VRAM, baisse d'un cran (textures
-d'abord) et message clair, avec annulation.
+budget VRAM 2 Go, pas de FG sous 40 fps, workers = cœurs physiques − 1, pas de rewind.
+Il embarque la **DRS** (activée, cible 60) et le **budget VRAM** ci-dessus, pour qu'un seul geste
+suffise sur une GTX 1060 ou un Steam Deck.
 
-## Priorité 4 — Cache de pipelines partagé
+## Priorité 5 — Garde-fou mémoire (RAM et VRAM)
+
+Un veilleur qui lit la mémoire toutes les secondes :
+
+- au-delà de 90 % de RAM **ou** de VRAM : baisse d'un cran (textures d'abord, puis résolution
+  interne), avec un message clair et **un bouton Annuler** qui remet les réglages précédents ;
+- jamais silencieux : on écrit ce qui a été changé et pourquoi ;
+- si la baisse ne suffit pas, on propose de quitter proprement plutôt que de laisser la machine
+  swapper.
+
+## Priorité 6 — Cache de pipelines partagé
 
 L'amont demande au joueur d'envoyer son cache à la main. OcaDim : un cache signé, proposé au premier
 lancement (opt-in), pour supprimer les saccades de compilation dès la première partie.
 
-## Priorité 5 — Assistant de premier lancement
+## Priorité 7 — Assistant de premier lancement
 
 Détection GPU / VRAM / écran HDR / manette, trois profils français (Qualité, Équilibré,
 Performances), test de 10 s, application. Il pose aussi la DRS et le mode Petit PC.
