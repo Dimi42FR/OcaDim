@@ -1561,6 +1561,7 @@ const char* nfc_scan_says(int variant) {
 }
 
 const char* const kFpsDevLineHelp = "Whether the FPS counter's Dev level shows this line.";   // (the details page's rows)
+const char* petit_hint(int v, int variant);   // (OcaDim: the Petit PC row's line, defined with its toggle below)
 Row rows[] = {
     // Graphics, in sections: a heading row is a section's title (draw_options draws it, the selection steps over it). The
     // Quality preset first, as it sets rows in every section. (Reflex, Anti-Lag 2, the Upscaler and the DLSS model only where
@@ -1899,6 +1900,10 @@ Row rows[] = {
      "Lit les mesures des dernières secondes : temps par image, 1 % low, mémoire vidéo, plafond d'images et génération "
      "d'images. Il nomme la cause la plus probable et propose un seul réglage, en français. Appuyez sur Entrée pour "
      "analyser, encore pour l'appliquer, encore pour l'annuler.", nullptr, false, true},
+    {TAB_OCADIM, "Mode Petit PC", nullptr, 0, 0, 0, nullptr,   // (OcaDim: the small-card settings in one press, and back)
+     "Pour une petite carte : moitié de résolution interne (720p depuis du 1440p), filtre Lanczos, netteté 30, ombres du "
+     "jeu, génération d'images coupée. Aucun redémarrage. Appuyez sur Entrée pour l'appliquer, encore pour revenir "
+     "exactement aux réglages d'avant.", petit_hint, false, true},
     {TAB_DEBUG, "Robust buffers", &opts.robust, 0, 2, 1, tx_robust,
      "Bounds-checked buffer reads: a read past a buffer's end is dropped instead of stopping the GPU. Applies after a "
      "restart.", hn_robust, true, true},
@@ -3624,6 +3629,45 @@ void diag_press() {
     }
     menu_refresh = true;
 }
+
+// ---- (OcaDim) Mode « Petit PC » : les réglages d'une petite carte, en un geste, et le geste inverse --------------------------
+/// What the mode set and what was there before, so the same press puts every row back (no new option: the rows' own values)
+struct PetitPc {
+    bool applied = false;
+    int resolution = 0, upscale = 0, sharpness = 0, shadow = 0, framegen = 0, preset = 0;
+};
+PetitPc petit_pc;
+bool is_petit_row(const Row& r) { return !r.value && r.tab == TAB_OCADIM && !strcmp(r.name, "Mode Petit PC"); }
+void petit_pc_toggle() {
+    if (!petit_pc.applied) {
+        petit_pc.resolution = opts.resolution, petit_pc.upscale = opts.upscale, petit_pc.sharpness = opts.sharpness;
+        petit_pc.shadow = opts.shadow_res, petit_pc.framegen = opts.framegen, petit_pc.preset = opts.preset;
+        const struct { int* v; int to; } set[] = {{&opts.resolution, 4}, {&opts.upscale, 2}, {&opts.sharpness, 30},
+                                                  {&opts.shadow_res, 1}, {&opts.framegen, 0}};
+        for (const auto& s : set)
+            if (Row* r = row_for_value(s.v)) set_row(*r, s.to, 0, false);   // (kept: one save at the end)
+        petit_pc.applied = true;
+        logf("menu: Mode Petit PC: Render resolution 50%%, Lanczos, sharpness 30, the game's shadows, no frame generation");
+    } else {
+        const struct { int* v; int to; } set[] = {{&opts.resolution, petit_pc.resolution}, {&opts.upscale, petit_pc.upscale},
+                                                  {&opts.sharpness, petit_pc.sharpness}, {&opts.shadow_res, petit_pc.shadow},
+                                                  {&opts.framegen, petit_pc.framegen}};
+        for (const auto& s : set)
+            if (Row* r = row_for_value(s.v)) set_row(*r, s.to, 0, false);
+        opts.preset = petit_pc.preset;   // (set_row moved it to Custom)
+        petit_pc.applied = false;
+        logf("menu: Mode Petit PC: the player's settings back");
+    }
+    samplers_changed();
+    save();
+    menu_refresh = true;
+}
+const char* petit_hint(int, int) {
+    return petit_pc.applied ? "Appliqué : 50 % de résolution interne, Lanczos, ombres du jeu, sans génération d'images. "
+                              "Appuyez encore pour revenir exactement aux réglages d'avant."
+                            : "Un geste pour une petite carte : moitié de résolution interne (720p depuis du 1440p), "
+                              "Lanczos, ombres du jeu, pas de génération d'images. Réversible par le même appui.";
+}
 menu_hit::Map hits;      // (the menu's controls as last drawn: the mouse's, menu_tick)
 float scroll_at[TAB_FPS_DEV + 2];   // (the first row shown, eased toward the selection: the options' tabs and the Motion page, then
                                    // the Controls page: kControlsSlot)
@@ -4106,6 +4150,8 @@ void draw_debug_rows(ui::Ctx& c, float cx0, float cx1, float top, float bottom, 
             choice_cell(c, va, vb, laptop_applied ? "Applied" : "Apply", selected, false, false);
         } else if (is_diag_row(r)) {   // (Ça rame ?: Analyser, then Appliquer or Compris, then Annuler)
             choice_cell(c, va, vb, diag_value(), selected, false, false);
+        } else if (is_petit_row(r)) {   // (Mode Petit PC: Appliquer, then Annuler)
+            choice_cell(c, va, vb, petit_pc.applied ? "Annuler" : "Appliquer", selected, false, false);
         } else if (r.cheat == 0 || r.cheat == 1 || r.cheat == 7) {
             halves_cell(c, va, vb, "Off", "On", cheat_value(r.cheat) == "On", selected, false);
         } else if (age_shown(r.cheat)) {   // (Link's age now: the other half switches)
@@ -4266,6 +4312,7 @@ void row_value_cell(ui::Ctx& c, const Row& r, ImVec2 va, ImVec2 vb, bool selecte
         else if (pending == &r) choice_cell(c, va, vb, "Press again to confirm", selected, false, false);
         else if (is_share_row(r)) choice_cell(c, va, vb, share_value.empty() ? "Save" : share_value, selected, false, false);   // (an action, not a page)
         else if (is_diag_row(r)) choice_cell(c, va, vb, diag_value(), selected, false, false);
+        else if (is_petit_row(r)) choice_cell(c, va, vb, petit_pc.applied ? "Annuler" : "Appliquer", selected, false, false);
         else if (&r == &rows[kBugReportRow]) choice_cell(c, va, vb, bug_report_cell(), selected, false, false);   // (how the last report went)
         else {
             choice_cell(c, va, vb, "", selected, false, false);
@@ -4354,7 +4401,7 @@ void draw_options(ui::Ctx& c) {
             if (const char* says = cheat_confirm(selr.cheat)) prompt_list[prompts_n++] = {ui::kConfirm, says};
             prompt_list[prompts_n++] = {ui::kCompact, "Compact", compact_key_name};
         } else {
-            prompt_list[prompts_n++] = {ui::kConfirm, is_nfc_tap(selr) ? "Tap" : is_nfc_remove(selr) ? "Remove" : is_nfc_scan(selr) ? "Scan" : confirms ? (pending == &selr ? "Confirm" : selr.name) : &selr == &rows[kBugReportRow] || is_share_row(selr) ? "Save" : is_diag_row(selr) ? diag_value() : "Open"};
+            prompt_list[prompts_n++] = {ui::kConfirm, is_nfc_tap(selr) ? "Tap" : is_nfc_remove(selr) ? "Remove" : is_nfc_scan(selr) ? "Scan" : confirms ? (pending == &selr ? "Confirm" : selr.name) : &selr == &rows[kBugReportRow] || is_share_row(selr) ? "Save" : is_diag_row(selr) ? diag_value() : is_petit_row(selr) ? (petit_pc.applied ? "Annuler" : "Appliquer") : "Open"};
         }
         if (cur_tab == TAB_MOTION || cur_tab == TAB_FPS_DEV) prompt_list[prompts_n++] = {ui::kBack, "Back"};   // (Esc: to Controls, or Gameplay)
         else {
@@ -6896,6 +6943,7 @@ void menu_tick() {
         }
         else if (press[7] && is_share_row(r)) share_pipeline_list(), press[7] = false, changed = true;
         else if (press[7] && is_diag_row(r)) diag_press(), press[7] = false, changed = true;   // (OcaDim: Ça rame ?)
+        else if (press[7] && is_petit_row(r)) petit_pc_toggle(), press[7] = false, changed = true;   // (OcaDim: Mode Petit PC)
         else if (press[7] && is_laptop_row(r)) weak_laptop_apply(), press[7] = false, changed = true;
         else if (press[7] && &r == &rows[kBugReportRow]) bug_report_save(), press[7] = false, changed = true;
         else if (const FieldRow* f = press[7] ? field_row(r) : nullptr) edit_start(*f->field, f->apply), changed = true;   // (longshot)
