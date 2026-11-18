@@ -4,6 +4,59 @@ Ce document garde les idées validées, l'endroit où chaque réglage doit vivre
 développement. La règle du projet ne change pas : **un seul changement testé à la fois**, avec un
 build sauvegardé et un tag avant de passer au suivant.
 
+## La grosse mise à jour (0.0.4) — tout le catalogue, en vagues
+
+Objectif : **toutes les idées de ce document dans une seule version**, sans régression. La 0.0.3
+reste la version sûre et publiable ; la 0.0.4 est celle qui doit dépasser Longshot.
+
+La règle : **une vague = un build testé, sauvegardé et tagué**. Une vague ne commence pas avant que
+la précédente soit stable en jeu (mêmes trois scènes de référence, 60 s, temps de frame, 1 % low,
+VRAM). Tout est désactivable dans OcaDim, et rien n'est actif par défaut avant d'être mesuré.
+
+### Vague 1 — Mémoire et fluidité (le cœur pour les petits PC)
+- `Résolution dynamique` (DRS) : Désactivée / 60 / 120 / 144 fps, minimum 65 %.
+- `Budget VRAM` : Auto / 2 / 3 / 4 / 6 / 8 Go, éviction LRU, formats compacts, « ASTC en RGBA8 »
+  coupé tout seul, dédup des textures.
+- `Garde-fou mémoire` : RAM ou VRAM au-delà de 90 %, baisse d'un cran, message clair, Annuler.
+- `Mode Petit PC` : un interrupteur qui embarque la DRS, le budget VRAM, 720p/FSR Qualité, ombres
+  moyennes, pas de FG sous 40 fps.
+
+### Vague 2 — Rendu (dessiner moins)
+- `Ombrage à taux variable` (VRS).
+- `Occlusion` (ne pas dessiner ce qui est derrière un mur).
+- `Lots statiques` (géométrie fixe d'une salle en une soumission).
+- `Prépasse de profondeur` (scènes à fort recouvrement : herbe, eau).
+- `Tri des rendus` (par pipeline, à la soumission).
+
+### Vague 3 — Chargement et CPU (supprimer les à-coups)
+- `Mips à la demande`.
+- `Mode mémoire réduite` (buffers audio et capture/replay plus courts, pas de rewind).
+- `Compilation selon les cœurs` pilotée automatiquement.
+- `Précompilation au chargement` avec barre de progression.
+- `Ordonnanceur de vcores` en work-stealing (nos logs prouvent des attentes de 100-200 ms).
+
+### Vague 4 — Confort de jeu
+- `Auto-FG` : couper la génération dans les menus, cinématiques, chargements et la carte.
+- `Cadencement VRR` adaptatif (138 sur 144 Hz, 57 sur 60).
+- `Profils par zone` (réglages mémorisés par scène, bascule en fondu).
+- `Sauvegarde de secours` avant chaque chargement, reprise après crash.
+- `Mode photo / cinéma` (HUD masqué, FOV libre, ralenti, captures en supersampling).
+- `Rapport de diagnostic` en un clic, en français, prêt à coller.
+- `Export / import de profil` en un fichier.
+
+### Vague 5 — Qualité et distribution
+- `Cache de pipelines partagé` (zéro saccade de compilation dès la première partie).
+- `Assistant de premier lancement` (GPU, écran, manette, trois profils, test de 10 s).
+- `Vérificateur de build` (rejouer des inputs, comparer images et temps par frame).
+- `Mise à jour intégrée` avec le journal des versions en français.
+
+### Ce qui définit « fini » pour la 0.0.4
+- Les cinq vagues passées, chacune avec son build sauvegardé et son tag.
+- Aucune régression : mêmes scènes, mêmes sauvegardes, FSR 4 et 3.1 toujours à chaud.
+- Le menu reste entièrement en français, avec une aide par ligne.
+- Un tableau avant/après dans les notes de version : temps de frame, 1 % low, VRAM, sur une carte
+  faible et sur la 9070 XT.
+
 ## Décisions prises
 
 - **La résolution dynamique (DRS) s'active et se désactive dans la section OcaDim** du F1, pas dans
