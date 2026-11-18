@@ -3670,8 +3670,63 @@ void drs_set(int v) {
     samplers_changed();
     menu_refresh = true;
 }
-void drs_tick(int64_t now) {
-    if (opts.drs == 0 || ur::full_scale(upscaler())) return drs_restore();
+// ---- (OcaDim) Garde-fou mémoire : au-delà de 90 %, un cran de moins, annulable par Entrée --------------------------------
+bool guard_changed = false;
+bool is_guard_row(const Row& r) { return r.value == &opts.mem_guard; }
+int* guard_target = nullptr;
+int guard_from = 0;
+/// Once a second: past 90 % of the video memory or of the system's RAM, one stop down (the Render resolution's own stops).
+/// One change at a time; Enter on the row puts it back (guard_press).
+void guard_check(int64_t now) {
+    if (!opts.mem_guard || guard_changed) return;
+    static int64_t at = 0;
+    if (now - at < fps_stats::kSecond) return;
+    at = now;
+    MEMORYSTATUSEX ms{};
+    ms.dwLength = sizeof ms;
+    const bool ram_ok = GlobalMemoryStatusEx(&ms) != 0;
+    uint64_t used = 0, allowed = 0;
+    const bool vram_ok = vram_usage(&used, &allowed) && allowed > 0;
+    const bool vram_high = vram_ok && used * 10 >= allowed * 9;
+    const bool ram_high = ram_ok && ms.dwMemoryLoad >= 90;
+    if (!vram_high && !ram_high) return;
+    Row* r = row_for_value(&opts.resolution);
+    if (!r) return;
+    int n = 0;
+    const int* const steps = ur::steps(upscaler(), n);
+    int at_step = -1, to = 0;
+    for (int i = 1; i < n; i++)
+        if (steps[i] == opts.resolution) at_step = i;
+    if (at_step >= 0) {
+        for (int i = at_step + 1; i < n; i++)
+            if (ur::percent(steps[i]) >= 33) { to = steps[i]; break; }
+    } else {
+        for (int i = 1; i < n; i++)
+            if (ur::percent(steps[i]) < ur::percent(opts.resolution)) { to = steps[i]; break; }
+    }
+    if (!to || to == opts.resolution) return;
+    char b[224];
+    if (vram_high)
+        snprintf(b, sizeof b, "garde-fou mémoire : mémoire vidéo à %.0f %%, résolution de la 3D de %d %% à %d %% (Entrée annule)",
+                 100.0 * used / allowed, ur::percent(opts.resolution), ur::percent(to));
+    else
+        snprintf(b, sizeof b, "garde-fou mémoire : RAM à %lu %%, résolution de la 3D de %d %% à %d %% (Entrée annule)",
+                 (unsigned long)ms.dwMemoryLoad, ur::percent(opts.resolution), ur::percent(to));
+    guard_target = &opts.resolution, guard_from = opts.resolution, guard_changed = true;
+    set_row(*r, to, 0);
+    logf("menu: %s", b);
+}
+void guard_press(Row& r) {
+    if (guard_changed) {
+        if (Row* t = row_for_value(guard_target)) set_row(*t, guard_from, 0);
+        guard_changed = false;
+        logf("menu: garde-fou mémoire : annulé");
+    } else {
+        set_row(r, opts.mem_guard ? 0 : 1, 0);
+    }
+    menu_refresh = true;
+}
+void drs_tick(int64_t now) {    if (opts.drs == 0 || ur::full_scale(upscaler())) return drs_restore();
     if (menu_is_open() || startup_on.load(std::memory_order_relaxed)) return;
     const fps_stats::Summary s = fps_summary(now, fps_stats::kSecond, 0);
     if (s.frames < 60 || s.avg_ms <= 0) return;   // (the game must really be running)
@@ -7025,6 +7080,7 @@ void menu_tick() {
         else if (press[7] && is_share_row(r)) share_pipeline_list(), press[7] = false, changed = true;
         else if (press[7] && is_diag_row(r)) diag_press(), press[7] = false, changed = true;   // (OcaDim: Ça rame ?)
         else if (press[7] && is_petit_row(r)) petit_pc_toggle(), press[7] = false, changed = true;   // (OcaDim: Mode Petit PC)
+        else if (press[7] && is_guard_row(r)) guard_press(r), press[7] = false, changed = true;   // (OcaDim: Garde-fou mémoire)
         else if (press[7] && is_laptop_row(r)) weak_laptop_apply(), press[7] = false, changed = true;
         else if (press[7] && &r == &rows[kBugReportRow]) bug_report_save(), press[7] = false, changed = true;
         else if (const FieldRow* f = press[7] ? field_row(r) : nullptr) edit_start(*f->field, f->apply), changed = true;   // (longshot)
@@ -7087,6 +7143,7 @@ void menu_tick() {
         if (now >= texts_next) texts_next = now + fps_stats::kSecond / 4, fps_texts(now);
     }
     drs_tick(prof_now());   // (OcaDim: the dynamic resolution, once a present)
+    guard_check(prof_now());   // (OcaDim: RAM and video memory once a second)
 }
 
 /// (longshot) Once a present: the Rumble strength row changed with the menu open, and the new strength is felt at once, a
