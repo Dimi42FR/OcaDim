@@ -75,7 +75,7 @@ Copy-Item (Join-Path $PSScriptRoot "LISEZMOI.txt") (Join-Path $app "LISEZMOI.txt
 $size = [math]::Round((Get-Item $zip).Length / 1MB, 1)
 $appSize = [math]::Round(((Get-ChildItem $app -Recurse -File | Measure-Object Length -Sum).Sum) / 1MB, 1)
 Write-Host ""
-Write-Host ("OcaDim Setup {0} is ready: {1}" -f "0.0.2", $app) -ForegroundColor Green
+Write-Host ("OcaDim Setup {0} is ready: {1}" -f "0.0.2-1", $app) -ForegroundColor Green
 Write-Host ("  OcaDimSetup.exe + .NET  ({0} Mo, self-contained)" -f $appSize) -ForegroundColor Gray
 Write-Host ("  source.zip            ({0} Mo, the sources compiled on the player's machine)" -f $size) -ForegroundColor Gray
 Write-Host ("  LISEZMOI.txt" ) -ForegroundColor Gray
