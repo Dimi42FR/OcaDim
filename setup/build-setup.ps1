@@ -31,6 +31,13 @@ if (-not (Test-Path (Join-Path $app "coreclr.dll"))) {
     throw "the publish is not self-contained (no coreclr.dll): test 6 needs it"
 }
 
+# (OcaDim) .NET's crash-dump tool ships with a self-contained publish and a player has no use for it: the setup writes its
+# own log, and a dump taken by createdump was never asked for. Out of the parcel, with the other files nothing reads.
+foreach ($junk in @("createdump.exe", "createdump", "OcaDimSetup.pdb")) {
+    $p = Join-Path $app $junk
+    if (Test-Path $p) { Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 # ---------------------------------------------------------------- source.zip
 $zip = Join-Path $app "source.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }
@@ -39,6 +46,11 @@ $excludes = @(
     ".git", "work", "out", "dist",
     "setup/dist", "setup/OcaDimSetup/bin", "setup/OcaDimSetup/obj",
     "tests", "docs", "website", ".forgejo", ".claude", ".github",
+    # (OcaDim) what a player's build never reads: the builder's own app, the wizard's sources, the CI plumbing and the
+    # repository's paperwork. The game compiles from nx2, host, gpu, third_party, assets, scripts, tools.lock.
+    "setup", "builder", ".chunk", ".circleci", ".pytest_cache",
+    "mise.toml", "mise.lock", "cliff.toml", "RELEASING.md", "AGENTS.md", "CONTRIBUTING.md",
+    ".pre-commit-config.yaml", ".gitattributes", ".gitignore",
     "__pycache__", "*.pyc", "*.log", "*.pdb", "*.zip",
     "build-ocadim.log", "package-ocadim.log"
 )
