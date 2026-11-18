@@ -5501,6 +5501,15 @@ void menu_init() {
     fps_level_now.store(fps_stats::level_of(opts.show_fps), std::memory_order_relaxed);
     output_field_show();   // (longshot: Custom output size, the size of the player's own, as the file has it)
     // (the environment over the saved rows, for this run only: env_override, save)
+    // (OcaDim) RX_VK_FG_AMD_FORCE=<3|4>: AMD's frame generation at 2x for this run, with that version, from the command line
+    // alone (the two rows have no ini key of their own here): the test that says which generation the SDK really makes. As
+    // every run's switch, the rows keep the player's saved values (env_override, saved_value)
+    if (const char* e = getenv("RX_VK_FG_AMD_FORCE")) {
+        env_override(&opts.framegen, 1);   // (2x)
+        env_override(&opts.framegen_by, atoi(e) >= 4 ? 3 : 2);
+        logf("menu: RX_VK_FG_AMD_FORCE=%s: frame generation 2x, by %s", e,
+             opts.framegen_by == 3 ? "AMD FSR 4 FG" : "AMD FSR 3.1 FG");
+    }
     if (const char* e = getenv("RX_VK_FRAMEGEN_MULT")) env_override(&opts.framegen, std::min(std::max(atoi(e), 2), 8));
     if (const char* e = getenv("RX_VK_PACE")) env_override(&opts.pace, !env_value_off(e));
     if (const char* e = getenv("RX_VK_UPSCALE"))

@@ -1206,7 +1206,9 @@ bool create_swapchain(uint32_t width, uint32_t height) {
         retire_swapchain(false);
     }
     VkSwapchainKHR sc = VK_NULL_HANDLE;
-    const VkResult fg_result = fg_amd_create_swapchain(ci, &sc);
+    // (OcaDim) its swapchain only when AMD's frame generation is asked for this run (the row or RX_VK_FG_AMD): calling it
+    // regardless took the surface from the plain swapchain below, and the window went black
+    const VkResult fg_result = fg_amd_requested() ? fg_amd_create_swapchain(ci, &sc) : VK_ERROR_INITIALIZATION_FAILED;
     const bool fg_owned = fg_result == VK_SUCCESS;
     if (fg_owned) {
         result = VK_SUCCESS;

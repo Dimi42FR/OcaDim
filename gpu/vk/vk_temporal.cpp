@@ -1514,7 +1514,20 @@ bool fg_fresh = false;
 }  // namespace
 
 void temporal_fg_publish(const TemporalFrame& f) {
-    if (!f.depth.image || !f.motion.image) return;
+    // (OcaDim) the first publication, and a frame with no depth or motion, said once: they are what makes AMD's frame
+    // generation context, so a context never made is traced here (RX_VK_FG_AMD_FORCE=4's run)
+    static bool told_published, told_skipped;
+    if (!f.depth.image || !f.motion.image) {
+        if (!told_skipped)
+            told_skipped = true,
+            logf("vk: AMD FG: the chain had no %s%s to publish this frame: no context can be made from it",
+                 f.depth.image ? "" : "depth", f.motion.image ? "" : (f.depth.image ? "motion" : " and motion"));
+        return;
+    }
+    if (!told_published)
+        told_published = true,
+        logf("vk: AMD FG: the chain published its first frame's inputs: depth %ux%u format %d, motion format %d", f.depth.width,
+             f.depth.height, (int)f.depth.format, (int)f.motion.format);
     std::lock_guard lk(fg_mu);
     TemporalFgInputs& o = fg_slot;
     o.depth = f.depth.image, o.depth_format = f.depth.format;

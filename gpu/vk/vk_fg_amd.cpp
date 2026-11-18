@@ -154,8 +154,17 @@ uint64_t pick_fg_version(int want_major) {
     q.versionIds = ids.data();
     q.versionNames = names.data();
     if (st().query(nullptr, &q.header) != FFX_API_RETURN_OK) return 0;
-    for (uint64_t i = 0; i < n; i++)
-        if (atoi(names[i] ? names[i] : "") == want_major) return ids[i];
+    for (uint64_t i = 0; i < n; i++) {
+        // (OcaDim) each entry as AMD names it, so a choice that finds nothing says what it was offered
+        const char* name = names[i] ? names[i] : "";
+        logf("vk: AMD FG: frame generation version %llu is \"%s\"", (unsigned long long)ids[i], name);
+        // (OcaDim) the first number anywhere in the name: "4.0.2" and "FSR 4.0.2" both give 4
+        for (const char* p = name; *p; p++)
+            if (*p >= '0' && *p <= '9') {
+                if (atoi(p) == want_major) return ids[i];
+                break;
+            }
+    }
     return 0;
 }
 
@@ -261,7 +270,18 @@ bool create_fg(uint32_t w, uint32_t h, VkFormat fmt, bool depth_reversed, float 
     // anything else (Auto, the game's own, DLSS) leaves the SDK's own choice, the newest it lists.
     // (OcaDim) the row chooses when it names a generation (3: FSR 4's, 2: FSR 3.1's); anything else keeps what 0.0.2 did,
     // AMD's own FFX_FRAMEGENERATION_VERSION, which is FSR 4's on the SDK we ship
-    const int want_major = opts.framegen_by == 3 ? 4 : opts.framegen_by == 2 ? 3 : 0;
+    const int want_major = [] {
+        if (const char* force = getenv("RX_VK_FG_AMD_FORCE")) {   // (OcaDim) the run's switch: 4 or 3, and nothing else
+            const int v = atoi(force);
+            if (v >= 4) return 4;
+            if (v == 3) return 3;
+        }
+        return opts.framegen_by == 3 ? 4 : opts.framegen_by == 2 ? 3 : 0;
+    }();
+    // (OcaDim) what this creation sees, said: the row as it stands at this instant, and the version that follows from it. A
+    // framegen_by of 0 here means the context was made before the row was read, and the SDK's own (3.1) is what runs
+    logf("vk: AMD FG: create_fg: framegen_by=%d, so %s", opts.framegen_by,
+         want_major == 4 ? "AMD FSR 4's generation" : want_major == 3 ? "AMD FSR 3.1's generation" : "the SDK's own version");
     const uint64_t picked = want_major ? pick_fg_version(want_major) : 0;
     s.fg_version.version = picked ? picked : FFX_FRAMEGENERATION_VERSION;
     // (OcaDim) what was made, said: the row asks for a generation and the log names the one the SDK gave
@@ -321,6 +341,8 @@ bool create_fg(uint32_t w, uint32_t h, VkFormat fmt, bool depth_reversed, float 
 
 bool fg_amd_requested() {
     bool v = false;
+    // (OcaDim) RX_VK_FG_AMD_FORCE=<3|4>: AMD's generation on for this run, with that version, whatever the rows say
+    if (const char* force = getenv("RX_VK_FG_AMD_FORCE")) return atoi(force) >= 3;
     if (env_on(&v)) return v;   // (the switch over the menu, for a run)
     // (the "by" row alone: AMD's makes one frame between each two of the game's, whatever Frame generation's multiplier
     // says (2x to 8x is the renderer's own and DLSS's). Reading the multiplier here too tore its swapchain down when a
@@ -423,7 +445,20 @@ void fg_amd_wait_presents() {
 
 bool fg_amd_frame(VkCommandBuffer cmd, VkSwapchainKHR sc, VkFormat format, VkExtent2D display, uint32_t src_w, uint32_t src_h) {
     State& s = st();
-    if (!s.sc || s.failed || s.gen_failed) return false;
+    // (OcaDim) every reason this frame is not given to AMD's generator, said once: without them a context that is never made
+    // shows only as a counter naming no version. RX_VK_FG_AMD_FORCE=4 is the run that tells them apart
+    static bool told_call, told_off, told_noscene, told_size, told_big;
+    if (!told_call)
+        told_call = true,
+        logf("vk: AMD FG: fg_amd_frame called: picture %ux%u, window %ux%u, format %d", src_w, src_h, display.width,
+             display.height, (int)format);
+    if (!s.sc || s.failed || s.gen_failed) {
+        if (!told_off)
+            told_off = true,
+            logf("vk: AMD FG: fg_amd_frame: not this frame (swapchain %s, swapchain refused %d, generation refused %d)",
+                 s.sc ? "yes" : "no", (int)s.failed, (int)s.gen_failed);
+        return false;
+    }
     TemporalFgInputs in{};
     const bool have = temporal_fg_take(&in);
     // (the context's largest render size: the game's picture (the scene never larger than it) and the window)
@@ -431,7 +466,13 @@ bool fg_amd_frame(VkCommandBuffer cmd, VkSwapchainKHR sc, VkFormat format, VkExt
     const uint32_t max_w = pic_w > display.width ? pic_w : display.width;
     const uint32_t max_h = pic_h > display.height ? pic_h : display.height;
     if (!s.fg) {
-        if (!have) return false;   // (no scene this frame: nothing to configure, no context made for nothing)
+        if (!have) {   // (no scene this frame: nothing to configure, no context made for nothing)
+            if (!told_noscene)
+                told_noscene = true,
+                logf("vk: AMD FG: fg_amd_frame: no depth and motion published yet, so no context is made (the chain has "
+                     "not run an upscaler this run; temporal_fg_publish in vk_temporal.cpp)");
+            return false;
+        }
         if (!create_fg(display.width, display.height, format, in.depth_reversed, in.far_z, max_w, max_h)) return false;
     } else if (max_w > s.fg_desc.maxRenderSize.width || max_h > s.fg_desc.maxRenderSize.height) {
         // (the picture grew: a new Output resolution, or an upscaler share. A context made for the smaller one stops
@@ -444,16 +485,20 @@ bool fg_amd_frame(VkCommandBuffer cmd, VkSwapchainKHR sc, VkFormat format, VkExt
         if (!create_fg(display.width, display.height, format, in.depth_reversed, in.far_z, max_w, max_h)) return false;
     }
     if (s.fg_w != display.width || s.fg_h != display.height || s.fg_format != format) {
-        static bool told;
-        if (!told) told = true, logf("vk: AMD FG: the swapchain changed under the frame generation context: those frames are not generated");
+        if (!told_size)
+            told_size = true,
+            logf("vk: AMD FG: the swapchain changed under the frame generation context (%ux%u format %d, context %ux%u format "
+                 "%d): those frames are not generated", display.width, display.height, (int)format, s.fg_w, s.fg_h,
+                 (int)s.fg_format);
         return false;
     }
     // (the context's largest render size: a scene larger than it is not generated from, as the reference does)
     bool use = have;
     if (use && (in.width > s.fg_desc.maxRenderSize.width || in.height > s.fg_desc.maxRenderSize.height)) {
-        static bool told;
-        if (!told) told = true, logf("vk: AMD FG: a %ux%u scene is larger than the context's %ux%u: those frames are not generated",
-                                      in.width, in.height, s.fg_desc.maxRenderSize.width, s.fg_desc.maxRenderSize.height);
+        if (!told_big)
+            told_big = true,
+            logf("vk: AMD FG: a %ux%u scene is larger than the context's %ux%u: those frames are not generated", in.width,
+                 in.height, s.fg_desc.maxRenderSize.width, s.fg_desc.maxRenderSize.height);
         use = false;
     }
     // (the menu is drawn into the same picture: generated, it would warp. Its own frames are shown as they are)
@@ -534,10 +579,13 @@ VkResult fg_amd_get_images(VkSwapchainKHR sc, uint32_t* count, VkImage* images) 
     return s.fn.pOutGetSwapchainImagesKHR(dev.device, sc, count, images);
 }
 
-VkResult fg_amd_acquire(VkSwapchainKHR sc, uint64_t timeout, VkSemaphore semaphore, uint32_t* index) {
+VkResult fg_amd_acquire(VkSwapchainKHR sc, uint64_t timeout, VkFence fence, uint32_t* index) {
     State& s = st();
     if (!s.sc) return VK_ERROR_FEATURE_NOT_PRESENT;
-    return s.fn.pOutAcquireNextImageKHR(dev.device, sc, timeout, semaphore, VK_NULL_HANDLE, index);
+    // (OcaDim) the fence, as the engine's plain acquire signals it, and no semaphore: image_free waits on that fence before
+    // the frame's copy goes into the image. A semaphore there (the merge's first try) was never waited on, so image_free
+    // timed out every present, the image stayed held, and the window showed nothing
+    return s.fn.pOutAcquireNextImageKHR(dev.device, sc, timeout, VK_NULL_HANDLE, fence, index);
 }
 
 VkResult fg_amd_present(const VkPresentInfoKHR* present) {
@@ -569,7 +617,7 @@ VkResult fg_amd_create_swapchain(const VkSwapchainCreateInfoKHR&, VkSwapchainKHR
 void fg_amd_wait_presents() {}
 void fg_amd_surface_lost() {}
 VkResult fg_amd_get_images(VkSwapchainKHR, uint32_t*, VkImage*) { return VK_ERROR_FEATURE_NOT_PRESENT; }
-VkResult fg_amd_acquire(VkSwapchainKHR, uint64_t, VkSemaphore, uint32_t*) { return VK_ERROR_FEATURE_NOT_PRESENT; }
+VkResult fg_amd_acquire(VkSwapchainKHR, uint64_t, VkFence, uint32_t*) { return VK_ERROR_FEATURE_NOT_PRESENT; }
 VkResult fg_amd_present(const VkPresentInfoKHR*) { return VK_ERROR_FEATURE_NOT_PRESENT; }
 bool fg_amd_frame(VkCommandBuffer, VkSwapchainKHR, VkFormat, VkExtent2D, uint32_t, uint32_t) { return false; }
 

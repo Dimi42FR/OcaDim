@@ -43,7 +43,9 @@ void fg_amd_wait_presents();
 void fg_amd_surface_lost();
 
 VkResult fg_amd_get_images(VkSwapchainKHR sc, uint32_t* count, VkImage* images);
-VkResult fg_amd_acquire(VkSwapchainKHR sc, uint64_t timeout, VkSemaphore semaphore, uint32_t* index);
+/// (OcaDim) its acquire takes the engine's acquire fence, as the plain swapchain's does: image_free waits on that fence
+/// before the frame's copy is recorded into the image, so a semaphore there left the image held and nothing was ever shown
+VkResult fg_amd_acquire(VkSwapchainKHR sc, uint64_t timeout, VkFence fence, uint32_t* index);
 VkResult fg_amd_present(const VkPresentInfoKHR* present);
 
 /// (P2) One game frame's frame generation: the frame's command buffer gets AMD's preparation (depth, motion, camera),

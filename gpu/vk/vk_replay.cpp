@@ -5825,12 +5825,14 @@ void present_image(VkImage src, uint32_t sw, uint32_t sh, const int crop[4], VkI
 #endif
     if (held_image.held && held_image.generation != dev.swapchain_generation) held_image_drop();   // (its swapchain is gone)
     const bool was_held = held_image.held;
+    // (OcaDim) AMD's swapchain acquires with this engine's acquire fence, as the plain one does: image_free below waits on
+    // it, and a semaphore of its own was never waited on, so every present held its image and nothing was shown
     if (!was_held && !acquire_fence_ready()) return;   // (no fence to acquire with: the frame is not shown)
     if (was_held) index = held_image.index;   // (acquired at an earlier present, not free then: no other acquire meanwhile)
     VkResult res = VK_SUCCESS;
     // (OcaDim, RX_VK_FG_AMD) AMD's frame generation swapchain acquires through its own function: the handle it handed back
     // is not the Vulkan device's
-    if (fg_amd_active()) res = fg_amd_acquire(dev.swapchain, acquire_timeout, VK_NULL_HANDLE, &index);
+    if (fg_amd_active()) res = fg_amd_acquire(dev.swapchain, acquire_timeout, acquire_fence, &index);
     else if (!was_held) res = vkAcquireNextImageKHR(dev.device, dev.swapchain, acquire_timeout, VK_NULL_HANDLE, acquire_fence, &index);
     if (res == VK_ERROR_DEVICE_LOST) device_lost();
     if (acquire_t0) fps_wait(fps_stats::kPace, fps_clock() - acquire_t0);
@@ -5971,6 +5973,12 @@ void present_image(VkImage src, uint32_t sw, uint32_t sh, const int crop[4], VkI
     }
     menu_record(f.cmd, index, dev.swap_extent.width, dev.swap_extent.height);   // (longshot) Dear ImGui's overlays, over all of it
     menu_rumble_tick();   // (longshot: the Rumble strength row's own rumble, vk_menu.cpp)
+    // (OcaDim, RX_VK_FG_AMD) this frame's inputs for AMD's frame generation: the preparation in this frame's commands, and
+    // the configuration its present's callback uses to generate between it and the one before. Without this call the
+    // window's swapchain is AMD's and nothing is ever handed to its generator: a black window
+    if (fg_amd_active())
+        fg_amd_frame(f.cmd, dev.swapchain, dev.swap_format, dev.swap_extent, src ? sw : dev.swap_extent.width,
+                     src ? sh : dev.swap_extent.height);
     image_barrier(f.cmd, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
     if (vkEndCommandBuffer(f.cmd) == VK_ERROR_DEVICE_LOST) device_lost();
     // (no wait: the image was free before the copy was recorded, image_free above. Not on the timeline either: one queue runs
@@ -6038,7 +6046,9 @@ static bool present_out(uint32_t index, std::unique_lock<std::mutex>& qk) {
     VkResult res;
     VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
     pi.pNext = reflex_present_id(nullptr);   // (NVIDIA Reflex: the frame's present id, and its present's markers)
-    if (present_copy_done && !pi.pNext && present_thread_on()) {   // (RX_VK_PRESENT_THREAD: below)
+    // (OcaDim) never handed to the presenter thread while AMD's swapchain is the window's: that thread presents on its own
+    // queue with this engine's swapchain, and AMD's would never be shown (a black window, then the game exiting)
+    if (present_copy_done && !pi.pNext && present_thread_on() && !fg_amd_active()) {   // (RX_VK_PRESENT_THREAD: below)
         antilag_present();   // (AMD Anti-Lag 2: the frame's present stage)
         qk.unlock();
         present_hand_off(index, present_copy_done);
