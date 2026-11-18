@@ -135,6 +135,7 @@ struct Options {
     int microphone_gain = 100; // software capture gain, 0..400%; leaves the system's input volume alone
     int skip_title = 0;   // (longshot) start with the most recent save, pressing through the title and its file list (host/oot_autoload.c); read at the start
     int mem_guard = 0;    // (OcaDim) the memory guard: 0 off, 1 on (vk_menu.cpp guard_check)
+    int drs = 0;          // (OcaDim) dynamic resolution: 0 off, 1 60 fps, 2 120, 3 144 (vk_menu.cpp drs_tick)
 };
 extern Options opts;
 constexpr int kAutoPreset = 6;   // (the Quality preset Auto (this PC): menu_auto_for_gpu, auto_settings.h)

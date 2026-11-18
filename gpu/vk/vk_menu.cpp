@@ -175,6 +175,10 @@ const char* tx_nits(int v) {
     snprintf(b, sizeof b, "%d nits", v);
     return b;
 }
+const char* tx_drs(int v) {
+    static const char* const t[] = {"Désactivée", "60 images/s", "120 images/s", "144 images/s"};
+    return t[v < 0 ? 0 : v > 3 ? 3 : v];
+}
 const char* tx_fps_cap(int v) {
     if (v == -1) return "30";
     static const char* const t[] = {"60 (the console's)", "90", "120", "144", "165", "240", "Uncapped"};
@@ -1567,6 +1571,11 @@ const char* hn_guard(int, int k) {
     if (k) return nullptr;   // (measure_help asks k = 0, 1, ... until nullptr: one line, then nothing)
     return "Au-delà de 90 % de RAM ou de mémoire vidéo, la 3D baisse d'un cran et le même appui annule ce changement.";
 }
+const char* hn_drs(int, int k) {
+    if (k) return nullptr;
+    return "La 3D suit un temps d'image cible : elle baisse d'un palier quand les images sont manquées, remonte quand il y a "
+           "de la marge. Jamais au-dessus de la résolution choisie, et celle-ci revient dès que la ligne est sur Désactivée.";
+}
 Row rows[] = {
     // Graphics, in sections: a heading row is a section's title (draw_options draws it, the selection steps over it). The
     // Quality preset first, as it sets rows in every section. (Reflex, Anti-Lag 2, the Upscaler and the DLSS model only where
@@ -1913,6 +1922,11 @@ Row rows[] = {
      "Quand la mémoire vidéo ou la RAM passe 90 %, baisse la résolution de la 3D d'un cran et le dit ici, sans redémarrage. "
      "Entrée annule ce changement ; sans changement à annuler, elle active ou désactive le garde-fou.",
      hn_guard, false, true},
+    {TAB_OCADIM, "Résolution dynamique", &opts.drs, 0, 3, 1, tx_drs,   // (OcaDim: the 3D held to a frame time)
+     "Baisse la résolution de la 3D quand les images sont manquées, la remonte quand il y a de la marge : l'upscaler remonte "
+     "l'image, le HUD reste net. Paliers de l'upscaler, un changement toutes les 2 s au plus, jamais au-dessus de la "
+     "résolution choisie dans Graphismes, et celle-ci revient dès que la ligne est sur Désactivée.",
+     hn_drs, false, true},
     {TAB_DEBUG, "Robust buffers", &opts.robust, 0, 2, 1, tx_robust,
      "Bounds-checked buffer reads: a read past a buffer's end is dropped instead of stopping the GPU. Applies after a "
      "restart.", hn_robust, true, true},
@@ -2353,6 +2367,8 @@ const char* ini_key(const Row& r) {
     // (rows renamed since their values were first saved keep their keys: an options file from before still loads)
     if (r.value == &opts.audio_output) return "audio_output";
     if (r.value == &opts.resolution) return "resolution";
+    if (r.value == &opts.mem_guard) return "mem_guard";   // (OcaDim: French names, ASCII keys)
+    if (r.value == &opts.drs) return "drs";
     if (r.value == &opts.fps_cap) return "frame_rate_cap";   // (host/nn_vi.c reads it at the start, then HOS_OPT_FPS_CAP)
     if (r.value == &opts.upscale) return "upscaling";
     if (r.value == &opts.dlss) return "dlss";   // (as opts.dlss and RX_VK_DLSS)
@@ -3637,6 +3653,62 @@ void diag_press() {
         diag = Diag{};   // (Compris, or nothing to apply: the next press looks again)
     }
     menu_refresh = true;
+}
+
+// ---- (OcaDim) Résolution dynamique : la 3D tenue à un temps d'image, sur les paliers de l'upscaler ---------------------------
+int drs_saved = -1, drs_value = 0, drs_top = 0;
+int64_t drs_at = 0, drs_down_at = 0;
+void drs_restore() {
+    if (drs_saved < 0) return;
+    opts.resolution = drs_saved;
+    drs_saved = -1;
+    samplers_changed();
+    menu_refresh = true;
+}
+void drs_set(int v) {
+    opts.resolution = v;
+    samplers_changed();
+    menu_refresh = true;
+}
+void drs_tick(int64_t now) {
+    if (opts.drs == 0 || ur::full_scale(upscaler())) return drs_restore();
+    if (menu_is_open() || startup_on.load(std::memory_order_relaxed)) return;
+    const fps_stats::Summary s = fps_summary(now, fps_stats::kSecond, 0);
+    if (s.frames < 60 || s.avg_ms <= 0) return;   // (the game must really be running)
+    int n = 0;
+    const int* const steps = ur::steps(upscaler(), n);
+    if (drs_saved < 0) {
+        drs_saved = opts.resolution;
+        drs_top = opts.resolution ? opts.resolution : 1;
+        drs_value = drs_top;
+        drs_at = now, drs_down_at = 0;
+        return;
+    }
+    if (now - drs_at < 2 * fps_stats::kSecond) return;   // (a step every 2 s at most)
+    int target = opts.drs == 1 ? 1000 / 60 : opts.drs == 2 ? 1000 / 120 : 1000 / 144;
+    if (const double cap = fps_target_ms(); cap > target) target = (int)cap;
+    int at = -1;
+    for (int i = 1; i < n; i++)
+        if (steps[i] == drs_value) at = i;
+    const bool off_grid = at < 0;
+    if (s.avg_ms > target * 1.08) {
+        for (int i = off_grid ? 1 : at + 1; i < n; i++) {
+            if (off_grid && ur::percent(steps[i]) >= ur::percent(drs_value)) continue;
+            if (ur::percent(steps[i]) < 33) continue;
+            drs_value = steps[i], drs_at = now, drs_down_at = now;
+            drs_set(drs_value);
+            logf("menu: DRS %d%% (target %d ms, %.1f ms)", ur::percent(drs_value), target, s.avg_ms);
+            return;
+        }
+    } else if (!off_grid && s.avg_ms < target * 0.85 && now - drs_down_at > 4 * fps_stats::kSecond) {
+        for (int i = at - 1; i >= 1; i--)
+            if (ur::percent(steps[i]) <= ur::percent(drs_top)) {
+                drs_value = steps[i], drs_at = now;
+                drs_set(drs_value);
+                logf("menu: DRS %d%% (target %d ms, %.1f ms)", ur::percent(drs_value), target, s.avg_ms);
+                return;
+            }
+    }
 }
 
 // ---- (OcaDim) Mode « Petit PC » : les réglages d'une petite carte, en un geste, et le geste inverse --------------------------
@@ -7014,6 +7086,7 @@ void menu_tick() {
         static int64_t texts_next = 0;   // (the lines past the number: four times a second, each over the last half second)
         if (now >= texts_next) texts_next = now + fps_stats::kSecond / 4, fps_texts(now);
     }
+    drs_tick(prof_now());   // (OcaDim: the dynamic resolution, once a present)
 }
 
 /// (longshot) Once a present: the Rumble strength row changed with the menu open, and the new strength is felt at once, a
