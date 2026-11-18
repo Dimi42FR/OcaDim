@@ -1148,8 +1148,10 @@ LIGHT_FLAGS = ["-mllvm", "-opt-disable=" + ",".join(LIGHT_PASSES), "-mllvm", "-o
 
 
 def light_passes_kb():
-    """The largest function (KB of C) a lifted chunk may hold and still compile without the module passes; None: off"""
-    if os.environ.get("LONGSHOT_LIGHT_PASSES", "").strip().lower() in ("0", "false", "off", "no"):
+    """The largest function (KB of C) a lifted chunk may hold and still compile without the module passes; None: off.
+    (OcaDim: off by default. The trade is compile time for code — ~15% of a first build for +3-5% code — and this game's
+    frame is the CPU's: we keep every pass on the lifted code. `LONGSHOT_LIGHT_PASSES=1` turns it on for a faster build.)"""
+    if os.environ.get("LONGSHOT_LIGHT_PASSES", "").strip().lower() not in ("1", "true", "on", "yes"):
         return None
     try:
         kb = max(1, int(os.environ.get("LONGSHOT_LIGHT_PASSES_KB") or 1024))

@@ -7353,6 +7353,7 @@ void fill_replay_table(MkwVkRenderer& t) {
         if (id == 11) return opts.stick_dead_zone;
         if (id == HOS_OPT_WALK_MODE) return opts.walk_mode;
         if (id == HOS_OPT_WALK_SPEED) return opts.walk_speed;
+        if (id == HOS_OPT_RUN_MODE) return opts.run_mode;   // (OcaDim: the Run key's Hold/Toggle)
         if (id == HOS_OPT_CHEAT_HEARTS) return menu_heart_protection();
         if (id == HOS_OPT_CHEAT_FLIGHT) return menu_player_flight();
         if (id == HOS_OPT_CHEAT_ACTION) return menu_take_cheat_action();
@@ -7372,7 +7373,7 @@ void fill_replay_table(MkwVkRenderer& t) {
         if (id == HOS_OPT_PROMPTS) return opts.prompts;
         if (id == HOS_OPT_FOV) return opts.fov;
         if (id == HOS_OPT_TRANSITION_AUTOSAVE) return menu_transition_autosave();
-        if (id == HOS_OPT_SHADOW_RES) return menu_shadow_res();
+        if (id == HOS_OPT_SHADOW_RES) return 0;   // (OcaDim: the game's own 1600, pinned: 2200 and 3072 cost the town 6-7 fps)
         if (id == HOS_OPT_DAMAGE_TAKEN) return menu_damage_taken();
         if (id == HOS_OPT_SKIP_OPENING) return opts.skip_opening;
         if (id == HOS_OPT_FPS_CAP) return opts.fps_cap;

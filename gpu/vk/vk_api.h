@@ -90,6 +90,18 @@ enum { HOS_OPT_MOUSE_INVERT_X = 61 };
    member. 62 to 70, 80, 88 and 90 are taken by open pull requests.) */
 enum { HOS_OPT_HUD_LAYOUT = 71 };
 
+/* (OcaDim) Our own option numbers, and unique: Auto run and Shadow resolution shared 56, Above-60 fixes and Transition
+   autosave shared 59, and one of each pair never got its value.
+   HOS_OPT_AUTO_RUN: the Controls tab's Auto run (host/auto_run.h).
+   HOS_OPT_RUN_MODE: the Controls tab's Run mode, the Walk key's mirror (host/nn_hid.c run_held).
+   HOS_OPT_ABOVE60_FIXES: Above-60 fixes (host/oot_high_fps.c).
+   HOS_OPT_SHADOW_RES: the sun's shadow maps — the row is gone and 0 is always answered: the game's own 1600 pixels a side,
+   where Auto picked 3072 on a 16 GB card and cost Castle Town 6-7 fps (host/oot_shadow.c). */
+enum { HOS_OPT_AUTO_RUN = 62 };
+enum { HOS_OPT_RUN_MODE = 63 };
+enum { HOS_OPT_ABOVE60_FIXES = 64 };
+enum { HOS_OPT_SHADOW_RES = 65 };
+
 /* (longshot) the controls' names (host/nn_hid.c, host/pad_sdl.c, the pad_ and key_ lines of longshot_options.ini):
    the Switch's buttons in nn::hid's bit order, and a gamepad's inputs by position (the bottom face button first:
    A on an Xbox pad, cross on a DualSense). Keep the saved position values when adding inputs. */
@@ -119,7 +131,7 @@ enum { HOS_PROMPTS_LIVE_TEXTURES = 1, HOS_PROMPTS_LIVE_LAYOUTS = 2, HOS_PROMPTS_
    take a gamepad input too, and share it: a note's key can be some other control's key at once, host/nn_hid.c has_pad */
 enum { HOS_KEY_MOVE_UP = HOS_SW_N, HOS_KEY_MOVE_DOWN, HOS_KEY_MOVE_LEFT, HOS_KEY_MOVE_RIGHT, HOS_KEY_CAM_UP,
        HOS_KEY_CAM_DOWN, HOS_KEY_CAM_LEFT, HOS_KEY_CAM_RIGHT, HOS_KEY_OC_NOTE_L, HOS_KEY_OC_NOTE_R,
-       HOS_KEY_OC_NOTE_A, HOS_KEY_OC_NOTE_Y, HOS_KEY_OC_NOTE_X, HOS_KEY_WALK, HOS_KEY_N };
+       HOS_KEY_OC_NOTE_A, HOS_KEY_OC_NOTE_Y, HOS_KEY_OC_NOTE_X, HOS_KEY_WALK, HOS_KEY_RUN, HOS_KEY_N };
 
 /* (longshot) the mouse over the window while it is free (not captured): the Insert menu's (host/display.c,
    host/posix/display_sdl.c). x and y: the cursor in the window's pixels, of a window width x height pixels (the

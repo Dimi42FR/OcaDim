@@ -6031,8 +6031,8 @@ bool wb_diff_on() {
     // it). RX_VK_WB_DIFF=0: off
     // (integrated GPUs too: an Ally X's hard reboots stopped with v2.0.8 and came back with v2.0.9's off, issue 997: the whole copies
     // are long submissions there. Its shadows are the system's RAM on them, so at most 512 MB: shadow_room)
-    static const bool on = !getenv("RX_VK_WB_DIFF") || atoi(getenv("RX_VK_WB_DIFF")) != 0;
-    return on;
+    static const int env = getenv("RX_VK_WB_DIFF") ? atoi(getenv("RX_VK_WB_DIFF")) : -1;
+    return env >= 0 ? env != 0 : menu_wb_diff() != 0;   // (OcaDim: the Debug row, unless the switch holds it)
 }
 void shadow_free(Pool& p) {   // (pools_mu held: destroyed once the submissions so far are done)
     if (!p.shadow) return;

@@ -747,7 +747,7 @@ uint32_t bc_layers() {
 bool bc7_enabled() {
     static const bool on = [] {
         const char* e = getenv("RX_VK_ASTC_BC7");
-        return e && atoi(e) != 0;
+        return !e || atoi(e) != 0;   // (OcaDim: on by default — BC3 lost the sky's and the flags' alpha on an RX 9070 XT)
     }();
     return on && bc7_ok;
 }
