@@ -59,7 +59,6 @@ thread_local RecordingRes* cur=nullptr;
 const uint64_t kStream=1024;
 constexpr VkBufferUsageFlags kStreamUse=VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT|VK_BUFFER_USAGE_STORAGE_BUFFER_BIT|VK_BUFFER_USAGE_TRANSFER_SRC_BIT|VK_BUFFER_USAGE_TRANSFER_DST_BIT|VK_BUFFER_USAGE_INDEX_BUFFER_BIT|VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
 std::atomic<uint64_t> stream_extra{0},stream_grown{0},stream_peak{0},pools_extra{0};
-bool grow_off=false; bool stream_grow_off() { return grow_off; }
 /* BUFFER_TYPES */
 
 /* STREAM */
@@ -70,16 +69,13 @@ VkDescriptorPool make_pool() { return handle<VkDescriptorPool>(); }
 VKAPI_ATTR VkResult VKAPI_CALL vkResetDescriptorPool(VkDevice,VkDescriptorPool,VkDescriptorPoolResetFlags) { return VK_SUCCESS; }
 VKAPI_ATTR void VKAPI_CALL vkDestroyDescriptorPool(VkDevice,VkDescriptorPool,const VkAllocationCallbacks*) {}
 struct Pass {}; Pass& pass() { static Pass p;return p; }
-bool work_since_barrier=false,last_dyn_valid=false,last_desc_valid=false,last_vb_valid=false;
-VkPipeline last_pipeline{};
-struct { bool on=false; } vertex_set,last_ib;
+bool work_since_barrier=false;
+struct CmdBound { void reset() {} };   // (vk_draw.cpp's: what the command buffer has bound, forgotten by a new recording)
+CmdBound& bound() { static CmdBound b; return b; }
 void descriptors_disturbed() {}
 std::unordered_map<int,int>& handle_hits() { static std::unordered_map<int,int> h;return h; }
-struct ViewFast { unsigned long long key = ~0ull; };   // (the texture views' front cache: cleared with handle_hits)
-std::array<ViewFast, 4>& view_fast() { static std::array<ViewFast, 4> v; return v; }
 struct BankCache { uint64_t at=0; };
 std::array<std::array<BankCache,2>,2>& bank_cache() { static std::array<std::array<BankCache,2>,2> b;return b; }
-uint64_t desc_kept_part=0;   // (vk_draw.cpp: build_descriptors' kept stages last one part)
 void make_dummies() {}
 /* BEGIN */
 struct Use { BufferRef ref;std::vector<uint8_t> expected; };
@@ -136,10 +132,10 @@ int main(int argc,char**argv) {
         fail_buffer=false;require(admitted(VK_NULL_HANDLE,in),"same input can retry reservation");return 0;
     }
     evaluate(1);
-    if(mode=="failure" || mode=="growth-off") {
-        cur->used=cur->size;auto before=cur->used;fail_buffer=mode=="failure";grow_off=mode=="growth-off";
+    if(mode=="failure") {
+        cur->used=cur->size;auto before=cur->used;fail_buffer=true;
         require(!upload(2) && cur->used==before,"failed growth preserves current stream and returns empty");
-        fail_buffer=false;grow_off=false;evaluate(3);read_pending();return 0;
+        fail_buffer=false;evaluate(3);read_pending();return 0;
     }
     if(mode=="workers") {
         std::thread a([]{draw_begin_recording(1,handle<VkCommandBuffer>(),2);evaluate(2);});a.join();

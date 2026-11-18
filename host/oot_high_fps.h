@@ -1,4 +1,4 @@
-/* (longshot) Two places in the game that need whole 60 fps frames, under a Frame rate cap above 60, where the frame step is the
+/* (longshot) Places in the game that need whole 60 fps frames, under a Frame rate cap above 60, where the frame step is the
    frame's own time (host/nn_vi.c, hos_frame_seconds_bits: 0.5 at 120 fps). nx2/oot_patches.py hooks them; host/oot_high_fps.c
    holds the state. At a cap of 60 (no frame time given: timed 0) both return what the game computed, so nothing changes.
 
@@ -13,6 +13,18 @@
    game has them, and clear the remainder.
    (After zortos293/Lichii PR #1289 by auz466, GPL-3.0: the same gate as a code patch for the emulator.)
 
+   The music manager (game::Bgm, its update f_83373400) runs inside that job, so at 60 Hz too, but it reads the frame step and
+   the frame's seconds from the game's time object itself (+16 and +24), not from phase 0: held to 60 Hz and handed the
+   frame's own time, its clock ran at 60 / fps of the real one (0.56 measured at 120 fps; its timers, fades and stop delays, its
+   rest counter and the time-of-day property at half speed at 120, a quarter at 240). Its loads go through sound_step and
+   sound_seconds: while the gate holds the job, a whole step and that step's seconds (the frame's seconds over its step).
+   It also reads a byte of change flags the battle manager sets for one game frame ([[0x84c9dda0]]+0x4898: bit 5 the battle
+   music's name changed, bit 1 its distance volume, bits 2 and 6 two more, 6 running a count down) and syncs a property for each
+   bit set. Held to 60 Hz it saw only the frames it ran: at 120 fps the end of a fight was lost half the time, and the battle
+   music played on until the next fight or a reload (or stayed at a lower volume). On a frame the gate holds the job, it ORs
+   the byte, as the update would have read it then, into a latch (host/oot_high_fps.c); the update's next run reads its flags
+   with them. Two settings of one bit within one held stretch are handled once.
+
    The physics world's solver steps: the game sets them each update to (int)(frame step * the steps of a 60 fps frame + 0.001)
    (f_838ceb80 and f_838cfc10, into the solver's +712; 8 a 60 fps frame in the places seen). A step under 1 cuts that short,
    and as the measured step wanders around its mean the count changes from frame to frame (8 x 0.49 is 3, 8 x 0.5 is 4 at 120
@@ -21,33 +33,19 @@
    never covers more time than at 60 fps, give or take 10% (the frame time's jitter, so a steady rate keeps a steady count),
    and it is at least 1 and never under the game's. A step of 1 or more (a frame slower than 60 fps) keeps the game's count.
 
-   Three more places, as NX2navi found and fixed them for its build (its recomp/patches-v111.txt, the sets ofollow, owater and
-   orecord: public domain / MIT), here as hooks in the lifted C:
-
-   Floors that carry a character: the character controller's three follow-surface updates (f_8015d490, f_80159dc0,
-   f_838baa40) add the velocity of what the character stands on to its move, but keep only a tenth of it when the physics'
-   inverse step (one over the frame's seconds times the time scale) is over 100.0. At the console's 60 and 30 fps that is a
-   slow motion under 0.6 of the game's speed; with the frames' own time as the step it is every update above 100 fps, and
-   Link slides off a moving platform that carries him at 60. The compare takes 100 / (the frame's seconds x 60) while a frame
-   is shorter than a 60 fps one, so the cut comes where it came at 60 fps; 100 otherwise.
-
-   The fixed steps of the physics' height-field surfaces: the two water managers (f_83895f20, f_838a2660) simulate in steps of
-   1/60 s. Each update divides its seconds by 1/60 and cuts the quotient to whole steps, dropping the fraction: every update
-   shorter than 1/60 s ran none, so above 60 fps those surfaces stood still whatever pushed into them. The quotient becomes the
-   whole steps in it plus a remainder kept for the object (oot_sim_steps), as a float the game's own cut and clamp then take:
-   60 steps a second at any rate. (The interactive floors' own such update, f_80652cb0, the Deku Tree's ground webs, is
-   patch_whole_frames': host/frame_whole.h keeps its fraction in the same way, before the game's 0..3 clamp.)
-
-   The ocarina recorder's clock: the ocarina manager adds (unsigned)frame step to the length of the current note or rest
-   (in 60 fps frames) at four places (f_832b2690, f_832b32b0, twice in f_832b6840). Cut to 0 above 60 fps, the clock stood
-   still: a recorded song lost its rests and the clock's limits never came. One remainder for the four (oot_record_frames):
-   the clock counts 60 a second at any rate. (Those four adds are patch_whole_frames' here too, so this helper has no site in
-   this tree yet: the same remainder, kept per counter address.) */
+   A horse's jump (f_82c59eb0, the horse's jump state machine, s10 its step): while a horse gets ready to jump an obstacle (its
+   JumpReady animation), the state machine sets each frame the blend frames of the move into that animation (an animation
+   variable, here 16), so the blend ends at takeoff. With a step under 1 it takes another branch: last frame's blend frames plus
+   the step (a step under 1 is slow motion at 60 fps). Above 60 fps every step is under 1, so the blend frames grew by the step
+   each frame (25 at 60 fps, 100 to 1500 above), the blend into the jump hardly started, and Epona galloped through the fence
+   while her body went over it (more often the higher the frame rate; around 60 to 90 fps, only when no frame's step reached
+   1). The step is compared with this frame's own step instead (the game's time object, +0x10: 1 at 60 fps): a step that is
+   the whole frame's is not slow motion, and a step under it still takes the game's branch. At a cap of 60, and on a frame
+   slower than 60 fps, the game's own test decides. */
 #pragma once
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
-#include "frame_whole.h"
 
 typedef struct {
     float part;   /* (the steps added up since the job last ran, under 1) */
@@ -99,6 +97,13 @@ static inline uint32_t oot_sound_step(uint32_t step_bits, int timed) {
     return oot_sound_partial(oot_bits_float(step_bits), timed) ? 0x3f800000u : step_bits;
 }
 
+/* The frame's seconds the music manager reads beside the step: a whole step's while the gate holds the job (with the step: the
+   game's own base, 60 or the half-rate mode's 30, stays in it) */
+static inline uint32_t oot_sound_seconds(uint32_t seconds_bits, uint32_t step_bits, int timed) {
+    const float step = oot_bits_float(step_bits);
+    return oot_sound_partial(step, timed) ? oot_float_bits(oot_bits_float(seconds_bits) / step) : seconds_bits;
+}
+
 /* The solver's steps: game (the game's own count), scaled_bits (frame step * steps a 60 fps frame + 0.001, the float it cut),
    per_frame_bits (the steps of a 60 fps frame, a float) */
 static inline int32_t oot_solver_steps(int32_t game, uint32_t scaled_bits, uint32_t per_frame_bits, int timed) {
@@ -109,33 +114,11 @@ static inline int32_t oot_solver_steps(int32_t game, uint32_t scaled_bits, uint3
     return steps > game ? steps : game;
 }
 
-/* The number the follow-surface updates compare the physics' inverse step with (a float's bits): seconds_bits, the frame's
-   seconds as the step hook has them (host/nn_vi.c hos_frame_seconds_bits; 0: the game's own step) */
-static inline uint32_t oot_floor_cut(uint32_t seconds_bits) {
-    const float frames = oot_bits_float(seconds_bits) * 60.0f;   /* (the frame in 60 fps frames) */
-    if (!seconds_bits || !(frames > 0.0f) || !(frames < 1.0f)) return 0x42c80000u;   /* (100.0, the game's) */
-    return oot_float_bits(100.0f / frames);
-}
-
-/* A height-field surface's fixed steps for this update: quotient_bits, its seconds over 1/60 s (a float's bits). With the frames'
-   own time as the step the whole steps in it plus the object's remainder, as a float; else, and for a quotient that is no
-   count (0, below 0, NaN, huge), the quotient as it is, for the game's own cut. The caller holds the table's lock. */
-static inline uint32_t oot_sim_steps(FrameWhole *w, uint64_t object, uint32_t quotient_bits, int timed) {
-    const float q = oot_bits_float(quotient_bits);
-    if (!timed || !(q > 0.0f) || q >= 2147483648.0f) return quotient_bits;
-    return oot_float_bits((float)frame_whole(w, object, quotient_bits, 1));
-}
-
-/* The frames the ocarina recorder's clock takes for a frame step (a float's bits): as the game cuts it (fcvtzu: toward zero,
-   below 0 and NaN 0), with the fraction carried in *rem while the frames' own time is the step */
-static inline uint32_t oot_record_frames(float *rem, uint32_t step_bits, int timed) {
-    const float step = oot_bits_float(step_bits);
-    if (!timed || !(step > 0.0f) || step >= 2147483648.0f) {
-        *rem = 0.0f;
-        return !(step > 0.0f) ? 0 : step >= 4294967296.0f ? 0xffffffffu : (uint32_t)step;
-    }
-    const float sum = *rem + step;
-    const uint32_t whole = (uint32_t)sum;
-    *rem = sum - (float)whole;
-    return whole;
+/* A horse's jump: 1 when f_82c59eb0's step (step_bits) is under 1 only because the frame is short, so its branch for steps
+   under 1 (slow motion) is skipped; 0 when the game's own test (step < 1) decides. frame_step_bits: this frame's step from the
+   game's time object (0 when it has none). The step is the frame's own when within 0.1% of it */
+static inline int oot_horse_whole_step(uint32_t step_bits, uint32_t frame_step_bits, int timed) {
+    const float step = oot_bits_float(step_bits), frame = oot_bits_float(frame_step_bits);
+    if (!timed || !(frame > 0.0f) || !(frame < 1.0f) || !(step > 0.0f)) return 0;
+    return step >= frame * 0.999f;
 }

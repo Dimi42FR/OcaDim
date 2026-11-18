@@ -153,7 +153,7 @@ def main():
     # (said where the settings and the switches are)
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     docs = (ROOT / "docs" / "development.md").read_text(encoding="utf-8")
-    if "| | Threaded rendering | Auto, On, Off" not in readme or "- **Threaded rendering:**" not in readme:
+    if "| | Developer: Threaded rendering | Auto, On, Off" not in readme or "- **Threaded rendering:**" not in readme:
         raise SystemExit("README.md: no Threaded rendering line in the option table, or no paragraph on it")
     if "threaded::kAutoEnabled" not in docs or "| Threaded rendering (the Insert menu's row" not in docs:
         raise SystemExit("docs/development.md: no row for Threaded rendering, or it does not name the gate")

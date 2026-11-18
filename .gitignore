@@ -39,6 +39,9 @@ __pycache__/
 build-linux/
 *.so
 
+# ---- a checkout's own development builds on Windows (scripts/dev_build.py) ----
+build-windows/
+
 # ---- NVIDIA's DLSS SDK (scripts/ngx_sdk.py): NVIDIA's files, never committed ----
 ngx-sdk/
 test-results/
@@ -47,12 +50,7 @@ _deps/
 # ---- a link to <build>/compile_commands.json (nx2/build.py write_compdb), for clangd and clang-tidy ----
 /compile_commands.json
 
-# ---- the OcaDim setup's parcel and dotnet's outputs ----
-setup/dist/
-setup/OcaDimSetup/bin/
-setup/OcaDimSetup/obj/
-# ---- the game a developer installed beside the sources ----
-jeu/
-# ---- python's test cache ----
-pytest_cache/
-.pytest_cache/
+# ---- Visual Studio IDE files ----
+.vs/
+.vscode/
+CppProperties.json

@@ -40,7 +40,7 @@
 #include "../gpu/vk/vk_api.h"   /* (the controls' names: HOS_SW_*, HOS_PAD_*) */
 #include "hos_motion.h"
 #include "hold_toggle.h"
-#include "auto_run.h"   /* (the Insert menu's Auto run) */
+#include "hos_atomic_file.h"   /* (the sensitivity is written whole or not at all) */
 #ifndef LONGSHOT_ENV_H   /* (env_on: the switches' one rule) */
 #include "../gpu/vk/compat/longshot_env.h"
 #endif
@@ -68,8 +68,9 @@ extern const char *hos_user_dir;
 static void mouse_sens_save(void) {
     char path[512];
     snprintf(path, sizeof path, "%s/mouse_sens.txt", hos_user_dir ? hos_user_dir : "user");
-    FILE *f = fopen(path, "w");
-    if (f) { fprintf(f, "%.3f\n", hos_mouse_sens); fclose(f); }
+    char text[32];
+    const int n = snprintf(text, sizeof text, "%.3f\n", hos_mouse_sens);
+    if (n > 0) hos_atomic_write(path, text, (size_t)n);
 }
 
 /* The Insert menu keeps the sensitivity (its Mouse sensitivity row, option 7, in percent), read with each read; - and =
@@ -521,7 +522,7 @@ static void stick_max(int32_t stick[4], const int32_t v[4]) {
 static const char *const bind_names[HOS_KEY_N] = {"a", "b", "x", "y", "ls", "rs", "l", "r", "zl", "zr", "plus",
                                                   "minus", "left", "up", "right", "down", "move_up", "move_down",
                                                   "move_left", "move_right", "cam_up", "cam_down", "cam_left",
-                                                  "cam_right", "note_l", "note_r", "note_a", "note_y", "note_x", "walk", "run"};
+                                                  "cam_right", "note_l", "note_r", "note_a", "note_y", "note_x", "walk"};
 static const signed char pad_default[HOS_SW_N] = {
     HOS_PAD_EAST, HOS_PAD_SOUTH, HOS_PAD_NORTH, HOS_PAD_WEST, HOS_PAD_LSTICK, HOS_PAD_RSTICK, HOS_PAD_LSHOULDER,
     HOS_PAD_RSHOULDER, HOS_PAD_LTRIGGER, HOS_PAD_RTRIGGER, HOS_PAD_START, HOS_PAD_BACK, HOS_PAD_LEFT, HOS_PAD_UP,
@@ -541,7 +542,7 @@ static int is_mouse_vk(int vk) { return vk == VK_LBUTTON || vk == VK_RBUTTON || 
 static const unsigned char key_default[HOS_KEY_N][2] = {
     {'E'}, {VK_SHIFT}, {VK_SPACE}, {VK_LBUTTON}, {VK_CONTROL}, {'C'}, {'Q'}, {'R'}, {'Z', VK_RBUTTON}, {'X', 'F'},
     {VK_TAB, VK_RETURN}, {'M'}, {'1'}, {'2'}, {'3'}, {'4'}, {'W'}, {'S'}, {'A'}, {'D'}, {VK_UP, 'I'}, {VK_DOWN, 'K'},
-    {VK_LEFT, 'J'}, {VK_RIGHT, 'L'}, {0}, {0}, {0}, {0}, {0}, {VK_CAPITAL}, {0}};   /* (the five note rows start unset: oc_pad_word; Run starts unbound) */
+    {VK_LEFT, 'J'}, {VK_RIGHT, 'L'}, {0}, {0}, {0}, {0}, {0}, {VK_CAPITAL}};   /* (the five note rows start unset: oc_pad_word) */
 static volatile LONG toggle_reset;
 static HoldToggle toggles;
 void hos_input_clear_toggles(void) { InterlockedExchange(&toggle_reset, 1); }
@@ -1002,22 +1003,6 @@ static int walk_held(int down, int readable, int toggle) {
     was_down = down;
     return toggle ? on : down;
 }
-/* (OcaDim) Running on demand, the Walk key's mirror: while the Run control's key is held (unbound unless the Controls page
-   binds it), or with the Controls tab's Run mode on Toggle from one press to the next, the left stick goes to its edge on
-   the axes it is pushed on (a diagonal by its length), where the game runs him — for a stick that no longer reaches its
-   edge, and for a run button beside a walk. down: the key now; readable as walk_held's; the toggled state outlives a menu
-   (the caller's `behind` call keeps it). Returns whether Link runs now */
-static int run_held(int down, int readable, int toggle) {
-    static int was_down = 1, on;
-    if (!toggle) on = 0;
-    if (!readable) {
-        was_down = 1;
-        return toggle && on;
-    }
-    if (toggle && down && !was_down) on = !on, hos_log("hid: running %s (Run mode Toggle)", on ? "on" : "off");
-    was_down = down;
-    return toggle ? on : down;
-}
 /* The Walk speed row (HOS_OPT_WALK_SPEED): 15 to 90 percent of the stick's way; anything else (no Vulkan renderer's menu to
    ask) the row's default. Measured in Kokiri Forest: Link walks his slowest (1.03 m/s) at 15% and below, his walk's top
    speed (1.47 m/s) from 45% to 50%; from 55% he speeds up into a jog, at full tilt he runs at 4.5 m/s */
@@ -1141,15 +1126,6 @@ static void read_input(uint64_t *buttons, uint64_t *taps, int32_t stick[4]) {
     const int32_t keys[4] = {move[0], move[1], cx * 32767, cy * 32767};
     stick_max(stick, keys);
     if (keys[0] || keys[1] || keys[2] || keys[3]) player_used();
-    /* (OcaDim) the Run key: the left stick to its edge on the axes it is pushed on, the game running him; Walk wins if both
-       are somehow on) */
-    const int run = run_held(bound_down(HOS_KEY_RUN, captured), !rx_option(1, 0), rx_option(HOS_OPT_RUN_MODE, 0) == 1);
-    if (run && !walk && (stick[0] || stick[1])) {
-        const int32_t full = (stick[0] && stick[1]) ? 23170 : 32767;   /* (its length 1/sqrt(2) on a diagonal, as the keys) */
-        stick[0] = stick[0] > 0 ? full : stick[0] < 0 ? -full : 0;
-        stick[1] = stick[1] > 0 ? full : stick[1] < 0 ? -full : 0;
-        player_used();
-    }
     /* (longshot, mouse_native.c) the keys and the pads are the right stick too: while they turn the camera, its angles are
        the native mouse's new start, so the two do not undo each other */
     hos_mouse_native_stick(stick[2] != 0 || stick[3] != 0);
@@ -1212,19 +1188,6 @@ static void npad_states(Ctx *c) {
                      (uint64_t)(uint16_t)vertical << 32;
             stick[0] = stick[1] = 0;
             buttons &= ~(climb | (1ULL << B_L));
-        }
-        /* (longshot) Auto run (Controls; host/auto_run.h): A (the sprint) held long enough while moving and then let go
-           stays held for the game while the stick is pushed and Link is the player's to move. After the flight and the
-           free camera, which take the stick (none left: nothing kept). The ocarina's note wait (hos_oc_wait 1: A is a
-           note there, oc_pad_word) ends it too, so a kept A is never heard as a held note */
-        {
-            int hos_oot_player_free(void);
-            static AutoRun auto_run;
-            static int logged_lock;
-            const int on = rx_option(HOS_OPT_AUTO_RUN, 0) != 0;
-            buttons = hos_auto_run(&auto_run, buttons, stick[0], stick[1], on,
-                                   !menu_open && hos_oc_wait != 1 && hos_oot_player_free(), hos_now_ns());
-            if (auto_run.locked && !logged_lock) logged_lock = 1, hos_log("hid: auto run: A kept held for the sprint");
         }
         __atomic_store_n(&flight_input, flight, __ATOMIC_RELAXED);
         __atomic_store_n(&move_stick_held, abs(stick[0]) > 4096 || abs(stick[1]) > 4096, __ATOMIC_RELAXED);

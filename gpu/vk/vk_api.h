@@ -14,7 +14,14 @@
 extern "C" {
 #endif
 
-#define MKWVK_API_VERSION 24
+#define MKWVK_API_VERSION 33
+enum { HOS_MONITOR_CURRENT = 1, HOS_MONITOR_PRIMARY = 2 };
+typedef struct MkwVkMonitor {
+    char id[512];             /* opaque persistent preference; never a runtime handle or list index */
+    char name[256];           /* UTF-8 label, may collide: the UI also shows dimensions */
+    int width, height;        /* desktop pixels, not DPI-scaled window coordinates */
+    int flags;                /* HOS_MONITOR_* */
+} MkwVkMonitor;
 enum { HOS_OPT_CHEAT_HEARTS = 32, HOS_OPT_CHEAT_FLIGHT, HOS_OPT_CHEAT_ACTION, HOS_OPT_CHEAT_CAMERA, HOS_OPT_CHEAT_SPEED };
 /* (longshot) the Gameplay tab's Text size (host/oot_text_size.c): 0 the game's, 1 110%, 2 125%, 3 150%, 4 175% */
 enum { HOS_OPT_TEXT_SIZE = 10 };
@@ -31,7 +38,6 @@ enum { HOS_OPT_VOLUME = 27, HOS_OPT_MUTE_BACKGROUND };
    while its key is held, 1 one press walks and the next runs again; how far the movement keys then tilt the left stick, in
    percent of the way (15 to 90) */
 enum { HOS_OPT_WALK_MODE = 49, HOS_OPT_WALK_SPEED };
-enum { HOS_OPT_RUN_MODE = 63 };
 /* (longshot) the Insert menu's HDR set to Native (host/nn_vi.c QueryDisplayHdrStatus and QueryDisplayHdrPaperWhite): whether
    the game is told its display is HDR10 (the swapchain is one), and the peak and paper white it is told, in nits */
 /* (HOS_OPT_DISCORD, 43: the Insert menu's Discord status row, host/discord_rpc.c: 1 on; HOS_OPT_SKIP_TITLE, 44: its Skip
@@ -64,27 +70,25 @@ enum { HOS_OPT_HOLD_TOGGLE = 54 };
 enum { HOS_OPT_AUDIO_OUTPUT = 57 };
 /* Damage taken: 0 Half, 1 Normal (unchanged), 2 Double, 3 Quadruple. */
 enum { HOS_OPT_DAMAGE_TAKEN = 55 };
-/* The Auto run row (Controls): 0 Off, 1 On, A (the sprint) kept held after it is let go (host/auto_run.h,
-   host/nn_hid.c). */
-enum { HOS_OPT_AUTO_RUN = 62 };   /* (OcaDim: 56 was Shadow resolution's too: one of the two never got its value) */
-/* (HOS_OPT_SHADOW_RES, 65: the sun's shadow maps, host/oot_shadow.c: the row is gone and 0 is always answered, the game's
-   own 1600 pixels a side. Auto picked 3072 on a 16 GB card and cost Castle Town 6-7 fps (a510b3cc). 65 because 56 was Auto
-   run's too, and one of the two never got its value.) */
-enum { HOS_OPT_SHADOW_RES = 65 };
+/* (HOS_OPT_SHADOW_RES, 56: Graphics' Shadow resolution, host/oot_shadow.c: the sun's cascades as drawn, its Auto resolved
+   (gpu/vk/vk_menu.cpp menu_shadow_res), 0 the game's 1600, 1 2200, 2 3072, read each frame. The existing option callback:
+   no new member.) */
+enum { HOS_OPT_SHADOW_RES = 56 };
 /* (HOS_OPT_RENDER_THREAD, 58: whether the render thread runs on this run, 1 or 0, as the renderer resolved it once at the
    start (gpu/vk/vk_replay.cpp async_on: RX_VK_ASYNC=1, or unset and the Insert menu's Threaded rendering On, or its Auto's
    choice). host/nvn_native.c answers the game's present poll at once with it. The existing option callback: no new member.) */
 enum { HOS_OPT_RENDER_THREAD = 58 };
-/* (HOS_OPT_ABOVE60_FIXES, 59: the Insert menu's Above-60 fixes row, host/oot_high_fps.c hos_oot_floor_cut and hos_oot_sim_steps:
-   1 the fixes for frame rates above 60 (the default), 0 the game's own 100.0 cut of a floor's carry and its own count of the
-   height-field surfaces' steps, as before them. Read once. The existing option callback: no new member.) */
-enum { HOS_OPT_ABOVE60_FIXES = 64 };   /* (OcaDim: 59 was Transition autosave's too) */
 enum { HOS_OPT_TRANSITION_AUTOSAVE = 59 };
 /* (HOS_OPT_MOUSE_INVERT_X, 61: Controls' Invert mouse horizontal, 1 on: the mouse's left and right swapped, as option
    8, Invert mouse vertical, swaps its up and down. host/mouse_native.c (the camera's yaw) and host/nn_hid.c (the mouse
    as the right stick) read it by its number, as they read 8. The existing option callback: no new member. 59 is the
    transition autosave's and 60 stays the item wheel's.) */
 enum { HOS_OPT_MOUSE_INVERT_X = 61 };
+/* (HOS_OPT_HUD_LAYOUT, 71: Graphics' HUD layout, host/hos_wide_ui.c reads it at each present by its number: on a screen
+   that is not 16:9, 0 the HUD's corners at the screen's edges, 1 the HUD in the middle 16:9 as before #95 (on a narrower
+   screen fitted to its width, as the menus). HOS_WIDE_UI, when set, stands over it. The existing option callback: no new
+   member. 62 to 70, 80, 88 and 90 are taken by open pull requests.) */
+enum { HOS_OPT_HUD_LAYOUT = 71 };
 
 /* (longshot) the controls' names (host/nn_hid.c, host/pad_sdl.c, the pad_ and key_ lines of longshot_options.ini):
    the Switch's buttons in nn::hid's bit order, and a gamepad's inputs by position (the bottom face button first:
@@ -115,7 +119,7 @@ enum { HOS_PROMPTS_LIVE_TEXTURES = 1, HOS_PROMPTS_LIVE_LAYOUTS = 2, HOS_PROMPTS_
    take a gamepad input too, and share it: a note's key can be some other control's key at once, host/nn_hid.c has_pad */
 enum { HOS_KEY_MOVE_UP = HOS_SW_N, HOS_KEY_MOVE_DOWN, HOS_KEY_MOVE_LEFT, HOS_KEY_MOVE_RIGHT, HOS_KEY_CAM_UP,
        HOS_KEY_CAM_DOWN, HOS_KEY_CAM_LEFT, HOS_KEY_CAM_RIGHT, HOS_KEY_OC_NOTE_L, HOS_KEY_OC_NOTE_R,
-       HOS_KEY_OC_NOTE_A, HOS_KEY_OC_NOTE_Y, HOS_KEY_OC_NOTE_X, HOS_KEY_WALK, HOS_KEY_RUN, HOS_KEY_N };
+       HOS_KEY_OC_NOTE_A, HOS_KEY_OC_NOTE_Y, HOS_KEY_OC_NOTE_X, HOS_KEY_WALK, HOS_KEY_N };
 
 /* (longshot) the mouse over the window while it is free (not captured): the Insert menu's (host/display.c,
    host/posix/display_sdl.c). x and y: the cursor in the window's pixels, of a window width x height pixels (the
@@ -254,6 +258,54 @@ typedef struct MkwVkHost {
     int (*audio_output_info)(int index, char *id, int id_capacity, char *name, int name_capacity);
     void (*audio_output_select)(const char *id);
     int (*audio_output_state)(void);
+    /* Version 25: explicit microphone test; gain 0..400 percent, levels[2] pre/post gain peak permille.
+       Call every menu tick (enabled=0 releases only the test reference). Does not play or save capture.
+       Result: 1 testing, 2 capture open, 4 default fallback, 8 fresh samples, 16 clipping, 32 mic Off. */
+    int (*mic_test)(int enabled, int gain, int *levels);
+    /* (version 26, longshot) the performance summary (gpu/vk/perf_report.cpp), asked about once a second while the launcher's
+       Send performance statistics is ticked: the map Link is in and his age ("Kokiri Forest (child)", as the log's map: line;
+       "" before a save is loaded) into map, and the movies' totals so far (host/nn_video.c): [0] pictures shown, [1] skipped to
+       keep up with the sound, [2] shown late (over 50 ms after the one before), [3] decoding time in ns, [4] decoders that did
+       not start (another one took over). Returns the build's version (LONGSHOT_VERSION).
+       Version 30: and Link's pose, for the one-second samples: pose = {x, y, z} his world position (game units), then the
+       gameplay camera's {yaw, pitch} (radians), exact (perf_report.h sends them as cells and bins). *has_pose is 1 only
+       when they are current: 0 unless perf_tracking(1) was called, and 0 while Link isn't updating (the title, the file
+       select, a load: nothing set in the last second) or camera zero isn't the gameplay view (a cutscene's) */
+    const char *(*perf_info)(char *map, int cap, int64_t movie[5], float pose[5], int *has_pose);
+    /* Version 27 (longshot): the frame trace's main-thread columns (RX_VK_FRAME_TRACE, gpu/vk/vk_replay.cpp): the game's main
+       thread's (sead::MainThread) time so far, in ns: [0] waiting for a virtual core, [1] blocked in a wait or sleep, both
+       counted while fps_timing is on, [2] its CPU time. 0 before the game names that thread */
+    int (*main_thread_times)(int64_t out[3]);
+    /* Version 28 (longshot, issue 1280): a C++ allocation of the renderer's refused for 5 s (its new_handler, gpu/vk/vk_main.cpp
+       new_refused, tried again meanwhile): the host's out-of-memory line and notice, waited for, then the game stops, as for the
+       host's own allocations (host/mkw_glue.c hos_alloc_gave_up). what names it in the log. Does not return */
+    void (*out_of_memory)(const char *what);
+    /* Version 29: named fullscreen output selection. Snapshot metadata is copied; empty ID means the
+       current window's screen. select queues work to the window thread, never moves it here.
+       The saved preference may be unavailable; flags describe the actual current/primary screen. */
+    int (*monitor_count)(void);
+    int (*monitor_info)(int index, struct MkwVkMonitor *out);
+    void (*monitor_select)(const char *id);
+    /* Version 30: the opt-in performance sample is being collected (1, at the first frame with the tick on) or not (0: the
+       tick undone, the exit); the host reads Link's pose only while enabled, and forgets it at 0. */
+    void (*perf_tracking)(int enabled);
+    /* (version 32, longshot) a short rumble on the controllers at the Rumble strength as it is now: the Insert menu's row plays it when
+       it is changed (host/pad_sdl.c) */
+    void (*rumble_test)(void);
+    /* (version 33, longshot) the NFC tags of the player's folder (host/nn_nfp.c), for the Insert menu's NFC tab: how many there
+       are (listing them again), one's name (its file's, without the ending), one held to the reader (index; -1: taken away;
+       returns 0 when its file is not an NFC tag's), and what the reader is doing (bits: 1 the game uses NFC tags, 2 it waits for
+       one now, 4 one is held to it, 8 the game has read it), and the folder */
+    int (*nfc_count)(void);
+    const char *(*nfc_name)(int index);
+    int (*nfc_tap)(int index);
+    int (*nfc_state)(void);
+    const char *(*nfc_dir)(void);
+    /* (version 33) a tag on the Switch 2 Pro Controller's reader copied into that folder (host/nn_nfp.c, host/pad_switch2.c):
+       start 1 begins a scan; returns 0 none, 1 looking for a tag, 2 saved (nfc_scan_name: its file's name), 3 no tag in ten
+       seconds, 4 the tag is not a figure's, 5 no such controller over USB, 6 it could not be read or written */
+    int (*nfc_scan)(int start);
+    const char *(*nfc_scan_name)(void);
 } MkwVkHost;
 
 /* One completed temporal-upscale sample; all zero while inactive. */
@@ -286,7 +338,7 @@ typedef struct MkwVkRenderer {
     void (*nvn_write_texels)(const nvn_tex *t, unsigned level, unsigned layer0, const NVNcopyRegion *r,
                              const uint8_t *src, uint64_t row_pitch, uint64_t image_pitch);
     void (*nvn_invalidate)(uint64_t gpu, uint64_t size);
-    void (*nvn_pool_created)(uint64_t gpu, uint64_t size, uint32_t flags);   /* a memory pool made (non-virtual): imported early; its NVN flags */
+    void (*nvn_pool_created)(uint64_t gpu, uint64_t size);   /* a memory pool made (non-virtual): imported early */
     /* whether the GPU may use guest memory in [lo, hi) through an import (the host keeps such pages committed) */
     int (*guest_imported)(uint64_t lo, uint64_t hi);
     /* virtual pages [gpu, gpu + size) mapped now are about to be unmapped or remapped (the old mapping still in place):
@@ -329,6 +381,10 @@ typedef struct MkwVkRenderer {
        game's thread, before any draw uses it: what the back end kept ready for it can be loaded now (gpu/vk/vk_programs.cpp).
        Its stages' code and control sections are in the game's memory at this call */
     void (*nvn_program_created)(const nvn_prog *p);
+    /* (version 31, longshot) nvn_invalidate when nothing in [gpu, gpu + size) can make it wait: 1, done (the host keeps the
+       game thread's virtual core for it); 0, call nvn_invalidate (with the core given up, as before). Never waits: no lock
+       but a short one of its own (RX_VK_WB_MAX_KB's table), any thread */
+    int (*nvn_invalidate_quick)(uint64_t gpu, uint64_t size);
 } MkwVkRenderer;
 
 /* the DLL's one export: null when Vulkan is not usable (the executable then draws nothing) */

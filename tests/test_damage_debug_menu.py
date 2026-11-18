@@ -30,9 +30,6 @@ def main():
     header = (ROOT / "gpu/vk/vk_menu.h").read_text(encoding="utf-8")
     table = block(menu, "Row rows[] = {")
     entries = re.findall(r'\{TAB_DEBUG,[^{}]*\}', table)
-    # (Frame pacing and Threaded rendering are Debug's for testing: test_threaded_rendering covers them)
-    entries = [e for e in entries if "Frame pacing" not in e and "Threaded rendering" not in e
-           and "Write back diff" not in e and "Upscaler notes cache" not in e]   # (OcaDim's performance switches: not this check's)
     assert len(entries) >= 18
     assert '{TAB_GAMEPLAY, "Damage taken"' not in table
     assert sum('"Damage taken"' in entry for entry in entries) == 1
@@ -128,7 +125,7 @@ int main() {
         const int n = debug_rows(order, &dev, &heading);
         assert(heading >= 0);
         assert(dev == (env || enabled ? (int)std::size(expected) : kDebugGeneralRows));
-        assert(n == dev + 5); // Only the existing Developer rows follow.
+        assert(n == dev + 7); // Only the existing Developer rows follow (Frame pacing and Threaded rendering among them).
         for (int i = 0; i < dev; ++i) {
             const Row& row = rows[tab_row_to_global(TAB_DEBUG, order[i])];
             assert(!std::strcmp(row.name, expected[i]));

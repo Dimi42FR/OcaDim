@@ -30,33 +30,24 @@ def main():
     fn = block(source, "bool ub_gap(")
     read = block(source, "bool ub_read(")
     holds = read.index("ub_gap_holds(")
-    scan = read.index("ub_apply(0, lim,")
+    scan = read.index("for (size_t i = 0; i < lim; i++)")
     if holds > scan:
         raise SystemExit("ub_read walks the updates before checking the gap")
     if "ub_list_epoch.fetch_add" not in block(source, "void ub_prune("):
         raise SystemExit("dropping an update leaves the gap in place")
-    push = block(source, "void ub_push(")
-    if "ub_updates.push_back(" not in push or "ub_list_epoch.fetch_add" not in push:
+    push = source[source.index("ub_updates.push_back(std::move(up));"):source.index("ub_updates.push_back(std::move(up));") + 180]
+    if "ub_list_epoch.fetch_add" not in push:
         raise SystemExit("adding an update leaves the gap in place")
-    if "ub_list_epoch.fetch_add" not in block(source, "void ub_truncate("):
-        raise SystemExit("cutting the list back leaves the gap in place")
-    changes = sum(source.count("ub_updates." + m) for m in ("push_back(", "resize(", "pop_front(", "pop_back(", "clear("))
-    if changes != 3:
-        raise SystemExit("the update list changes outside ub_push, ub_truncate and ub_prune: the gap and ub_buckets miss it")
-    # (ub_gap is the walk of the whole list now, where ub_buckets cannot say: tests/test_ub_index.py checks the lookup)
-    tried = block(source, "bool ub_try_gap(")
-    if "ub_find(" not in tried or "ub_gap(" not in tried:
-        raise SystemExit("ub_try_gap no longer looks the range up, or no longer walks the list where the buckets cannot say")
     fixture = f'''#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
+#include <vector>
 #define CHECK(x) do {{ if (!(x)) {{ std::fprintf(stderr, "FAIL:%d %s\\n", __LINE__, #x); std::exit(1); }} }} while (0)
 {update};
 {fn}
 int main() {{
-    static const uint8_t bytes[10] = {{}};
-    const std::deque<UbUpdate> updates = {{{{0, 100, bytes, 10}}, {{0, 200, bytes, 10}}}};
+    const std::deque<UbUpdate> updates = {{{{0, 100, std::vector<uint8_t>(10)}}, {{0, 200, std::vector<uint8_t>(10)}}}};
     const auto first = updates.cbegin(), last = updates.cend();
     uint64_t lo = 1, hi = 1;
     CHECK(ub_gap(first, last, 150, 4, &lo, &hi));

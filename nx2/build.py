@@ -414,7 +414,8 @@ def HOT_ORDER():
 
 
 HOST_LIBS = ["-lpthread", "-ldl", "-lm"] if LINUX else \
-    ["-lwinhttp", "-luser32", "-lwinmm", "-ladvapi32", "-lole32", "-lshell32", "-lgdi32", "-ldbghelp"]
+    ["-lwinhttp", "-luser32", "-lwinmm", "-ladvapi32", "-lole32", "-lshell32", "-lgdi32", "-ldbghelp",
+     "-lsetupapi", "-lwinusb", "-lhid"]   # (the last three: host/pad_switch2.c, the Switch 2 Pro Controller over USB)
 GPU = os.path.join(kit.HERE, "..", "gpu")
 # FFmpeg (libavcodec's VP8/VP9 decoders, swscale) for nn::codec's video decoders (host/nn_video.c): the static build
 # in the Eglantine clone's package cache
@@ -495,7 +496,7 @@ def depfile_of(obj):
 
 def renderer_deps(blob, roots, obj):
     """The headers under roots that obj's last compile read (its depfile), by name and content; blob, the whole folders', when
-    there is no depfile or it names nothing under them"""
+    there is no depfile or it names nothing under them. The back end's own objects and the host's"""
     try:
         with open(depfile_of(obj), encoding="utf-8", errors="replace") as f:
             paths = depfile_paths(f.read())
@@ -1515,7 +1516,7 @@ def migrate_stamps(gen, obj_dir, fl, deps):
 
 
 PLANNED = {}   # (src, obj) -> the object key plan_jobs worked out, so compile_one does not hash every source again
-DEPFILE_JOBS = {}   # (a back-end object -> the folders' blob, the folders, its other deps: renderer_deps, rekey_depfiles)
+DEPFILE_JOBS = {}   # (a back-end or host object -> the folders' blob, the folders, its other deps: renderer_deps, rekey_depfiles)
 
 
 def rekey_depfiles(jobs):
@@ -1761,31 +1762,35 @@ def main():
     print("object keys: game-code headers %s, flags %s, hot flags %s, lifted code %s (%d files)" % (
         fp(deps), fp(norm(fl)), fp(norm(hot_fl)), code.hexdigest()[:10],
         sum(1 for x in srcs if os.path.basename(x).startswith("code_"))), flush=True)
-    # the runtime: ordinary C at -O2, with its own headers (any host/*.h change rebuilds all of it)
+    # the runtime: ordinary C at -O2. (the dev-loop proposal's A6, the host's half) Each file is compiled with -MD and named by
+    # the headers its depfile says it read under host_roots (renderer_deps, as the back end's own files are), so a host/*.h
+    # edit compiles the files that include it. A file with no depfile yet is named by host_blob: every header under host/, the
+    # lifted headers, and gpu/'s own. (host files include gpu/render/rx.h, rx_nvn.h and gpu/vk/oot_cheat_items.h as well
+    # as the three gpu headers the blob named before, so an edit to one of those kept their old objects.) What a file reads
+    # from elsewhere (FFmpeg, dav1d, the system's) is in extras, as before
     host_fl = target() + CPU + (["-I" + POSIX, "-D_GNU_SOURCE"] if LINUX else []) + \
         ["-I" + HOST, "-I" + rt64, "-I" + gen, "-Wno-everything", "-O2", "-g0", "-mcx16", "-DA64_POLLING"] + WRITE_TRACK
-    host_deps = deps + b"".join(open(os.path.join(HOST, f), "rb").read() for f in sorted(os.listdir(HOST))
-                                if f.endswith(".h"))
-    if LINUX:
-        host_deps += b"".join(open(os.path.join(POSIX, f), "rb").read() for f in sorted(os.listdir(POSIX)) if f.endswith(".h"))
-    host_deps += open(os.path.join(GPU, "vk", "vk_api.h"), "rb").read()   # (the renderer ABI used by host/rx_backend.c)
-    host_deps += open(os.path.join(GPU, "vk", "dlss_math.h"), "rb").read()   # (host/rx_backend.c's DLSS jitter)
-    host_deps += open(os.path.join(GPU, "vk", "compat", "longshot_env.h"), "rb").read()   # (env_on: the switches' one rule)
-    host_deps += ffmpeg_version_key()
+    host_roots = (HOST, gen, rt64, GPU, os.path.join(OPUS, "include"), ZSTD)
+    host_blob = deps + tree_headers(HOST) + tree_headers(GPU, skip=("eden", "sirit", "third_party"))
+    host_extras = ffmpeg_version_key()
     dav1d = dav1d_windows() if host_srcs else None
     dav1d_fl = ["-DLONGSHOT_DAV1D", "-I" + os.path.join(dav1d, "include")] if dav1d else []
     if dav1d:
-        host_deps += open(os.path.join(dav1d, "include", "dav1d", "version.h"), "rb").read()
+        host_extras += open(os.path.join(dav1d, "include", "dav1d", "version.h"), "rb").read()
         print("AV1 movies: dav1d (%s)" % dav1d, flush=True)
     zstd_api = b"".join(open(os.path.join(ZSTD, f), "rb").read() for f in sorted(os.listdir(ZSTD)) if f.endswith(".h"))   # (ZSTD_HOST's)
-    jobs += [(cc, s, os.path.join(obj_dir, "host_" + os.path.basename(s)[:-2] + ".o"),
-              host_fl + ["-I" + os.path.join(OPUS, "include")] +
-              (["-I" + os.path.join(FFMPEG, "include")] if FFMPEG else []) +
-              (FFMPEG_LX[0] if LINUX and FFMPEG_LX else []) +
-              ([stamp_def] if os.path.basename(s) == "hos_main.c" else []) +
-              (["-I" + ZSTD] if os.path.basename(s) in ZSTD_HOST else []) +
-              (dav1d_fl if os.path.basename(s) in ("nn_video.c", "dav1d_av1.c") else []),
-              host_deps + (zstd_api if os.path.basename(s) in ZSTD_HOST else b"")) for s in host_srcs]
+    for s in host_srcs:
+        obj = os.path.join(obj_dir, "host_" + os.path.basename(s)[:-2] + ".o")
+        extras = host_extras + (zstd_api if os.path.basename(s) in ZSTD_HOST else b"")
+        DEPFILE_JOBS[obj] = (host_blob, host_roots, extras)
+        jobs.append((cc, s, obj,
+                     host_fl + ["-MD", "-I" + os.path.join(OPUS, "include")] +
+                     (["-I" + os.path.join(FFMPEG, "include")] if FFMPEG else []) +
+                     (FFMPEG_LX[0] if LINUX and FFMPEG_LX else []) +
+                     ([stamp_def] if os.path.basename(s) == "hos_main.c" else []) +
+                     (["-I" + ZSTD] if os.path.basename(s) in ZSTD_HOST else []) +
+                     (dav1d_fl if os.path.basename(s) in ("nn_video.c", "dav1d_av1.c") else []),
+                     renderer_deps(host_blob, host_roots, obj) + extras))
     # libopus 1.5.2 (third_party/opus, from TOTKPort): nn::codec's hardware Opus decoder (host/nn_codec.c)
     # (longshot: built for the same CPU target as the rest (CPU), so its float code can be vectorized where the target has
     # AVX2: the vendored copy has no x86 intrinsics files of its own)
@@ -1818,11 +1823,9 @@ def main():
     if build_vk:
         cxx = toolchain.need(toolchain.find("clang++"))
         vk = os.path.join(GPU, "vk")
-        # (longshot) the start-up screen's pictures, a header of the build's own each (nx2/logo_rgba.py): its logo,
-        # assets/longshot.png as RGBA bytes, and beside it the backdrop, assets/ocadim-backdrop.png (the player's own artwork,
-        # Dimi42FR) as RGB bytes; both their bytes are part of vk_imgui.cpp's dependencies. The AppImage carries third_party/fonts
-        # and the back end's sources for it: a player's build there once stopped at the fonts (FileNotFoundError:
-        # LibertinusSans-Regular.ttf, 2026-11-10)
+        # (longshot) the start-up screen's logo, assets/longshot.png as RGBA bytes in a header of the build's own (nx2/logo_rgba.py);
+        # its bytes are part of vk_imgui.cpp's dependencies. The AppImage carries third_party/fonts and the back end's sources for
+        # it: a player's build there once stopped at the fonts (FileNotFoundError: LibertinusSans-Regular.ttf, 2026-11-10)
         logo_text = logo_rgba.write(os.path.join(gen_dir, "longshot_logo.h")).encode()
         # (the overlays' bundled fonts, third_party/fonts/libertinus, as a C++ file of the build's own: nx2/ui_fonts.py)
         fonts_cpp = os.path.join(gen_dir, "ui_fonts.cpp")
@@ -1875,9 +1878,6 @@ def main():
         vdeps_roots = (vk, os.path.join(GPU, "render"), os.path.join(GPU, "compat"),
                        os.path.join(GPU, "third_party", "suyu", "video_core", "textures"))
         vdeps = tree_headers(*vdeps_roots)
-        vdeps_roots = (vk, os.path.join(GPU, "render"), os.path.join(GPU, "compat"),
-                       os.path.join(GPU, "third_party", "suyu", "video_core", "textures"))
-        vdeps = tree_headers(*vdeps_roots)
         output_device_deps = open(os.path.join(HOST, "audio_output_devices.h"), "rb").read()
         # (longshot) Dear ImGui (third_party/imgui) draws the overlays over the window's image (gpu/vk/vk_imgui.cpp; vk_menu.cpp
         # draws with it). Its objects see only its own headers; its headers are a dependency of the two files that include them
@@ -1887,7 +1887,7 @@ def main():
                        "-DIMGUI_DISABLE_WIN32_FUNCTIONS", "-DIMGUI_DISABLE_DEMO_WINDOWS", "-DIMGUI_DISABLE_DEBUG_TOOLS"]
         imgui_deps = b"".join(open(os.path.join(d, f), "rb").read() for d in (imgui, os.path.join(imgui, "backends"), zbic)
                               for f in sorted(os.listdir(d)) if f.endswith(".h"))
-        imgui_users = ("vk_imgui.cpp", "vk_menu.cpp")
+        imgui_users = ("vk_imgui.cpp", "vk_menu.cpp", "vk_crash_window.cpp")
         for f in ("imgui.cpp", "imgui_draw.cpp", "imgui_tables.cpp", "imgui_widgets.cpp", "backends/imgui_impl_vulkan.cpp"):
             vk_jobs.append((cxx, os.path.join(imgui, *f.split("/")),
                             os.path.join(obj_dir, "vk_imgui_" + os.path.basename(f)[:-4] + ".o"), tp_vflags + imgui_flags,
@@ -2065,7 +2065,7 @@ def main():
         print("the third-party objects: %d in %s (%d MB), stamp %s" % (
             len(made), a.third_party_objects, sum(e["size"] for e in made.values()) >> 20, tp_stamp[:16]), flush=True)
         return 0
-    rekey_depfiles(vk_jobs)
+    rekey_depfiles(jobs)   # (the back end's own objects and the host's: jobs holds vk_jobs too)
     if OBJ_STORE:   # (after rekey_depfiles: the objects it caches by their depfile's key go to the store too)
         print("object store: %d new objects to it" % object_store.share(OBJ_CACHE, OBJ_STORE), flush=True)
     if a.standalone and not vk_only and not cut:   # (a cut chunk's objects are not the whole chunk's: no kept list)

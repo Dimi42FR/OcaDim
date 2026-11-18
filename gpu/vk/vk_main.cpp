@@ -4,12 +4,15 @@
 #include "vk_paths.h"
 #include "vk_loader.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <mutex>
+#include <new>
 #include <string>
 #include <thread>
 #include <vector>
@@ -21,23 +24,31 @@
 #include "vk_draw.h"
 #include "vk_framegen.h"
 #include "vk_internal.h"
+#include "vk_new.h"
 #include "presenter_queue.h"
 static_assert(mkwvk::kQueueGraphics == VK_QUEUE_GRAPHICS_BIT && mkwvk::kQueueCompute == VK_QUEUE_COMPUTE_BIT);
 #include "gpu_choice.h"
 #include "vk_menu.h"
+#include "vk_bug_report.h"
 #include "auto_settings.h"
 #include "vk_dlss.h"
-#include "vk_fg_amd.h"
 #include "vk_fsr4.h"
 #include "vk_xess.h"
 #include "vk_reflex.h"
 #include "vk_antilag.h"
+#include "vk_gpu_clock.h"
 #include "vk_progress.h"
 #include "vk_programs.h"
 #include "mesh_mode.h"
 #include "crash_markers.h"   // (mkwvk_close_asked: a close is not a crash)
+#include "vk_fps.h"
+#include "memory_priority.h"
 #ifndef LONGSHOT_ENV_H   // (env_on: the switches' one rule)
 #include "longshot_env.h"
+#endif
+#include "switches.h"   // (the switches' table: what the run has set, said at the start)
+#ifndef _WIN32
+extern char** environ;
 #endif
 
 namespace vkx {
@@ -53,6 +64,10 @@ static PFN_vkGetInstanceProcAddr get_instance_proc;
 
 bool load_global() {
 #ifdef _WIN32   // (longshot: the loader from System32 only, not from the current folder or PATH)
+    // (longshot) The drivers are the loader's to find: it reads the ones in use from the display adapters. Nothing here
+    // sets VK_ICD_FILENAMES or VK_DRIVER_FILES, which make the loader take the named files and no other driver: DriverStore
+    // keeps the packages of drivers no longer in use, and one of those named listed no GPU at all (Longshot #821).
+    // pick_device chooses the GPU; RX_VK_DEVICE or the GPU row choose another
     HMODULE m = LoadLibraryExA("vulkan-1.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
 #else
     HMODULE m = LoadLibraryA("vulkan-1.dll");   // (linux: libvulkan.so.1, host/posix/win32_posix.c)
@@ -144,6 +159,51 @@ void logf_at(LogLevel level, const char* fmt, ...) {
     va_end(a);
 }
 
+// (longshot, issue 1280) The renderer's C++ allocations at Windows' commit limit (RAM plus the page file full). operator new got
+// nothing from malloc and threw std::bad_alloc; nothing caught it (often nothing could: the unwind itself failed on its way up,
+// 0xc00000ff), and the game ended with exception 0x20474343, "An unexpected error", with no wait and no out-of-memory notice.
+// The host's own allocations wait there since issue 333 (host/mkw_glue.c hos_alloc_failed); this is the same for the renderer's.
+// new_refused is the renderer's new_handler (mkwvk_init): operator new calls it each time malloc refuses and tries again when it
+// returns. It returns after 50 ms, for up to 5 s, while the textures give commit back; then the host's out-of-memory line and
+// notice, and the game stops (MkwVkHost out_of_memory, version 28; an older host: thrown, as before). A refusal more than
+// kNewApartMs after this thread's last try is a new one, with a whole wait of its own. In a NewNothrow scope (vk_new.h) it
+// throws at once: that nothrow new's caller has a fallback for its null.
+// HOS_TEST_ALLOC_REFUSE=<text> (host/mkw_glue.c's test) whose text is in kNewWhat: at the 600th present one allocation too large
+// for any PC is asked for, to see the wait, the line, the notice and the stop in a run (new_refuse_test)
+static constexpr int kNewTries = 100;            // (100 x 50 ms: 5 s, as the host's hos_alloc_failed and commit_wait)
+static constexpr int kNewTryMs = 50;
+static constexpr int64_t kNewApartMs = 250;
+static constexpr char kNewWhat[] = "the renderer's C++ allocations";
+constinit thread_local int t_new_tries = 0;
+constinit thread_local int64_t t_new_last_ms = 0;
+static void new_sleep_ms(int ms) { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); }
+void new_refused() {
+    if (t_new_nothrow) throw std::bad_alloc();   // (libc++'s and libstdc++'s nothrow new: the caller's null)
+    if (t_new_tries && steady_ms() - t_new_last_ms > kNewApartMs) t_new_tries = 0;
+    if (!t_new_tries) {
+        static std::atomic<int> said{0};
+        if (said.fetch_add(1, std::memory_order_relaxed) < 8)
+            logf("vk: a C++ allocation refused (at the commit limit?): tried again for up to %d s", kNewTries * kNewTryMs / 1000);
+    }
+    if (t_new_tries < kNewTries) {
+        t_new_tries++;
+        new_sleep_ms(kNewTryMs);
+        t_new_last_ms = steady_ms();
+        return;   // (operator new asks malloc again)
+    }
+    t_new_tries = 0;
+    if (host && host->version >= 28 && host->out_of_memory) host->out_of_memory(kNewWhat);   // (does not return)
+    throw std::bad_alloc();
+}
+void new_refuse_test(int64_t presents) {   // (the replay's present, its count)
+    static const char* const e = getenv("HOS_TEST_ALLOC_REFUSE");
+    if (!e || !*e || presents != 600 || !std::strstr(kNewWhat, e)) return;
+    logf("vk: HOS_TEST_ALLOC_REFUSE: one C++ allocation of 1 PB, refused on any PC, to see what a player sees at the commit limit");
+    static void* volatile kept;   // (kept: a new and delete of nothing else may be left out by the compiler)
+    kept = ::operator new(size_t(1) << 50);
+    ::operator delete(kept);
+}
+
 namespace {
 
 bool has_extension(const std::vector<VkExtensionProperties>& all, const char* name) {
@@ -174,6 +234,16 @@ bool create_instance() {
         for (const char* want : {"VK_KHR_xlib_surface", "VK_KHR_xcb_surface", "VK_KHR_wayland_surface"})
             if (has_extension(all, want)) exts[n_exts++] = want;
     }
+#endif
+#ifndef _WIN32
+    // (longshot) Mesa's Intel compiler (driconf shader_spilling_rate, read when the driver loads, ignored by the others): when a
+    // program does not fit its registers it spills some and allocates the whole program again, rounds of one at first and then
+    // of (spilled so far / rate). Held to 32 lanes an Iris Xe has 32 registers a lane, and MKW's large compute programs spill
+    // thousands: at Mesa 26.2's default abccf81b45c5eb50, which play dispatches, was not built after 20 minutes and 13 GB, at 2
+    // in 32 s and 1.7 GB; 7a548525c239b91b 531 s and 7.6 GB, at 2 87 s and 4 GB (i9-13900H, 2026-11-14). The programs that do
+    // not spill are built as before; the driver's estimate of those that do moved from 12% better to 53% worse (3 was 165 s for
+    // abccf81b45c5eb50, 4 not built in 8 minutes). A value the player set is kept
+    setenv("shader_spilling_rate", "2", 0);
 #endif
     VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
     app.pApplicationName = "mkw-recomp";
@@ -285,15 +355,16 @@ bool pick_device() {
 /// 0x7D55 in Kokiri Forest, Kakariko and on Death Mountain Trail), from that driver, 101.9175, on (Intel's Windows
 /// driverVersion is 101 << 14 | 9175); and the Arc B-series cards, Battlemage (PCI device 0xE2xx; run on a B580, 0xE20B,
 /// in Kokiri Forest: the loop lost the device in the sky's light sums, 499dbfd0, on entering it in every run), from the
-/// driver that was run, 101.9154, on. Intel's other GPUs on Windows (Iris Xe and UHD, Arc A-series, Lunar Lake), older
-/// drivers, AMD's RDNA 3 and later and Mesa's Intel driver report the feature too but were not tried: they keep the loop
-/// unless the switch asks, until runs on them say otherwise
+/// driver that was run, 101.9154, on; and the Xe3 iGPUs of Panther Lake (PCI device 0xB0xx) from 101.9150 on (Longshot
+/// issue 618: on an Arc B390, 0xB080, with 101.9150 in Kokiri Forest, the loop lost adds of the same light sums, the
+/// scene's exposure came out about 8x too high from the sky on, and a milky white haze covered the picture; the native add
+/// gave the picture a B580 shows, and the device was not lost in 40 minutes of play, where the loop lost it at 499dbfd0 as
+/// in issue 606). Intel's other GPUs on Windows (Iris Xe and UHD, Arc A-series, Lunar Lake), older drivers, AMD's RDNA 3
+/// and later and Mesa's Intel driver report the feature too but were not tried: they keep the loop unless the switch asks,
+/// until runs on them say otherwise
 static bool native_fadd_wanted(const char* env, VkDriverId driver, uint32_t device, uint32_t version) {
     if (env) return !env_value_off(env);
-    if (driver == VK_DRIVER_ID_NVIDIA_PROPRIETARY) return true;
-    if (driver != VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS) return false;
-    return ((device & 0xFF00u) == 0x7D00u && version >= (101u << 14 | 9175u)) ||
-           ((device & 0xFF00u) == 0xE200u && version >= (101u << 14 | 9154u));
+    return policy_rule::native_fadd_listed(driver, device, version);   // (device_policy.h: the one list of drivers and families)
 }
 
 bool create_device() {
@@ -306,6 +377,13 @@ bool create_device() {
         flag = has_extension(exts, name);
         if (flag) want.push_back(name);
     };
+    // (the driver, asked once before anything is decided by it: the mesh mode and the float add below, and the facts)
+    VkPhysicalDeviceDriverProperties fadd_driver{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+    {
+        VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+        p2.pNext = &fadd_driver;
+        vkGetPhysicalDeviceProperties2(dev.physical, &p2);
+    }
     // (#1001: how task and mesh programs run, mesh_mode.h: RX_VK_MESH_SHADERS=native or compute, a launch switch; unset,
     // Automatic. RX_VK_FORCE_MESH_FALLBACK=1, a test, is Compute over it: mesh shaders not used where they are, so the no-mesh
     // fallback the GTX 10xx and RX 5000 cards run (issue 640) can be tried on any GPU. The Graphics tab's row it was, and its
@@ -329,8 +407,9 @@ bool create_device() {
     // end up waiting on each other, and a mesh-only draw hangs with the compute queue empty (devcoredumps on an
     // RX 6800: no VM fault; waves stuck on gfx in the second). Task + mesh draws alone on the fallback still crash, so
     // only full Compute is stable there, and the reports span Navi 2x (RX 6800, RX 6600 XT) and the RDNA3 APUs (Steam
-    // Deck OLED, Rog Xbox Ally X). On Linux, where AMD's Vulkan driver is RADV, Automatic picks Compute; Native stays
-    // a choice (RX_VK_MESH_SHADERS=native). RDNA1 and older have no mesh shaders on RADV: for them a no-op.
+    // Deck OLED, Rog Xbox Ally X). With RADV, Automatic picks Compute; Native stays a choice (RX_VK_MESH_SHADERS=native).
+    // RDNA1 and older have no mesh shaders on RADV: for them a no-op. (By the driver, device_policy.h mesh_mode: it was
+    // "AMD off Windows", which took AMDVLK too, a driver the issue does not name; AMDVLK's Automatic is native now)
     // (the card's own, before the mode below: whether it has task and mesh shaders, for the Quality preset Auto (this PC), which
     // must not put a card that has them on Minimum because this run uses Compute)
     if (has_extension(exts, VK_EXT_MESH_SHADER_EXTENSION_NAME)) {
@@ -340,9 +419,7 @@ bool create_device() {
         dev.mesh_capable = m.meshShader && m.taskShader;
     }
     int mesh_mode_used = mesh_mode;
-#ifndef _WIN32
-    if (mesh_mode_used == 0 && dev.props.vendorID == 0x1002) mesh_mode_used = 2;   // (Linux AMD is RADV)
-#endif
+    if (mesh_mode_used == 0 && fadd_driver.driverID == VK_DRIVER_ID_MESA_RADV) mesh_mode_used = 2;
     if (mesh_mode_used == 2) dev.mesh_shader = false;
     else optional(VK_EXT_MESH_SHADER_EXTENSION_NAME, dev.mesh_shader);
     optional(VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME, dev.external_memory_host);
@@ -363,6 +440,8 @@ bool create_device() {
     optional(VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME, dev.vertex_divisor);
     optional(VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME, dev.stencil_export);
     optional(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME, dev.memory_budget);
+    // (longshot, RX_VK_MEMORY_PRIORITY, off by default: memory_priority.h. The extension is asked for only with the switch on)
+    if (memory_priority::parse(getenv("RX_VK_MEMORY_PRIORITY")).on) optional(VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME, dev.memory_priority);
     optional(VK_EXT_IMAGE_2D_VIEW_OF_3D_EXTENSION_NAME, dev.view_2d_of_3d);
     // (longshot) on by default: with a marker before each draw and dispatch the device has not been lost (five
     // runs); without them it was, every run, shortly after OoT's first gameplay frames (nvlddmkm event 153; the
@@ -378,15 +457,9 @@ bool create_device() {
     // (longshot) the GPU's own float add on storage buffers: the game's RED/ATOM.ADD.F32 become one OpAtomicFAddEXT instead
     // of a compare-exchange loop, which gives up after CAS_LOOP_MAX_TRIES attempts and loses that add (eden
     // spirv_emit_context.cpp DefineStorageBuffers). By default with NVIDIA's driver, and Intel's Windows driver on the
-    // Meteor Lake and Arrow Lake iGPUs (native_fadd_wanted); RX_VK_NATIVE_FADD=1 asks for it on any GPU, =0 keeps the loop
+    // Meteor Lake, Arrow Lake and Panther Lake iGPUs and the Arc B-series (native_fadd_wanted); RX_VK_NATIVE_FADD=1 asks for it on any GPU, =0 keeps the loop
     // on every one, the extension not even enabled
     const char* const fadd_env = getenv("RX_VK_NATIVE_FADD");
-    VkPhysicalDeviceDriverProperties fadd_driver{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
-    {
-        VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
-        p2.pNext = &fadd_driver;
-        vkGetPhysicalDeviceProperties2(dev.physical, &p2);
-    }
     const bool fadd_wanted = native_fadd_wanted(fadd_env, fadd_driver.driverID, dev.props.deviceID, dev.props.driverVersion);
     bool atomic_float = false;
     if (fadd_wanted) optional(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME, atomic_float);
@@ -415,7 +488,7 @@ bool create_device() {
     q.queueCount = 1;
     q.pQueuePriorities = &priority;
     // (longshot) The presents on a queue of a compute family of their own, beside the replay's (RX_VK_PRESENT_QUEUE=1 / 0: on /
-    // off; on by default with NVIDIA's driver on Windows, where it was measured). On the replay's queue vkQueuePresentKHR blocked
+    // off; on by default with NVIDIA's driver on Windows, below). On the replay's queue vkQueuePresentKHR blocked
     // with dev.present_mu held, ~0.8 ms a present with frame interpolation at 4x and up to 8, and the game's main and presentation
     // threads waited there to submit. A second queue of the graphics family took that lock off the presents, but its presents
     // blocked longer (~2-4 ms: the graphics work of the two queues takes turns on the GPU) and the made frames were shown late
@@ -426,15 +499,31 @@ bool create_device() {
     uint32_t compute_family = UINT32_MAX;
     {
         bool want = false;
+        bool old_nvidia = false;   // (NVIDIA's driver older than 621.24: logged below when the switch is unset)
 #ifdef _WIN32
         VkPhysicalDeviceDriverProperties dp{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
         VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
         p2.pNext = &dp;
         vkGetPhysicalDeviceProperties2(dev.physical, &p2);
-        want = false;   // (v2.0.9: off by default with the write-back diff until issue 1161's device lost is placed; was:
-        (void)dp;       //  NVIDIA's driver on Windows. RX_VK_PRESENT_QUEUE=1: on)
+        // (On by default with NVIDIA's driver 621.24 and newer on Windows. On the replay's queue a present waits behind the
+        // game's next frame, 3 to 12 ms at 5120x2160: frame generation's frames, each presented at its own time since #1362,
+        // reach the screen together. An RTX 5090 on 621.24, 165 Hz G-Sync, DLSS Frame Gen 3x, V-Sync Off, main 415a8944
+        // against this (PresentMon): frames on the screen under 2 ms after the one before from 33% to 0.1% or less, the sd of
+        // their times on the screen from 4.7 to 1.1-1.3 ms, each present's call to the screen from 6.6 to 1.3 ms. With V-Sync
+        // On (#1442), ~48 fps GPU-bound: the shown frames' animation error from 2.98 to 1.65 ms, the latency from 11.8 to 8.7
+        // ms. Off since v2.0.9 for Hookshot issue 1161, before the fork: an RTX 4090 on NVIDIA's 621.14, whose GPU v2.0.8 lost
+        // in the write-back diff (b784c68a), had a black screen with the present queue alone (4e24bd4d), a fault never placed.
+        // 621.24 ran it in the 12 recorded runs (docs/tested: fg-pacing-*present-queue*, present-queue-default-*) and a
+        // tester's play: from it on, by default. Older drivers, other drivers and Linux keep the replay's queue)
+        constexpr uint32_t kPresentQueueNvidia = (621u << 22) | (24u << 14);   // (NVIDIA's version: major << 22, minor << 14)
+        want = dp.driverID == VK_DRIVER_ID_NVIDIA_PROPRIETARY && dev.props.driverVersion >= kPresentQueueNvidia;
+        old_nvidia = dp.driverID == VK_DRIVER_ID_NVIDIA_PROPRIETARY && !want;
 #endif
-        if (const char* e = getenv("RX_VK_PRESENT_QUEUE")) want = atoi(e) != 0;
+        // (the switches' yes/no rule, longshot_env.h: unset or empty, the default above; 0, false, off or no, off; else on)
+        if (const char* e = getenv("RX_VK_PRESENT_QUEUE"); e && *e) want = !env_value_off(e);
+        else if (old_nvidia)
+            logf("vk: presents on the replay's queue: NVIDIA's driver %u.%02u is older than 621.24, where their own queue was "
+                 "measured (RX_VK_PRESENT_QUEUE=1: on)", dev.props.driverVersion >> 22, (dev.props.driverVersion >> 14) & 0xff);
         for (uint32_t i = 0; want && i < n && compute_family == UINT32_MAX; i++)
             if ((families[i].queueFlags & VK_QUEUE_COMPUTE_BIT) && !(families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT))
                 compute_family = i;
@@ -443,31 +532,15 @@ bool create_device() {
     // family (NVIDIA's has 16), else a queue of a compute-only family (RADV: one graphics queue), its family's next free one. A
     // device without either presents on the game's thread, as before
     const char* pt_env = getenv("RX_VK_PRESENT_THREAD");
-    const bool presenter_wanted = pt_env && atoi(pt_env) != 0;   // (off by default: no queue made for it)
+    // (hookshot) NVIDIA Optimus: enable dedicated presentation thread/queue by default on NVIDIA dGPUs (0x10DE)
+    // to decouple swapchain presentation over PCIe from the replay render loop.
+    const bool presenter_wanted = pt_env ? (atoi(pt_env) != 0) : (dev.props.vendorID == 0x10DE);
     uint32_t presenter_family = UINT32_MAX, presenter_index = 0;
     if (presenter_wanted) {   // (presenter_queue.h: never a queue another part of the renderer takes)
         std::vector<QueueFamilyInfo> qf(n);
         for (uint32_t i = 0; i < n; i++) qf[i] = {(uint32_t)families[i].queueFlags, families[i].queueCount};
         if (!presenter_queue_pick(qf.data(), n, dev.queue_family, compute_family, presenter_family, presenter_index))
             presenter_family = UINT32_MAX;
-    }
-    // (longshot) AMD's frame generation swapchain's own queues (the menu's Frame generation by at AMD FSR FG, or
-    // RX_VK_FG_AMD=1: vk_fg_amd.cpp). AMD's SDK requires its game, present and image-acquire queues to be three different
-    // queues, and its presents must not share a queue with the replay's submits. Three queues of the graphics family
-    // after the replay's (8 on AMD's Windows driver), asked for in every run so the row can turn the feature on at once;
-    // without them the feature stays off and the plain swapchain runs
-    const uint32_t gfx_queues = std::min<uint32_t>(families[dev.queue_family].queueCount, 4u);
-    uint32_t fg_family = gfx_queues >= 4 ? dev.queue_family : UINT32_MAX;
-    // (OcaDim, support) what the player asked for, before whether it can run: a report on a card whose AMD frame generation
-    // is missing needs the choice in its log (the Frame generation and Frame generation by rows, or RX_VK_FG_AMD)
-    logf("vk: frame generation asked: %s%s, by %s", opts.framegen ? "on" : "off",
-         opts.framegen ? (opts.framegen == 1 ? " (2x)" : opts.framegen == 2 ? " (3x)" : opts.framegen == 3 ? " (4x)" : " (more)") : "",
-         opts.framegen_by == 1 ? "NVIDIA DLSS FG" : opts.framegen_by == 2 ? "AMD FSR FG" : "Auto");
-    if (fg_amd_requested()) {
-        if (fg_family == UINT32_MAX)
-            logf("vk: AMD FG: the graphics family has %u queues, 4 needed (the replay's and the SDK's three): off",
-                 families[dev.queue_family].queueCount);
-        else logf("vk: AMD FG: queues 1 to 3 of the graphics family are AMD's (the replay keeps queue 0)");
     }
     static const float priorities[2] = {1.0f, 1.0f};
     std::vector<VkDeviceQueueCreateInfo> qs;
@@ -478,7 +551,7 @@ bool create_device() {
         x.queueFamilyIndex = family, x.queueCount = count, x.pQueuePriorities = priorities;
         qs.push_back(x);
     };
-    queues(dev.queue_family, gfx_queues);
+    queues(dev.queue_family, 1);
     if (compute_family != UINT32_MAX) queues(compute_family, 1);
     if (presenter_family != UINT32_MAX) queues(presenter_family, presenter_index + 1);
     (void)q;
@@ -486,9 +559,11 @@ bool create_device() {
     const bool want_present_wait = presenter_family != UINT32_MAX && has_extension(exts, VK_KHR_PRESENT_ID_EXTENSION_NAME) &&
                                    has_extension(exts, VK_KHR_PRESENT_WAIT_EXTENSION_NAME);
     if (want_present_wait)
-        for (const char* name : {VK_KHR_PRESENT_ID_EXTENSION_NAME, VK_KHR_PRESENT_WAIT_EXTENSION_NAME}) {
+        for (const char* name : { VK_KHR_PRESENT_ID_EXTENSION_NAME, VK_KHR_PRESENT_WAIT_EXTENSION_NAME }) {
             bool listed = false;
-            for (const char* w : want) listed |= !strcmp(w, name);
+            for (const char* w : want) {
+                if (!strcmp(w, name)) { listed = true; break; }
+            }
             if (!listed) want.push_back(name);
         }
 
@@ -527,6 +602,8 @@ bool create_device() {
     if (dev.device_fault) *tail = &fault, tail = &fault.pNext;
     VkPhysicalDeviceImage2DViewOf3DFeaturesEXT v2d3d{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_2D_VIEW_OF_3D_FEATURES_EXT};
     if (dev.view_2d_of_3d) *tail = &v2d3d, tail = &v2d3d.pNext;
+    VkPhysicalDeviceMemoryPriorityFeaturesEXT mem_priority{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PRIORITY_FEATURES_EXT};
+    if (dev.memory_priority) *tail = &mem_priority, tail = &mem_priority.pNext;
     VkPhysicalDeviceCooperativeMatrixFeaturesKHR coop{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
     if (dev.coop_matrix) *tail = &coop, tail = &coop.pNext;
     VkPhysicalDeviceShaderAtomicFloatFeaturesEXT afloat{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT};
@@ -545,6 +622,7 @@ bool create_device() {
     if (module_id && module_idf.shaderModuleIdentifier) module_ids_on();
     descriptor_buffer.descriptorBufferCaptureReplay = VK_FALSE;
     dev.view_2d_of_3d = dev.view_2d_of_3d && v2d3d.sampler2DViewOf3D;
+    dev.memory_priority = dev.memory_priority && mem_priority.memoryPriority;
     coop.cooperativeMatrixRobustBufferAccess = VK_FALSE;
     dev.coop_matrix = dev.coop_matrix && coop.cooperativeMatrix &&
                       f12.vulkanMemoryModel && f12.vulkanMemoryModelDeviceScope;
@@ -560,10 +638,10 @@ bool create_device() {
                                                      : "compare-exchange loop (no VK_EXT_shader_atomic_float)";
         if (fadd_env) logf("vk: float atomic add on storage buffers: %s, RX_VK_NATIVE_FADD=%s", how, fadd_env);
         else logf("vk: float atomic add on storage buffers: %s, %s", how,
-                  !fadd_wanted ? "by default only with NVIDIA's driver and Intel's Windows driver on Meteor Lake, Arrow Lake and Battlemage "
+                  !fadd_wanted ? "by default only with NVIDIA's driver and Intel's Windows driver on Meteor Lake, Arrow Lake, Panther Lake and Battlemage "
                                  "(RX_VK_NATIVE_FADD=1: native where the GPU has it)"
                   : fadd_driver.driverID == VK_DRIVER_ID_NVIDIA_PROPRIETARY ? "NVIDIA's driver"
-                                                                            : "Intel's Windows driver, Meteor Lake, Arrow Lake or Battlemage");
+                                                                            : "Intel's Windows driver, Meteor Lake, Arrow Lake, Panther Lake or Battlemage");
     }
     // (bounds-checked buffer access: an out-of-range access dropped instead of faulting the device. On by default: the GPU
     // culling pass 53caac5f faulted the device while a save loaded, about one start in three, and the scene's lighting read garbage
@@ -609,21 +687,6 @@ bool create_device() {
     dev.eds3_clamp = dev.dynamic_state3 && eds3.extendedDynamicState3DepthClampEnable;
     dev.eds3_blend = dev.dynamic_state3 && eds3.extendedDynamicState3ColorBlendEnable &&
                      eds3.extendedDynamicState3ColorBlendEquation && eds3.extendedDynamicState3ColorWriteMask;
-    {   // (longshot) the vendor and driver workarounds this device needs: vk_vendor.h, each forced by its RX_VK_ switch
-        VkPhysicalDeviceDriverProperties drv{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
-        VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
-        p2.pNext = &drv;
-        vkGetPhysicalDeviceProperties2(dev.physical, &p2);
-        VendorFacts facts;
-        facts.vendor_id = p2.properties.vendorID;
-        facts.driver_id = drv.driverID;
-        facts.device_type = p2.properties.deviceType;
-        facts.driver_info = drv.driverInfo;
-        dev.fixes = vendor_fixes(facts);
-        vendor_fixes_env(dev.fixes, [](const char* name) -> const char* { return getenv(name); });
-        logf("vk: vendor fixes for %s (%s): out-of-bounds texel fetches 0 %d, NaN tests by bits %d, gather offset %d",
-             drv.driverName, drv.driverInfo, (int)dev.fixes.fetch_bounds, (int)dev.fixes.nan_bits, (int)dev.fixes.gather_offset);
-    }
     dev.eds3_a2c = dev.dynamic_state3 && eds3.extendedDynamicState3AlphaToCoverageEnable;
     dev.vk12 = f12;
     dev.vk13 = f13;
@@ -648,6 +711,8 @@ bool create_device() {
         dev.radv_gcn = drv.driverID == VK_DRIVER_ID_MESA_RADV && !f11.storageInputOutput16;
         logf("vk: subgroups: default %u lanes, %u-%u, pinned to 32 on stages %#x; RADV on GCN 1-4: %s", sg.subgroupSize, sc.minSubgroupSize,
              sc.maxSubgroupSize, (unsigned)dev.sg32_stages, dev.radv_gcn ? "yes" : "no");
+        if (drv.driverID == VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA && getenv("shader_spilling_rate"))
+            logf("vk: Mesa's Intel compiler spills at rate %s (driconf shader_spilling_rate: 2 unless set)", getenv("shader_spilling_rate"));
     }
     if (!f13.dynamicRendering || !f13.synchronization2 || !f12.timelineSemaphore) {
         logf("vk: the GPU lacks dynamic rendering, synchronization2 or timeline semaphores");
@@ -681,6 +746,82 @@ bool create_device() {
     dev.sparse_images = (families[dev.queue_family].queueFlags & VK_QUEUE_SPARSE_BINDING_BIT) && f.features.sparseBinding &&
                         f.features.sparseResidencyImage2D && !(getenv("RX_VK_SPARSE") && !atoi(getenv("RX_VK_SPARSE")));
     dev.sparse_buffers = (families[dev.queue_family].queueFlags & VK_QUEUE_SPARSE_BINDING_BIT) && f.features.sparseBinding;
+    {   // (longshot) what this PC is, learnt once, and the defaults it gets by it: device_policy.h. Most sites still ask the
+        // device their own way and decide for themselves; the log's "vk: policy:" lines show what the rules give this PC
+        dev.driver = fadd_driver;   // (asked above; kept, as the facts point at its driverInfo)
+        dev.driver.pNext = nullptr;
+        DeviceFacts& pf = dev.facts;
+        pf.vendor_id = dev.props.vendorID, pf.device_id = dev.props.deviceID, pf.driver_version = dev.props.driverVersion;
+        pf.driver_id = dev.driver.driverID;
+        pf.device_type = dev.props.deviceType;
+        pf.driver_info = dev.driver.driverInfo;
+        pf.device_name = dev.props.deviceName;
+        const char* const deck = getenv("SteamDeck");
+        pf.steam_deck_env = deck && atoi(deck) == 1;
+        pf.vram_heap = device_vram_bytes();
+        uint32_t vram_heap_index = UINT32_MAX;
+        for (uint32_t h = 0; h < dev.memory.memoryHeapCount; h++)
+            if ((dev.memory.memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) &&
+                (vram_heap_index == UINT32_MAX || dev.memory.memoryHeaps[h].size > dev.memory.memoryHeaps[vram_heap_index].size))
+                vram_heap_index = h;
+        for (uint32_t t = 0; t < dev.memory.memoryTypeCount; t++) {
+            const VkMemoryPropertyFlags both = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+            if (dev.memory.memoryTypes[t].heapIndex == vram_heap_index && (dev.memory.memoryTypes[t].propertyFlags & both) == both)
+                pf.rebar = dev.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+        }
+        {   // (the allowance as vram_usage will answer once VMA is there: the driver's budgets, or VMA's 80% of each heap)
+            VkPhysicalDeviceMemoryBudgetPropertiesEXT budget{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT};
+            VkPhysicalDeviceMemoryProperties2 m2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2};
+            m2.pNext = &budget;
+            const auto ask = !dev.memory_budget ? nullptr
+                             : (PFN_vkGetPhysicalDeviceMemoryProperties2)instance_proc()(dev.instance, "vkGetPhysicalDeviceMemoryProperties2");
+            if (ask) ask(dev.physical, &m2);
+            uint64_t allowed = 0;
+            for (uint32_t h = 0; h < dev.memory.memoryHeapCount; h++)
+                if (dev.memory.memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+                    allowed += ask ? std::min<uint64_t>(budget.heapBudget[h], dev.memory.memoryHeaps[h].size)
+                                   : dev.memory.memoryHeaps[h].size * 8 / 10;
+            // (RX_VK_TEST_ALLOWED_MB, as vram_usage has it)
+            const uint64_t test_allowed = getenv("RX_VK_TEST_ALLOWED_MB") ? (uint64_t)atoi(getenv("RX_VK_TEST_ALLOWED_MB")) << 20 : 0;
+            pf.allowed_at_start = test_allowed && allowed > test_allowed ? test_allowed : allowed;
+        }
+#ifdef _WIN32
+        pf.windows = true;
+        MEMORYSTATUSEX ram{};
+        ram.dwLength = sizeof ram;
+        if (GlobalMemoryStatusEx(&ram)) pf.ram = ram.ullTotalPhys;
+#else
+        const long pages = sysconf(_SC_PHYS_PAGES), page = sysconf(_SC_PAGE_SIZE);
+        if (pages > 0 && page > 0) pf.ram = (uint64_t)pages * (uint64_t)page;
+#endif
+        pf.cpus_all = std::thread::hardware_concurrency();
+        pf.cpus_usable = usable_cpus();
+        pf.mesh_shader = dev.mesh_capable;
+        pf.mesh_queries = dev.mesh_queries;
+        pf.buffer_device_address = f12.bufferDeviceAddress;
+        if (has_extension(exts, VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME)) {   // (the card's, whether this run asks for it or not)
+            VkPhysicalDeviceShaderAtomicFloatFeaturesEXT af{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT};
+            VkPhysicalDeviceFeatures2 card{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &af};
+            vkGetPhysicalDeviceFeatures2(dev.physical, &card);
+            pf.float32_atomic_add = af.shaderBufferFloat32AtomicAdd;
+        }
+        pf.coop_matrix_ext = has_extension(exts, VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
+        pf.nv_checkpoints_ext = has_extension(exts, VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME);
+        pf.storage_io16 = f11.storageInputOutput16;
+        pf.storage_buffer_array_dynamic_indexing = f.features.shaderStorageBufferArrayDynamicIndexing;
+        pf.robust_image_access = f13.robustImageAccess;
+        pf.subgroup_size = dev.subgroup_size, pf.subgroup_max = dev.subgroup_max;
+        pf.sg32_stages = dev.sg32_stages;
+        dev.policy = device_policy(pf);
+        // (and the switches over them, read once, by one rule: device_policy_env)
+        device_policy_env(dev.policy, pf, [](const char* name) -> const char* { return getenv(name); });
+        // (longshot) the translation's vendor and driver workarounds (device_policy.h fetch_bounds, nan_bits, gather_offset),
+        // each forced by its RX_VK_ switch
+        device_policy_fixes_env(dev.policy, [](const char* name) -> const char* { return getenv(name); });
+        logf("vk: vendor fixes for %s (%s): out-of-bounds texel fetches 0 %d, NaN tests by bits %d, gather offset %d",
+             dev.driver.driverName, dev.driver.driverInfo, (int)dev.policy.fetch_bounds, (int)dev.policy.nan_bits,
+             (int)dev.policy.gather_offset);
+    }
     // (longshot) Intel XeSS's features (vk_xess.cpp), last, into the chain as it will be made: the library sets what it needs in
     // the renderer's structures and adds what it lacks (VK_EXT_mutable_descriptor_type's); nothing without its library, and a
     // refusal leaves the chain as it was and XeSS out for the run
@@ -717,19 +858,13 @@ bool create_device() {
     } else if (presenter_wanted) {
         logf("vk: no second queue for the presenter thread: presents on the game's thread");
     }
-    // (longshot) AMD's frame generation swapchain's queues (fg_amd.cpp): no other thread submits to them or presents on
-    // them. The SDK refuses a context whose game, present and image-acquire queues are not three different queues
-    dev.fg_game_queue = dev.fg_present_queue = dev.fg_acquire_queue = VK_NULL_HANDLE;
-    if (fg_family != UINT32_MAX) {
-        vkGetDeviceQueue(dev.device, fg_family, 1, &dev.fg_game_queue);
-        vkGetDeviceQueue(dev.device, fg_family, 2, &dev.fg_present_queue);
-        vkGetDeviceQueue(dev.device, fg_family, 3, &dev.fg_acquire_queue);
-        dev.fg_family = fg_family;
-    }
     if (dev.buffer_marker) buffer_markers_init();
     coopmat_init();
     reflex_device_created();
     antilag_device_created();
+    // (longshot: on the Steam Deck the GPU held at amdgpu's peak power state while the game runs (RX_VK_GPU_CLOCK=0: not), gpu_clock.h;
+    // the device's render node from VK_EXT_physical_device_drm, which needs no enabling to be asked)
+    gpu_clock_device_created(has_extension(exts, VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME));
     if (dev.push_descriptor) {
         VkPhysicalDevicePushDescriptorPropertiesKHR pp{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PUSH_DESCRIPTOR_PROPERTIES_KHR};
         VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
@@ -786,42 +921,37 @@ void swap_views_make(VkImageUsageFlags usage, VkFormat format) {
 }
 
 /// (longshot) Frame generation as the swapchain is made for it: the fixed multiplier, 2 to 4 (more takes no more images), or 0
-/// for off and Auto. Its present mode under V-Sync Auto and its spare images follow it; present_image makes the swapchain
-/// again when it changes
-int swapchain_framegen() { return opts.framegen >= 2 ? std::min(opts.framegen, 4) : 0; }
+/// for off and Auto, as it runs (vk_framegen.h framegen_now: at most DLSS FG's top while it makes the frames). Its present
+/// mode under V-Sync Auto and its spare images follow it; present_image makes the swapchain again when it changes
+int swapchain_framegen() { const int framegen = framegen_now(); return framegen >= 2 ? std::min(framegen, 4) : 0; }
 
 /// (longshot) Whether the swapchain is made for NVIDIA DLSS Frame Generation: a fixed multiplier, and DLSS-G making the sets
 /// (vk_dlss.cpp dlss_fg_runs: asked for, on a device it runs on, its runtime making as many frames as the multiplier asks).
 /// V-Sync Auto is FIFO for it, where it was measured; the renderer's own methods and other GPUs keep Auto's mailbox (or
-/// immediate), and so does DLSS-G asked for more frames than its runtime makes, which the renderer's own then makes.
-/// present_image makes the swapchain again when it changes: NGX's answer comes at the first present with a multiplier, so a
-/// swapchain made for DLSS-G before it is made once more without. (The set's made frames are the row's multiplier less 1, up
-/// to 8x: swapchain_framegen stops at 4, for the images)
-bool swapchain_dlssg() { return swapchain_framegen() >= 2 && dlss_fg_runs(opts.framegen - 1); }
+/// immediate). present_image makes the swapchain again when it changes: NGX's answer comes at the start-up screen or the
+/// first present with a multiplier, so a swapchain made for DLSS-G before a no is made once more without. (The set's made
+/// frames are the multiplier as it runs less 1, framegen_now: never more than its runtime makes, since the multiplier stops
+/// at that + 1 while DLSS-G makes the frames. swapchain_framegen stops at 4, for the images)
+bool swapchain_dlssg() { return swapchain_framegen() >= 2 && dlss_fg_runs(framegen_now() - 1); }
 
-void retire_swapchain(bool destroy_handle) {
+void retire_swapchain() {
     if (!dev.swapchain) return;
     device_wait_idle_locked();
     reflex_swapchain_destroyed();
     swap_views_drop();
     for (auto semaphore : dev.swap_rendered) vkDestroySemaphore(dev.device, semaphore, nullptr);
-    // (an AMD frame generation swapchain is the SDK's object: its context destroys it, after its presents were waited for)
-    if (destroy_handle) vkDestroySwapchainKHR(dev.device, dev.swapchain, nullptr);
+    vkDestroySwapchainKHR(dev.device, dev.swapchain, nullptr);
     dev.swapchain = VK_NULL_HANDLE;
     ++dev.swapchain_generation;
     dev.swap_rendered.clear();
     dev.swap_images.clear();
     dev.swap_spare = 0;
+    dev.swap_slots = 3;
 }
 
 bool invalidate_lost_surface(VkResult result) {
     if (result != VK_ERROR_SURFACE_LOST_KHR) return false;
-    const bool fg = fg_amd_active();
-    if (fg) {
-        device_wait_idle_locked();   // (our writes into its images done before its swapchain goes)
-        fg_amd_surface_lost();       // (its presents waited for, then its context and its swapchain, in the SDK's order)
-    }
-    retire_swapchain(!fg);
+    retire_swapchain();
     if (dev.surface) vkDestroySurfaceKHR(dev.instance, dev.surface, nullptr);
     dev.surface = VK_NULL_HANDLE;
     dev.present_queue_supported = false;
@@ -921,12 +1051,13 @@ bool create_swapchain(uint32_t width, uint32_t height) {
     // the refresh grid whenever they come slower than the display (DLSS Frame Gen 3x: ~135 shown on a 165 Hz screen), so evenly
     // timed presents still reached the screen unevenly; FIFO on a VRR display shows each one when it is presented. Only where
     // that was measured (swapchain_dlssg): the renderer's own frame generation and other GPUs keep Auto as it was, also when
-    // DLSS-G is asked for but the renderer's own makes the frames (a multiplier over what its runtime makes, or given up)
+    // DLSS-G is asked for but the renderer's own makes the frames (NGX's no, or given up; a multiplier over what its runtime
+    // makes runs at its most + 1 once NGX has answered, framegen_now)
     const bool fg_fifo = vsync == 0 && swapchain_dlssg();
-    if (fg_fifo) logf("vk: V-Sync Auto with DLSS Frame Generation at %dx: FIFO", swapchain_framegen());
+    if (fg_fifo) logf("vk: V-Sync Auto with DLSS Frame Generation at %dx: FIFO", framegen_now());   // (not the images' 4 at most)
     else if (vsync == 0 && swapchain_framegen() >= 2 && dlss_fg_wanted() && dlss_why() == DLSS_OK)
         logf("vk: V-Sync Auto with frame generation at %dx, its frames the renderer's own (DLSS-G does not make them): Auto's "
-             "mode, as without DLSS-G", opts.framegen);
+             "mode, as without DLSS-G", framegen_now());
     if (vsync != 1) {
         if (!fg_fifo)
             for (auto m : modes)
@@ -946,11 +1077,39 @@ bool create_swapchain(uint32_t width, uint32_t height) {
     VkSwapchainCreateInfoKHR ci{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
     ci.surface = dev.surface;
     ci.minImageCount = std::max(caps.minImageCount, 4u);   // (longshot: mailbox with frame interpolation: an image always free)
+    // doc: docs/design.md#13-frame-generations-presents-as-rules (rule 4: two sets' spare images on the timeline)
     // (longshot) A fixed frame generation multiplier's set is presented ahead (vk_framegen.cpp present_ahead_wanted): each
     // of its frames holds an image from the copy to its present, so the set needs as many spare images as it has frames. 3x
     // and 4x ask for that many over the surface's least (an NVIDIA surface: 5 and 6 images); a set the chain cannot hold is
-    // shown one at a time as before
-    if (swapchain_framegen() >= 3) ci.minImageCount = std::max(ci.minImageCount, caps.minImageCount + (uint32_t)swapchain_framegen());
+    // shown one at a time as before. Two sets' worth while the sets are on the game's timeline, whatever the present mode:
+    // the next set's copies go to the GPU as soon as it comes, while this one is still shown (display_main's take_early; an
+    // NVIDIA surface: 6 images at 2x, its most, 8, from 3x up; at 4x, under two sets, the next set's later copies wait for
+    // images). Under FIFO with one set's, the copies went to the GPU once the set before was shown, behind the game's next
+    // frame, and the GPU's delay (vk_framegen.cpp pace_delay) grew with its own lateness. RX_VK_FG_TIMELINE=0 (the sets as
+    // before, display_main): one set's. Under FIFO a set with more frames than the chain can ever hold spare (an NVIDIA
+    // surface, 8 images: 7x and 8x) is not presented ahead and goes out as it comes: two sets' images there only deepen
+    // FIFO's queue, two refreshes more delay (the review, 2026-11-17): one set's, as before. (present_image makes the chain
+    // again when the multiplier changes past 4x too. The multiplier as it runs, framegen_now: a saved 7x or 8x that DLSS FG
+    // makes at 6x is a set of 6)
+    static const char* timeline_env = getenv("RX_VK_FG_TIMELINE");
+    const bool timeline = !(timeline_env && env_value_off(timeline_env));
+    const bool set_too_big = mode == VK_PRESENT_MODE_FIFO_KHR && caps.maxImageCount &&
+                             (uint32_t)std::max(framegen_now(), 0) > caps.maxImageCount - std::min(caps.maxImageCount, caps.minImageCount);
+    // (under FIFO, display_main holds the frames a refresh apart (vk_framegen.cpp fifo_slot), which needs the display's refresh.
+    // With none known (display_refresh_mhz 0) the frames go as they come, and two sets' images would only let FIFO queue more
+    // of them than main's one set did: more delay, nothing gained. One set's there, as before: the review of #1442)
+    const bool fifo_unpaced = mode == VK_PRESENT_MODE_FIFO_KHR && display_refresh_mhz() <= 0;
+    const uint32_t fg_sets = timeline && !set_too_big && !fifo_unpaced ? 2 : 1;
+    // (at most kPresentSlotsMax over the least, present_image's frame slots: an image past them would share a slot with
+    // the set still shown (docs/design.md section 13, rule 4) and cost video memory for nothing. swapchain_framegen stops at
+    // 4, so two sets ask for 8 today; the cap keeps that so if it changes: HumanBean's review of #1362)
+    if (swapchain_framegen() >= 3 || (swapchain_framegen() >= 2 && fg_sets == 2))
+        ci.minImageCount = std::max(ci.minImageCount, caps.minImageCount + std::min<uint32_t>(fg_sets * (uint32_t)swapchain_framegen(),
+                                                                                           (uint32_t)kPresentSlotsMax));
+    // (present_image's frame slots for the same sets: a slot per frame of two where the next set is taken early, else 3 as
+    // before. The chain is made again when the multiplier, V-Sync or RX_VK_FG_TIMELINE change, so the count changes only
+    // with it. Stored with the chain below: retire_swapchain sets 3 for the old one)
+    const uint32_t slots_made = (uint32_t)present_slots_for(swapchain_framegen(), fg_sets == 2);
     if (caps.maxImageCount) ci.minImageCount = std::min(ci.minImageCount, caps.maxImageCount);
     ci.imageFormat = fmt.format;
     ci.imageColorSpace = fmt.colorSpace;
@@ -982,7 +1141,6 @@ bool create_swapchain(uint32_t width, uint32_t height) {
     };
     if (dev.present_queue_supported) share(dev.present_family);
     if (dev.presenter_supported) share(dev.presenter_family);   // (the presenter thread's queue)
-    if (dev.fg_game_queue) share(dev.fg_family);   // (AMD's frame generation presents: not this family when its queues are not)
     if (sharing_n > 1) {   // (presented from another family: no ownership moves)
         ci.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
         ci.queueFamilyIndexCount = sharing_n;
@@ -1003,60 +1161,23 @@ bool create_swapchain(uint32_t width, uint32_t height) {
         ci.pNext = &format_list;
     }
     reflex_swapchain_info(ci);   // (NVIDIA Reflex: latency mode on)
-    // (longshot, RX_VK_FG_AMD=1) AMD's frame generation swapchain, when it takes the window's over: the handle it hands
-    // back is the window's from here on, and every swapchain call goes through it (vk_fg_amd.cpp). Its new size is a
-    // remake in place: the old images' views and semaphores are let go first, and its presents waited for (the SDK's
-    // remake would otherwise free images the replay may still write)
-    // (the row or the switch turned AMD's frame generation off: its swapchain goes before the plain one is made below)
-    if (fg_amd_active() && !fg_amd_wanted()) {
-        device_wait_idle_locked();
-        fg_amd_surface_lost();
-        retire_swapchain(false);
-    } else if (!fg_amd_active() && fg_amd_wanted() && dev.swapchain) {
-        // (turned on at once: the plain swapchain goes first. The window has one swapchain at a time, and AMD's context
-        // makes its own for the surface; a second one on the same surface was refused by the driver)
-        retire_swapchain();
-    }
-    const bool fg_remake = fg_amd_active();
-    if (fg_remake) {
-        device_wait_idle_locked();   // (our blits done: they signal the semaphores AMD's presents wait on)
-        fg_amd_wait_presents();      // (then AMD's presents done with them, before retire drops them)
-        retire_swapchain(false);
-    }
-    VkSwapchainKHR sc = VK_NULL_HANDLE;
-    const VkResult fg_result = fg_amd_create_swapchain(ci, &sc);
-    const bool fg_owned = fg_result == VK_SUCCESS;
-    if (fg_owned) {
-        result = VK_SUCCESS;
-    } else if (fg_remake) {   // (AMD's handle is the window's swapchain: the Vulkan calls must never see it)
-        logf("vk: AMD FG: AMD's swapchain could not be remade; the frame generation swapchain stays");
-        return false;
-    } else {
-        result = vkCreateSwapchainKHR(dev.device, &ci, nullptr, &sc);
-    }
-    // Passing oldSwapchain retires it even when creation fails. Nothing may acquire from it again. AMD's is remade in
-    // place (above): its handle stays, and its context destroys it.
-    if (!fg_remake) retire_swapchain(!fg_owned);
+    VkSwapchainKHR sc;
+    result = vkCreateSwapchainKHR(dev.device, &ci, nullptr, &sc);
+    // Passing oldSwapchain retires it even when creation fails. Nothing may acquire from it again.
+    retire_swapchain();
     if (invalidate_lost_surface(result)) return false;
     if (result != VK_SUCCESS) {
         logf("vk: vkCreateSwapchainKHR failed (VkResult %d, extent %ux%u, format %d, usage %#x, mode %d, images %u)",
              (int)result, width, height, (int)fmt.format, ci.imageUsage, (int)mode, ci.minImageCount);
         return false;
     }
-    const auto swapchain_images = [&](uint32_t* count, VkImage* out) {
-        return fg_owned ? fg_amd_get_images(sc, count, out) : vkGetSwapchainImagesKHR(dev.device, sc, count, out);
-    };
-    const auto drop_new = [&] {
-        if (fg_owned) fg_amd_surface_lost();   // (its context, and the swapchain it made)
-        else vkDestroySwapchainKHR(dev.device, sc, nullptr);
-    };
-    if (swapchain_images(&n, nullptr) != VK_SUCCESS || !n) {
-        drop_new();
+    if (vkGetSwapchainImagesKHR(dev.device, sc, &n, nullptr) != VK_SUCCESS || !n) {
+        vkDestroySwapchainKHR(dev.device, sc, nullptr);
         return false;
     }
     std::vector<VkImage> images(n);
-    if (swapchain_images(&n, images.data()) != VK_SUCCESS || !n) {
-        drop_new();
+    if (vkGetSwapchainImagesKHR(dev.device, sc, &n, images.data()) != VK_SUCCESS || !n) {
+        vkDestroySwapchainKHR(dev.device, sc, nullptr);
         return false;
     }
     images.resize(n);
@@ -1066,7 +1187,7 @@ bool create_swapchain(uint32_t width, uint32_t height) {
         if (vkCreateSemaphore(dev.device, &si, nullptr, &semaphore) != VK_SUCCESS) {
             for (auto made : rendered)
                 if (made) vkDestroySemaphore(dev.device, made, nullptr);
-            drop_new();
+            vkDestroySwapchainKHR(dev.device, sc, nullptr);
             return false;
         }
     }
@@ -1076,9 +1197,10 @@ bool create_swapchain(uint32_t width, uint32_t height) {
     dev.swap_extent = {width, height};
     dev.swap_images = std::move(images);
     dev.swap_spare = n > caps.minImageCount ? n - caps.minImageCount : 0;
-    logf("vk: swapchain %ux%u, %u images, %s (V-Sync %s)%s", width, height, n,
+    dev.swap_slots = slots_made;
+    logf("vk: swapchain %ux%u, %u images, %s (V-Sync %s)", width, height, n,
          mode == VK_PRESENT_MODE_MAILBOX_KHR ? "mailbox" : mode == VK_PRESENT_MODE_IMMEDIATE_KHR ? "immediate" : "fifo",
-         vsync == 1 ? "On" : vsync == 2 ? "Off" : "Auto", fg_owned ? ", AMD's frame generation swapchain" : "");
+         vsync == 1 ? "On" : vsync == 2 ? "Off" : "Auto");
     swap_views_make(ci.imageUsage, mutable_view ? view_formats[1] : fmt.format);
     reflex_swapchain_created(sc);   // (NVIDIA Reflex: its sleep mode on the new swapchain)
     return true;
@@ -1101,8 +1223,12 @@ std::string skipped_path() { return cache_path("longshot_prepare_skipped"); }
 //   compiling", above) can leave that compile unfinished inside it, and builds behind it then wait for ever (on AMD, any build of
 //   the same program: #1823's dump of issue 996): builds stuck on players' cards of all kinds, AMD and NVIDIA (#2107). Whatever
 //   the cause, a part that needs the stuck driver cannot go on. So when nothing has moved for RX_VK_PREPARE_STALL_S seconds
-//   (300; 0: never stopped. Long: some steps read the caches or
-//   decide the predictions for a while with no count, on a slow disk or CPU too), the run says where it stopped and why, leaves
+//   (300; 0: never stopped. Long: some steps read the caches or decide the predictions for a while with no count, on a slow
+//   disk or CPU too. While a driver compile is under way and the process keeps half a CPU or more busy, the compiler at work,
+//   three times that, and twelve times on Mesa's Intel driver (prepare_long_compiles): on an Iris Xe one variant of
+//   abccf81b45c5eb50, a program MKW dispatches in play, was not done after 15 minutes held to 32 lanes. A compile that uses no
+//   CPU is stuck on a lock, and stops at the ordinary limit on every driver, as before),
+//   the run says where it stopped and why, leaves
 //   longshot_prepare_skipped so the game's own starts do not stop in the same place (what was not prepared is built when first
 //   drawn), and ends at once with exit status 4 (make_game.py: "the GPU driver stopped responding"). Not through exit(): that
 //   unloads the driver, which can wait on the same lock. Before, it waited until make_game.py stopped it after 15 minutes with no
@@ -1128,6 +1254,14 @@ void prepare_moved(int part, size_t done, size_t total) {
     if (part != prepare_seen.part || done != prepare_seen.done || !prepare_seen.moved_ms)
         prepare_seen = {part, done, total, steady_ms()};
 }
+/// (longshot) A driver compile that ended (vk_draw.cpp ComputeTurn): the driver answers, so the watchdog's clock starts again though
+/// the part's count has not moved. The compute warm's count moves when a program's variants are all done, up to 64 of them,
+/// not as each one ends: on an Iris Xe one held to 32 lanes can take minutes, and the watchdog stopped a preparation whose
+/// driver was compiling all along
+void prepare_compiled_seen() {
+    std::lock_guard lk(prepare_seen_mu);
+    if (prepare_seen.moved_ms) prepare_seen.moved_ms = steady_ms();
+}
 /// The run ends now: the log written out, then TerminateProcess, not exit(), which unloads a driver that can still hold workers
 /// (@@done first for a run that finished: the line the game prints after the preparation, host/hos_main.c)
 [[noreturn]] void prepare_end(int code) {
@@ -1141,6 +1275,23 @@ void prepare_moved(int part, size_t done, size_t total) {
     std::_Exit(code);
 }
 std::atomic<int> driver_faults_seen{0};
+/// (longshot) The CPU time this process has used, in ms (-1: the system does not say): a driver compile that is working keeps a CPU
+/// busy, one that is stuck on a lock uses none
+int64_t process_cpu_ms() {
+#ifdef _WIN32
+    FILETIME created, ended, kernel, user;
+    if (!GetProcessTimes(GetCurrentProcess(), &created, &ended, &kernel, &user)) return -1;
+    const auto ms = [](const FILETIME& f) { return (int64_t)((((uint64_t)f.dwHighDateTime << 32) | f.dwLowDateTime) / 10000); };
+    return ms(kernel) + ms(user);
+#else
+    timespec t;
+    if (clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t)) return -1;
+    return (int64_t)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+#endif
+}
+/// (longshot) The watchdog's last look at the CPU: half a CPU or more busy over its window (prepare_compiler_busy, for
+/// precompile_run's own limit)
+std::atomic<bool> prepare_cpu_busy{false};
 void prepare_watchdog() {
     static const int stall_s = getenv("RX_VK_PREPARE_STALL_S") ? atoi(getenv("RX_VK_PREPARE_STALL_S")) : 300;
     // (a status line after this long with no other line; RX_VK_PREPARE_STATUS_S=<s>, for the tests)
@@ -1151,9 +1302,26 @@ void prepare_watchdog() {
                                             "the pipeline cache's save"};
         const int64_t limit_s = stall_s > 0 ? stall_s : 300;   // (the save's lines stop after this, whatever RX_VK_PREPARE_STALL_S)
         const int save_stall_s = stall_s * 2;   // (a risky save's stop: twice the parts', above)
+        const int64_t compile_stall_s = stall_s * 3;   // (a compile with a CPU at work: three times, 900 s by default)
+        const int64_t long_compile_stall_s = stall_s * 12;   // (the same on Mesa's Intel driver: an hour by default)
+        // (the CPU the process used over the last window, 30 s by default: half a CPU or more is a compiler at work)
+        const int64_t busy_window_ms = std::clamp<int64_t>((int64_t)stall_s * 100, 1000, 30000);
+        int64_t cpu_then = process_cpu_ms(), cpu_then_ms = steady_ms();
+        bool cpu_busy = false;
         for (;;) {
             Sleep(1000);
             const int64_t now = steady_ms();
+            if (now - cpu_then_ms >= busy_window_ms) {
+                const int64_t cpu = process_cpu_ms();
+                cpu_busy = cpu >= 0 && cpu_then >= 0 && (cpu - cpu_then) * 2 >= now - cpu_then_ms;
+                cpu_then = cpu, cpu_then_ms = now;
+                prepare_cpu_busy.store(cpu_busy, std::memory_order_relaxed);
+            }
+            // (whether a compile is under way, read before the progress below: a compile that ends moves the progress's time and
+            // then leaves the list (vk_draw.cpp ComputeTurn), so one that ended between the two reads is in the time read here.
+            // Read the other way round, a compile that ended between them left an old time and no compile under way, and a
+            // healthy run was stopped at the short limit)
+            const bool under_way = prepare_compiling();
             PrepareSeen at;
             {
                 std::lock_guard lk(prepare_seen_mu);
@@ -1164,19 +1332,22 @@ void prepare_watchdog() {
             const int faults = driver_faults();
             const bool left = prepare_left_workers();
             const bool risky = faults > 0 || left;   // (the driver may be stuck: the save too can wait for ever)
+            const bool compiling = at.part < 3 && cpu_busy && under_way;   // (a compile at work; one with no CPU is stuck)
+            const int64_t part_stall_s = !compiling ? stall_s : prepare_long_compiles() ? long_compile_stall_s : compile_stall_s;
             // (what it waits on: after a fault in the driver, most likely the driver; else the driver or the disk, a slow one
             // reading the caches)
             const char* waiting_on = faults ? "waiting on the GPU driver, which faulted (above)"
                                      : left ? "waiting on the GPU driver, which still has pipelines it did not finish"
-                                            : "waiting on the GPU driver or the disk";
+                                     : compiling ? "waiting on the GPU driver, which is compiling (a CPU busy)"
+                                                             : "waiting on the GPU driver or the disk";
             if (faults != driver_faults_seen.exchange(faults))
                 logf("vk: preparation: the GPU driver faulted %d time%s so far (above): a driver can stop responding after one, so a "
                      "stop here would be why", faults, faults == 1 ? "" : "s");
-            if (stall_s > 0 && (at.part < 3 ? still >= stall_s : risky && still >= save_stall_s)) {
+            if (stall_s > 0 && (at.part < 3 ? still >= part_stall_s : risky && still >= save_stall_s)) {
                 if (at.part < 3)
-                    logf("vk: preparation: STOPPED: nothing moved for %d s in %s (%zu of %zu): the GPU driver stopped responding%s. "
-                         "The rest is built in play, when first drawn; updating the GPU driver may help", stall_s, what, at.done,
-                         at.total, faults ? " after it faulted (above)" : "");
+                    logf("vk: preparation: STOPPED: nothing moved for %lld s in %s (%zu of %zu): the GPU driver stopped responding%s. "
+                         "The rest is built in play, when first drawn; updating the GPU driver may help", (long long)part_stall_s, what,
+                         at.done, at.total, faults ? " after it faulted (above)" : "");
                 else
                     logf("vk: preparation: STOPPED: %s waited %d s on the GPU driver, %s. The pipelines are made; only this "
                          "file is left out. Updating the GPU driver may help", what, save_stall_s,
@@ -1203,8 +1374,8 @@ void prepare_watchdog() {
                     continue;   // (silent from here: make_game.py's 15 minutes with no line stop a save that never ends)
             } else if (still >= quiet_s) {
                 if (stall_s > 0)
-                    logf("vk: preparation: waiting: nothing in %s has finished for %lld s (%zu of %zu), %s. Stopped at %d s if "
-                         "nothing moves", what, (long long)still, at.done, at.total, waiting_on, stall_s);
+                    logf("vk: preparation: waiting: nothing in %s has finished for %lld s (%zu of %zu), %s. Stopped at %lld s if "
+                         "nothing moves", what, (long long)still, at.done, at.total, waiting_on, (long long)part_stall_s);
                 else
                     logf("vk: preparation: waiting: nothing in %s has finished for %lld s (%zu of %zu), %s", what,
                          (long long)still, at.done, at.total, waiting_on);
@@ -1222,8 +1393,8 @@ void prepare_watchdog() {
 // (precompile_run): a minute and more, before the game's first frame. They run on a thread of their own while this one, the
 // renderer's start, shows the window at once with what they are doing on it, and keeps it shown and sized; on Windows it is also
 // the window's thread, and handles its messages meanwhile (it would not answer otherwise). Closing the window stops them
-// (mkwvk_close_asked): what was made is kept, the next start goes on from there. RX_VK_STARTUP_SCREEN=0: as before, all
-// of it before the window shows anything (and a console with the count on Windows)
+// (mkwvk_close_asked): what was made is kept, the next start goes on from there. A start without a window
+// (offscreen) prepares all of it before anything else (and a console with the count on Windows)
 std::atomic<int> prep_stage{0};   // 0 the programs, 1 the pipelines the notes predict (a first start), 2 the noted pipelines
 std::atomic<size_t> prep_done{0}, prep_total{0};
 // (the parts' guesses before they run, and the parts that do not run: the one bar's total, PrepareBar)
@@ -1237,10 +1408,6 @@ const MkwVkWindow* prep_window = nullptr;   // (its size)
 void prep_progress(size_t done, size_t total) {
     prep_done.store(done, std::memory_order_relaxed);
     prep_total.store(total, std::memory_order_relaxed);
-}
-bool screen_wanted() {
-    const char* e = getenv("RX_VK_STARTUP_SCREEN");
-    return !e || atoi(e) != 0;
 }
 /// The window's size now (0x0: minimized, or unknown)
 void window_size(uint32_t* w, uint32_t* h) {
@@ -1276,6 +1443,7 @@ void prepare_with_screen() {
             prep_skip[1].store(true);
         }
         if (!prepare_stopped()) {
+            if (update) state_list_run();   // (the shipped list's pipelines, as a start with no screen makes them)
             prep_done.store(0), prep_total.store(0);
             prep_stage.store(2);
             precompile_run(prep_progress);
@@ -1435,7 +1603,7 @@ bool started_up() {
         return true;
     }
     if (precompile_wanted()) {   // (a release build, before the game: nothing to build during play)
-        if (!dev.offscreen && screen_wanted()) {
+        if (!dev.offscreen) {
             prepare_with_screen();
             return true;
         }
@@ -1458,7 +1626,7 @@ bool started_up() {
                         CloseHandle(input);
                     }
 #endif
-                    SetConsoleTitleA("OcaDim 0.0.1");   // (the player's build: see host/hos.h's HOS_GAME_TITLE)
+                    SetConsoleTitleA("Longshot");
                     console = CreateFileA("CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
                     if (console == INVALID_HANDLE_VALUE) console = nullptr;
                 }
@@ -1546,7 +1714,7 @@ void auto_profile() {
     hw.integrated = p.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
     for (uint32_t i = 0; i < dev.memory.memoryHeapCount; i++)
         if (dev.memory.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
-            hw.vram_mb = std::max<uint32_t>(hw.vram_mb, (uint32_t)(dev.memory.memoryHeaps[i].size >> 20));
+            hw.vram_mb = std::max<uint32_t>(hw.vram_mb, (uint32_t)(test_vram_bytes(dev.memory.memoryHeaps[i].size) >> 20));
     hw.mesh_native = dev.mesh_capable;   // (the card's, not this run's mode: Linux AMD's Automatic is Compute, #2245)
     hw.mesh_as_compute = dev.mesh_capable && !dev.mesh_shader;
     hw.rtx = hw.vendor == ::auto_settings::NVIDIA && strstr(p.deviceName, "RTX");
@@ -1589,6 +1757,14 @@ void auto_profile() {
 
 int start(void* hwnd) {
     main_window = (HWND)hwnd;
+    {   // (which switches the run has set, and any RX_ name set that is none: switches.h)
+#ifdef _WIN32
+        const char* const* env = _environ;
+#else
+        const char* const* env = environ;
+#endif
+        switches::report(env, [](const char* line) { logf("%s", line); });
+    }
     auto_profile();   // (the Quality preset Auto (this PC): before the game first asks its mode, which reads the options)
     if (!hwnd) {   // (HOS_HEADLESS: no window; the frames are rendered all the same, RX_VK_SHOTS writes them out)
         dev.offscreen = true;
@@ -1647,6 +1823,12 @@ const char* describe() {
 MkwVkRenderer table;
 
 } // namespace
+/// (longshot) The shaders are being prepared (the start-up screen): the performance summary's "map" then (perf_report.cpp)
+bool shaders_preparing() { return prep_running.load(std::memory_order_relaxed); }
+/// (vk_internal.h: the driver compile that ended, for the watchdog above)
+void prepare_compiled() { prepare_compiled_seen(); }
+/// (vk_internal.h: the CPU at work, as the watchdog above last saw it; false where no watchdog runs, a game start)
+bool prepare_compiler_busy() { return prepare_cpu_busy.load(std::memory_order_relaxed); }
 } // namespace mkwvk
 
 // (longshot) The window is being closed (host/display.c, host/posix/display_sdl.c, before they end the process), or the game quit
@@ -1663,6 +1845,7 @@ __attribute__((visibility("default")))
 void mkwvk_close_asked(void) {
     using namespace mkwvk;
     programs_census_log("close");
+    perf_report_final(-1);    // (the performance summary's last: ExitProcess is _exit on Linux, so no atexit runs there)
     module_ids_flush();
     page_table_census_log("close");   // (the guest pools the page table cannot reach: how many came, vk_memory.cpp)
     fsr4_close();             // (AMD FSR 4's tuned layers: their background builds stopped first, what they made then saved below)
@@ -1676,6 +1859,8 @@ void mkwvk_close_asked(void) {
     dlss_fg_close();   // (NVIDIA DLSS Frame Generation through NGX: its feature let go before the process exits, vk_dlss.cpp)
 }
 
+static MkwVkHost host_storage;
+
 extern "C"
 #ifdef _WIN32
 __declspec(dllexport)
@@ -1685,11 +1870,16 @@ __attribute__((visibility("default")))
 const MkwVkRenderer* mkwvk_init(const MkwVkHost* h) {
     using namespace mkwvk;
     if (!h) return nullptr;
-    if (h->version != MKWVK_API_VERSION) {
-        std::fprintf(stderr, "vk: host version mismatch: host has %u, expected %u\n", h->version, MKWVK_API_VERSION);
+    if (h->version < 14 || h->version > MKWVK_API_VERSION) {
+        std::fprintf(stderr, "vk: host version mismatch: host has %u, expected %u (or >= 14)\n", h->version, MKWVK_API_VERSION);
         return nullptr;
     }
-    host = h;
+    std::memset(&host_storage, 0, sizeof(host_storage));
+    const size_t copy_size = (h->version == 14) ? (offsetof(MkwVkHost, wide_menus) + sizeof(h->wide_menus))
+                                                : sizeof(MkwVkHost);
+    std::memcpy(&host_storage, h, std::min(sizeof(host_storage), copy_size));
+    host = &host_storage;
+    std::set_new_handler(new_refused);   // (issue 1280: a refused C++ allocation waits, then says out of memory)
     if (!load_global()) {
 #ifdef _WIN32
         logf("vk: load_global failed (Vulkan loader library or vkCreateInstance missing)");
@@ -1716,7 +1906,13 @@ const MkwVkRenderer* mkwvk_init(const MkwVkHost* h) {
          dev.props.driverVersion, dev.mesh_shader ? "yes" : "no", dev.external_memory_host ? "yes" : "no",
          dev.graphics_pipeline_library ? "yes" : "no");
     logf("vk: driver: %s", driver_text().c_str());   // (the builders' Save my pipeline list reads it: nx2/pipeline_share.py)
-    if (!dev.mesh_shader && !dev.mesh_fallback && !env_on("RX_VK_NO_MESH_WARNING")) {
+    // (what this PC is, what it gets for it, and which of those a switch set: device_policy.h)
+    device_policy_log(dev.policy, dev.facts, [](const char* line) { logf("%s", line); });
+    // (the crash report's facts, as the bug report words them: host/hos_crash_dialog.h reads the last of each)
+    logf("report: gpu %s", device_report_text().c_str());
+    logf("report: cpu %s", mkwvk::bug_report::cpu_text().c_str());
+    logf("report: os %s", mkwvk::bug_report::os_text().c_str());
+    if (!dev.mesh_shader && !dev.mesh_fallback) {
         // (the game draws its foliage, grass and many effects with mesh shaders: without them those draws are left out and the
         // picture is broken (an RX 580's "static"-like scenes, 2026-11-08). Said once, on its own thread, and the game goes on.)
         // (a GPU with no buffer device addresses has no fallback to run either)
@@ -1727,11 +1923,11 @@ const MkwVkRenderer* mkwvk_init(const MkwVkHost* h) {
                 "uses for foliage, grass and many effects, so parts of the picture will be missing or broken.\n\nLongshot needs a GPU "
                 "with mesh shaders: NVIDIA GeForce RTX 20 series or newer, AMD Radeon RX 6000 series or newer, or Intel Arc. If your "
                 "card is one of those, update its driver.";
-            MessageBoxA(nullptr, text.c_str(), "OcaDim: graphics card", MB_OK | MB_ICONWARNING | MB_TOPMOST);
+            MessageBoxA(nullptr, text.c_str(), "Longshot: graphics card", MB_OK | MB_ICONWARNING | MB_TOPMOST);
         }).detach();
 #endif
     }
-    table.version = MKWVK_API_VERSION;
+    table.version = h->version;
     table.start = start;
     table.resize = resize;
     table.describe = describe;

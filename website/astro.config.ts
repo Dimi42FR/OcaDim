@@ -33,10 +33,12 @@ export default defineConfig({
     sidebar: [
       { label: 'Get started', items: [
         { label: 'Install', slug: 'install' },
+        { label: 'Steam Deck', slug: 'install/steam-deck' },
         { label: 'System requirements', slug: 'requirements' },
         { label: 'Settings', slug: 'settings' },
         { label: 'Updates & saves', slug: 'saves' },
         { label: 'Transfer a save', slug: 'saves/transfer' },
+        { label: 'Mods', slug: 'mods' },
       ] },
       { label: 'Help', items: [
         { label: 'Common problems', slug: 'help' },
@@ -47,6 +49,7 @@ export default defineConfig({
       { label: 'Development', items: [
         { label: 'Progress', slug: 'progress' },
         { label: 'Contributing', slug: 'contributing' },
+        { label: 'Help test (Test Farm) ↗', link: 'https://beanstalk.magicbean.dev/how' },
         { label: 'Scrub a save', slug: 'saves/scrub' },
         { label: 'Source code ↗', link: repository },
       ] },
