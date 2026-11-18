@@ -280,6 +280,16 @@ static void socket_poll(Ctx *c) {
     const uint64_t fds = ARG(0), n = ARG(1);
     const int timeout = (int)ARG(2);
     for (uint64_t i = 0; fds && i < n && i < 4096; i++) *(uint16_t *)GP(fds + 8 * i + 6) = 0;   /* revents */
+    /* (OcaDim) HOS_POLL_INF_ERR=1: an infinite poll reports an error once instead of timing out forever. Offline, OoT's
+       npln worker polls with its guest mutex held; a timeout keeps it there, another worker waits on that mutex for good
+       (the boot freeze: "nn.npln.Worker waiting 10 s; held by nn.npln.Worker (count 2)"). The error takes the game's own
+       error branch, which unlocks. Finite timeouts keep their behaviour. */
+    static int inf_err = -1;
+    if (inf_err < 0) { const char *e = getenv("HOS_POLL_INF_ERR"); inf_err = e && *e && strcmp(e, "0") != 0; }
+    if (timeout < 0 && inf_err) {
+        for (uint64_t i = 0; fds && i < n && i < 4096; i++) *(uint16_t *)GP(fds + 8 * i + 6) = 0x0008;   /* POLLERR */
+        RET(n ? 1 : 0);
+    }
     if (timeout != 0) {
         const int away = hos_vcore_away();
         hos_sleep_ns((int64_t)(timeout < 0 || timeout > 50 ? 50 : timeout) * 1000000);

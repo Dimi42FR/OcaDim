@@ -192,14 +192,18 @@ puis des attentes de 2 s des autres threads (`PreActorModelCompose`, `rmbl::Vibr
 tournent sans cœur. Le thread réseau se bloque lui-même (mutex récursif, compte 2) et les vcores
 affament le reste. Ce n'est pas un crash : le processus vit, mais rien n'est présenté.
 
-- **Reproductible** avec le build DRS (2 lancements sur 2), **pas** avec le build `ca-rame`
-  (4 lancements sur 4). Le timing du build semble exposer la course ; le bug est dans l'hôte, pas
+- **Reproductible** avec le build DRS (3 lancements sur 3), **pas** avec le build `ca-rame`
+  (7 lancements sur 7). Le timing du build semble exposer la course ; le bug est dans l'hôte, pas
   dans le menu.
 - **Contournement** : relancer le jeu ; il démarre alors normalement.
 - **Piste** : `host/nn_os_sync.c:496` (le log du mutex) et les fibres de `host/hos_thread.c:1528`
   (`nn::async` sur les threads `nn.npln`). À traiter avec la vague « ordonnanceur de vcores ».
-- La DRS v1 est **mise de côté** (`git stash` : « DRS v1 (a retester: blocage au demarrage) ») et
-  sera réintroduite par petits morceaux, avec un test de démarrage à chaque étape.
+- **La DRS v1 a été retirée** : avec elle, le jeu restait à la première image ; sans elle, il
+  démarre (13 498 images au dernier essai). Le mutex `nn.npln` est un symptôme, pas la cause : la
+  DRS touchait le menu et les options pendant la première image. À reprendre plus tard, autrement.
+- **Levier ajouté** : `HOS_POLL_INF_ERR=1` (`host/nn_applet.c`, `switches.def`) répond `POLLERR` à
+  un `Poll` infini hors ligne, pour que le moteur gRPC du jeu prenne sa branche d'erreur au lieu de
+  tourner avec son mutex. Neutre sur les démarrages normaux (3 sur 3), gardé pour la suite.
 
 
 

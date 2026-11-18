@@ -135,6 +135,7 @@ SW(HOS_PAGES_LIMIT, attempt, bool, "off: mapped pages are only counted and logge
 SW(HOS_PGO, diag, string, "unset: no counter dumps", "In an RX_PGO=gen build, <file>.reset clears and <file>.dump writes the profile counters; also turns the crash window off.")
 SW(HOS_PIN, attempt, string, "off: no affinity by thread name", "Sets host CPU affinity by thread name: <name part>=<hex mask>,... with * for the rest.")
 SW(HOS_PIN_BY_CORE, attempt, bool, "off: game threads are not pinned by core number", "=1 runs each game thread on the host's logical core 2 x its guest core number.")
+SW(HOS_POLL_INF_ERR, attempt, bool, "off: an infinite poll times out in 50 ms steps for ever", "=1 answers an infinite nn::socket::Poll (OoT's offline gRPC engine) with POLLERR at once, so the game's own error branch releases the guest mutex it holds there (the nn.npln boot freeze).")
 SW(HOS_POLL_SLEEP_NS, attempt, int, "0: off, sleeps last as asked", "Caps guest sleeps of up to 100 us at the given ns.")
 SW(HOS_POWER_THROTTLING, kill, bool, "Windows power throttling is turned off for the process", "Non-zero leaves Windows' power throttling (EcoQoS, timer resolution) as the OS sets it.")
 SW(HOS_PREFAULT, attempt, bool, "off: heap pages fault in as the game touches them", "=1 touches new heap pages when the heap grows, so the game's first touches are not page faults.")
