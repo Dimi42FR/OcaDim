@@ -141,6 +141,7 @@ struct Options {
     int vrs = 0;          // (OcaDim) variable rate shading: 0 off, 1 Auto (2x), 2 2x, 3 4x (vk_draw.cpp vrs_set)
     int vcore_mode = 0;   // (OcaDim) virtual cores: 0 Auto, 1 Standard (2 s), 2 Réactif (200 ms). Posed as
                           // HOS_VCORE_ESCAPE_US for the next launch (takes effect after a restart)
+    int precompile = 0;   // (OcaDim) prepare a zone's pipelines during its loading screen: 0 off, 1 on
 };
 extern Options opts;
 constexpr int kAutoPreset = 6;   // (the Quality preset Auto (this PC): menu_auto_for_gpu, auto_settings.h)
