@@ -609,8 +609,9 @@ static char *report_text(const Report *in, size_t *len) {
     Buf b = {0};
     char now[17];
     utc_now(now);
-    putf(&b, "Longshot crash report, made by the window Longshot shows after a crash (%s UTC). Longshot sent nothing: paste "
-             "this into the issue form, and attach the game folder's logs/ocadim_log.txt if you can.\n\n", now);
+    putf(&b, "OcaDim crash report, made by the window OcaDim shows after a crash (%s UTC). OcaDim sent nothing: paste "
+             "this into the issue form (github.com/Dimi42FR/OcaDim/issues) or on the Discord dimiviveamd, with the game "
+             "folder's logs/ocadim_log.txt if you can.\n\n", now);
     put(&b, "### What happened\n\n");
     char message[1024];
     hos_crash_message(message, sizeof message, in->verdict, in->stage, in->cause, 0);
@@ -779,7 +780,7 @@ static int window_page(const char *title, const char *text, const char *block, c
     if (!window_load()) return -2;
     /* (the banner's heading: the title without "Longshot: ", its first letter a capital) */
     char heading[160];
-    snprintf(heading, sizeof heading, "%s", !strncmp(title, "Longshot: ", 10) ? title + 10 : title);
+    snprintf(heading, sizeof heading, "%s", !strncmp(title, "OcaDim: ", 8) ? title + 8 : title);
     if (heading[0] >= 'a' && heading[0] <= 'z') heading[0] = (char)(heading[0] - 'a' + 'A');
     const MkwCrashSdl with = {sdl.version, sdl_sym};
     const MkwCrashPage page = {title, heading, text, block, buttons, n};
