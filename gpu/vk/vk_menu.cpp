@@ -6003,6 +6003,10 @@ void menu_auto_for_gpu(const VkPhysicalDeviceProperties& props, ::auto_settings:
              props.deviceName, (unsigned)hw.vram_mb, hw.integrated ? "integrated" : "dedicated", hw.screen_w, hw.screen_h,
              hw.refresh_hz, (unsigned)hw.ram_mb, hw.threads);
     if (first) opts.preset = kAutoPreset;
+    // (OcaDim, assistant de premier lancement, morceau 1) what an assistant would show: the machine, and the profile it
+    // suggests. Detection only: nothing is applied by this line.
+    logf("OcaDim: détection : %s ; profil conseillé : preset %d, upscaler %d, résolution %d", hw_line, opts.preset,
+         auto_choice.upscaler, auto_choice.resolution);
     if (opts.preset != kAutoPreset) {
         logf("vk: Auto (this PC) would be: %s (%s)", auto_choice.why, hw_line);   // (for a bug report: what Auto would choose)
         return;
