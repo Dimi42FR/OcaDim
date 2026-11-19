@@ -1143,7 +1143,9 @@ unsigned usable_cpus() {
     return n < 64 ? std::clamp(n, 1u, all) : all;
 }
 unsigned half_cpus() {
-    return std::max(1u, std::min(std::max(1u, std::thread::hardware_concurrency()) / 2, usable_cpus()));
+    // (OcaDim) one core left to the OS and the game's own main thread: physical cores - 1, not physical cores
+    const unsigned phys = std::max(2u, std::max(1u, std::thread::hardware_concurrency()) / 2);
+    return std::max(1u, std::min(phys - 1, usable_cpus()));
 }
 bool segment_heap() {
 #ifdef _WIN32
