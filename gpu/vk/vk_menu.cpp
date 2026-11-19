@@ -6218,7 +6218,11 @@ void fps_texts(int64_t now) {
     snprintf(fps_gpu_busy_text, sizeof fps_gpu_busy_text, "%.0f%%", half.avg_ms > 0 ? std::min(100.0, 100.0 * half.gpu_ms / half.avg_ms) : 0.0);
     const fs::Summary graph = fps_summary(now, fs::kGraphWindow, 0);
     snprintf(fps_built_text, sizeof fps_built_text, "%d", graph.pipelines);
-    snprintf(fps_left_text, sizeof fps_left_text, "%d", graph.left_out);
+    // (OcaDim) a hitch and the pipelines built around it, together: does creating them block the frame?
+    static int64_t slow_told = 0;
+    if (graph.pipelines > 0 && half.avg_ms > 25.0 && now - slow_told > fps_stats::kSecond)
+        slow_told = now, logf("OcaDim: %d pipeline(s) construits, %.1f ms de moyenne sur la derniere demi-seconde",
+                              graph.pipelines, half.avg_ms);    snprintf(fps_left_text, sizeof fps_left_text, "%d", graph.left_out);
     if (level < fs::kDev) return;
     // (Dev: the renderer's counters since the last time, every half second, by the frames presented in that time)
     static int64_t at = 0, last[8] = {};
