@@ -1,9 +1,39 @@
 # OcaDim 0.0.3 — le menu français, le kit « petits PC » et le VRS
 
-La plus grosse mise à jour d'OcaDim depuis la 0.0.2 : tout ce qui suit a été **conçu et codé de notre côté**,
-pour rendre le jeu jouable et réglable sur une machine moyenne, pas seulement sur une carte haut de gamme.
+La plus grosse mise à jour d'OcaDim depuis la 0.0.2. Tout ce qui suit a été **conçu, écrit et testé de notre
+côté** — pas repris, pas attendu : le menu est en français, les réglages parlent, et le jeu s'adapte à la
+machine au lieu du contraire.
+
+## 0. Sous le capot : ce qu'on a touché, et pourquoi
+
+Des lignes, pas des promesses. Les endroits du moteur qu'on a modifiés pour les performances :
+
+| Fichier | Ce qu'on y a fait |
+|---|---|
+| `gpu/vk/vk_main.cpp` | On demande `VK_KHR_fragment_shading_rate` et on chaîne `pipelineFragmentShadingRate` au device **seulement si le pilote l'a** ; chargement de `vkCmdSetFragmentShadingRateKHR` par `vkGetDeviceProcAddr`. |
+| `gpu/vk/vk_draw.cpp` | `vrs_set()` applique **2x2 ou 4x4** au début de la frame et **1x1 juste avant le HUD** ; `precompile_zone()` construit **tous** les pipelines de la liste au chargement (`state_list_prepare` + `precompile_run`). |
+| `gpu/vk/vk_replay.cpp` | `rec_cap()` : l'anneau d'enregistrement garde **24 frames au lieu de 48** en mode mémoire réduite, sans réallouer les tableaux. |
+| `gpu/vk/vk_texture.cpp` | `low_vram_texture_mips()` obéit à la ligne **Mips à la demande** au lieu de ne servir que les petites cartes. |
+| `gpu/vk/vk_menu.cpp` | Onze réglages OcaDim, le diagnostic **Ça rame ?**, le garde-fou qui pilote la résolution, la détection de la machine et le profil conseillé. Traduction **avant** troncature : plus aucun fragment anglais. |
+| `host/hos_thread.c` | L'ordonnanceur lit `vcore_mode` dans l'ini : **Réactif** (escape 200 ms) et **Ultra réactif** (en plus, préemption 1 ms au lieu de 2). |
+| `host/oot_barrier.c` | La ligne **Barrières de jobs** : masques du jeu au lieu de sommeils de 20 µs, réversible. |
+| `gpu/vk/intel_compiles.h` | En Auto, la compilation des shaders passe **côte à côte dès 8 cœurs physiques**. |
+
+Le détail qui compte : **rien de tout ça n'est actif par défaut sans mesure**, et chaque ligne se désactive.
 
 ## 1. Ce qu'on a ajouté nous-mêmes
+
+### Ton PC, pas celui du voisin
+
+Au démarrage, OcaDim regarde ta carte, ta VRAM, ton écran et tes cœurs, et il te le dit :
+
+```
+OcaDim: détection : AMD Radeon RX 9070 XT, 16304 MB of video memory, dedicated,
+screen 2560x1440 at 144 Hz, 32694 MB of RAM, 16 threads
+```
+
+Le profil conseillé en découle, et la ligne **Profil de performance** l'applique d'un geste — avec l'ancien
+réglage gardé sous « Personnalisé ».
 
 ### Une section OcaDim, dans un menu entièrement en français
 
