@@ -37,3 +37,19 @@ compilateur.
 
 GPL-3.0 ([LICENSE](LICENSE)). Le socle est celui de Longshot et de la scène des récompilations : le mérite en est le leur,
 ce dépôt en est un prolongement personnel, à jour, avec ses propres ajouts documentés dans [CREDITS.md](CREDITS.md).
+
+## Nouveautes 0.0.3
+
+- **Menu F1 entierement en francais**, avec une section **OcaDim** separee des reglages du jeu.
+- **Ca rame ?** : un diagnostic qui nomme la cause et propose un reglage, annulable.
+- **Mode Petit PC** : moitie de resolution, Lanczos, ombres du jeu, sans frame generation - reversible en un geste.
+- **Resolution dynamique** (60/120/144 images/s) sur les paliers de l'upscaler.
+- **Garde-fou memoire** : au-dela du seuil, la 3D baisse d'un cran, avec annulation.
+- **Budget VRAM** (Auto / 2 / 3 / 4 / 6 / 8 Go) comme seuil du garde-fou.
+- **Ombrage a taux variable (VRS)** 2x/4x, HUD net.
+- **Ordonnanceur de vcores** : Auto / Standard / Reactif / Ultra reactif.
+- **Precompilation au chargement** : plus rien n'est compile en jeu.
+- **Mips a la demande**, **compilation des shaders selon les coeurs**, **profil conseille** d'apres la machine detectee.
+- **FSR 4 (4.0.2) et FSR 3.1 (3.1.6)** au choix, applicables a chaud ; **HDR corrige**.
+- Fichiers renommes en `ocadim_*`, anciens `longshot_*` repris automatiquement.
+
