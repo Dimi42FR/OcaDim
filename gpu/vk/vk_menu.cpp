@@ -1999,6 +1999,10 @@ Row rows[] = {
      "Prépare les pipelines de la zone pendant son écran de chargement, au lieu de les compiler en pleine partie : moins "
      "d'à-coups à l'arrivée. Le chargement dure un peu plus longtemps. Désactivé : comportement actuel.",
      nullptr, false, true},
+    {TAB_OCADIM, "Mode mémoire réduite (expérimental)", &opts.low_mem, 0, 1, 1, tx_onoff,   // (OcaDim: risky)
+     "EXPÉRIMENTAL, DÉSACTIVÉ PAR DÉFAUT. Garde 24 frames d'enregistrement au lieu de 48 : moins de mémoire, mais l'anneau peut "
+     "revenir sur une frame encore en vol et le pilote réinitialiser le GPU (device lost). À n'activer que pour un test, et à "
+     "couper au premier plantage.", nullptr, false, true},
     {TAB_OCADIM, "Mips à la demande", &opts.mips, 0, 1, 1, tx_onoff,   // (OcaDim: fewer mip levels kept)
      "Ne garde que les niveaux de mip que la distance demande : moins de mémoire vidéo et de bande passante, textures "
      "lointaines un peu plus douces. Auto le fait déjà sur une petite carte ; Activé l'impose partout. Immédiat.",
