@@ -17,7 +17,8 @@ inline bool intel_side_by_side_measured(uint32_t device, uint32_t version) {
     return (device & 0xFF00u) == 0xE200u && version >= (101u << 14 | 9154u);
 }
 
-/// The row's value (0 Auto, 1 Side by side, 2 One at a time) as the choice for this GPU
-inline bool intel_side_by_side_chosen(int row, uint32_t device, uint32_t version) {
-    return row == 1 || (row == 0 && intel_side_by_side_measured(device, version));
+/// The row's value (0 Auto, 1 Side by side, 2 One at a time) as the choice for this GPU. (OcaDim) Auto is also side by side
+/// when the processor has eight physical cores or more: the compiler is then given threads it can actually use.
+inline bool intel_side_by_side_chosen(int row, uint32_t device, uint32_t version, int physical_cores = 0) {
+    return row == 1 || (row == 0 && (intel_side_by_side_measured(device, version) || physical_cores >= 8));
 }
