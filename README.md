@@ -8,6 +8,37 @@
 
 <h4 align="center">La récompilation native d'<b>Ocarina of Time</b> sur PC, depuis <b>ta propre copie du jeu</b> — par <b>Dimi42FR</b></h4>
 
+## Nouveautés de la 0.0.3
+
+**Tout ce qui suit a été conçu et codé côté OcaDim** — pas seulement repris de l'amont.
+
+- **Menu F1 entièrement en français**, avec une section **OcaDim** séparée des réglages du jeu.
+- **Ça rame ?** — un diagnostic qui lit une seconde de mesures (temps par image, 1 % low, VRAM, plafond,
+  frame generation), nomme la cause probable et propose **un** réglage. Entrée analyse, applique, puis annule.
+- **Mode Petit PC** — moitié de résolution interne, Lanczos, ombres du jeu, sans frame generation ;
+  le même geste remet les réglages d'avant.
+- **Résolution dynamique** (60 / 120 / 144 images/s) sur les paliers de l'upscaler, jamais au-dessus du choix du joueur.
+- **Garde-fou mémoire** — au-delà du seuil, la 3D baisse d'un cran, avec message et annulation.
+- **Budget VRAM** (Auto / 2 / 3 / 4 / 6 / 8 Go) : c'est le seuil du garde-fou.
+- **Ombrage à taux variable (VRS)** 2x / 4x — le HUD et le texte restent nets.
+- **Ordonnanceur de vcores** : Auto / Standard / Réactif (200 ms) / Ultra réactif (préemption 1 ms).
+- **Précompilation au chargement** — plus rien n'est compilé en jeu (`program census (play): created 0`).
+- **Mips à la demande**, **compilation des shaders selon les cœurs**, **profil conseillé** d'après la machine détectée.
+- **FSR 4 (4.0.2) et FSR 3.1 (3.1.6)** au choix, applicables **à chaud** ; **HDR corrigé** (frames générées en PQ).
+- Fichiers renommés en `ocadim_*` ; les anciens `longshot_*` sont repris automatiquement.
+
+### Mise à jour depuis la 0.0.2
+
+Tes réglages, tes sauvegardes et tes caches sont conservés. Le **nouveau Setup** permet de cocher
+**NVIDIA (DLSS, DLAA, DLSS-G)** lors d'une mise à jour : un joueur en 0.0.2 peut l'activer en passant en 0.0.3.
+Sur AMD, la case ne change rien.
+
+### Mesures (RX 9070 XT, pilote 26.10.2)
+
+- Place du marché : **48 images/s**, 21,3 ms, 1 % low 47,8 ms (limité par le CPU).
+- Plaine d'Hyrule : **67 images/s**, 15,1 ms, 1 % low 21,7 ms, GPU 8,5 ms (56 %), VRAM 7,4 / 15,1 Go.
+- Pas encore vérifié : DLSS/DLAA sur une RTX, et le build joueur PGO du Setup.
+
 <p align="center">
   <b>Fork de <a href="https://longshot.magicbean.dev/">Longshot</a></b> ·
   Windows x64 (Linux hérité de l'amont) ·
