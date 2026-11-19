@@ -14,18 +14,21 @@ sealed record BuildResult(int Code, string? Error, string Tail);
 sealed class Setup
 {
     public const string Name = "OcaDim";
-    public const string Version = "0.0.2-1";
+    public const string Version = "0.0.4";
     public const string GameExe = "ocadim.exe";
 
     public string InstallDir { get; set; } = DefaultInstallDir;
     public string? Nup { get; private set; }
     public string? Romfs { get; private set; }
     public string? Exefs { get; private set; }
-    public bool Fsr { get; set; }
+    public bool Fsr { get; set; } = true;   // (OcaDim) AMD FSR 4/3.1: on by default, it is the renderer's own upscaler and frame generation
     /// (OcaDim) NVIDIA's DLSS SDK, fetched before the build and shipped as ngx/ beside the game: DLSS, DLAA and DLSS Frame
     /// Generation live there. Without it the renderer is built without any of them, so an RTX card finds no DLSS and no
     /// NVIDIA frame generation at all — and the F1 menu shows no NVIDIA page.
     public bool Ngx { get; set; } = true;
+    /// <summary>(OcaDim) "Compilation légère": one compiler at a time (Setup.cs JobsForPc). Slower, but a small PC with little
+    /// RAM never runs out while it builds.</summary>
+    public static bool Light;
     /// (OcaDim) The hottest game functions compiled at -O2 with their callees inlined (nx2/make_game.py's hot list, from
     /// assets/profiles/), and the renderer built with its play profile: the CPU is this game's frame's wall. Off only if a
     /// build or the game misbehaves (the whole lifted code at -O1, as before). Added by Dimi42FR.
@@ -176,6 +179,7 @@ sealed class Setup
     /// under 16, all but one above.</summary>
     static int JobsForPc()
     {
+        if (Light) return 1;   // (OcaDim) "Compilation légère": one compiler at a time, slower but almost impossible to starve
         int cpus = Math.Max(1, Environment.ProcessorCount);
         double gb = TotalRamGb;
         int jobs = gb < 12 ? Math.Max(2, cpus / 4) : gb < 16 ? Math.Max(2, cpus / 2) : Math.Max(2, cpus - 1);
