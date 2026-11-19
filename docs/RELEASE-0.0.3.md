@@ -1,8 +1,14 @@
-# OcaDim 0.0.3 — le menu français, le kit « petits PC » et le VRS
+# OcaDim 0.0.3 — la mise à jour des petits PC
 
-La plus grosse mise à jour d'OcaDim depuis la 0.0.2. Tout ce qui suit a été **conçu, écrit et testé de notre
-côté** — pas repris, pas attendu : le menu est en français, les réglages parlent, et le jeu s'adapte à la
-machine au lieu du contraire.
+**La plus grosse mise à jour d'OcaDim depuis la 0.0.2, et celle qui pense d'abord aux petites cartes et aux
+portables.** Moins de VRAM, moins d'à-coups, des réglages qui s'adaptent au lieu de vous demander de deviner.
+
+On fait de notre mieux : une seule machine de test (RX 9070 XT), beaucoup de cas difficiles, et tout ce qui
+est annoncé ici a été mesuré et testé. Ce qui ne l'a pas été est écrit noir sur blanc à la fin. Vos retours
+font le reste.
+
+Tout ce qui suit a été **conçu, écrit et testé de notre côté** — pas repris, pas attendu : le menu est en
+français, les réglages parlent, et le jeu s'adapte à la machine au lieu du contraire.
 
 ## 0. Sous le capot : ce qu'on a touché, et pourquoi
 

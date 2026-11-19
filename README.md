@@ -8,9 +8,15 @@
 
 <h4 align="center">La récompilation native d'<b>Ocarina of Time</b> sur PC, depuis <b>ta propre copie du jeu</b> — par <b>Dimi42FR</b></h4>
 
-## Nouveautés de la 0.0.3
+## Nouveautés de la 0.0.3 — la mise à jour des petits PC
 
-**Tout ce qui suit a été conçu et codé côté OcaDim** — pas seulement repris de l'amont.
+**Tout ce qui suit a été conçu et codé côté OcaDim** — pas seulement repris de l'amont. Cette version est
+pensée d'abord pour les **petites cartes et les portables** : moins de VRAM, moins d'à-coups, des réglages
+qui s'adaptent au lieu de vous demander de deviner.
+
+On fait de notre mieux : une seule machine de test (RX 9070 XT), aucun budget, et beaucoup de cas
+difficiles. Ce qui est annoncé ici a été mesuré et testé ; ce qui ne l'a pas été est écrit noir sur blanc
+plus bas. Vos retours font le reste.
 
 - **Menu F1 entièrement en français**, avec une section **OcaDim** séparée des réglages du jeu.
 - **Ça rame ?** — un diagnostic qui lit une seconde de mesures (temps par image, 1 % low, VRAM, plafond,
