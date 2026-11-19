@@ -7251,6 +7251,8 @@ void menu_tick() {
             double made = 0;
             if (last_gen_at && now > last_gen_at) made = (double)(gen_now - last_gen) * 1e9 / (double)(now - last_gen_at);
             last_gen = gen_now, last_gen_at = now;
+            // (OcaDim) with frame generation the number is what is really shown: the game's frames plus the generated ones
+            if (opts.framegen >= 1 && made > 0) snprintf(fps_text, sizeof fps_text, "%.0f", game + made);
             if (opts.framegen >= 1 && who)
                 snprintf(fps_sub, sizeof fps_sub, "Base %.0f · %.0f générées · %s", game, made, who);
             else if (opts.framegen >= 1) snprintf(fps_sub, sizeof fps_sub, "Base %.0f · %.0f générées", game, made);
