@@ -7243,7 +7243,14 @@ void menu_tick() {
             // (the game's own rate, "Base", how many the generator added, and who makes them: DLSS FG, FSR 3.1 FG or
             // Built-in FG, or DLSS FG paused. The number shown is the presented rate, the base plus what was generated)
             const char* who = framegen_maker_name();
-            const double made = shown > game ? shown - game : 0;
+            // (OcaDim) the generated rate from AMD's own counter: the game's presents never count the frames its swapchain
+            // adds, so shown - game was always 0
+            static uint64_t last_gen = 0;
+            static int64_t last_gen_at = 0;
+            const uint64_t gen_now = fg_amd_generated();
+            double made = 0;
+            if (last_gen_at && now > last_gen_at) made = (double)(gen_now - last_gen) * 1e9 / (double)(now - last_gen_at);
+            last_gen = gen_now, last_gen_at = now;
             if (opts.framegen >= 1 && who)
                 snprintf(fps_sub, sizeof fps_sub, "Base %.0f · %.0f générées · %s", game, made, who);
             else if (opts.framegen >= 1) snprintf(fps_sub, sizeof fps_sub, "Base %.0f · %.0f générées", game, made);

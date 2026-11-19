@@ -28,6 +28,8 @@ int fg_amd_want_major();   // (OcaDim) 4, 3 or 0 (the SDK's own): the generation
 
 /// And its frame generation context is in place: the frames between the game's are AMD's (the FPS counter's maker name)
 bool fg_amd_generating();
+/// (OcaDim) the generated frames AMD's swapchain has made so far: the HUD's real figure
+uint64_t fg_amd_generated();
 
 /// The swapchain for ci, AMD's when it can be made. VK_ERROR_FEATURE_NOT_PRESENT: not asked for, not available, or it
 /// refused before a swapchain existed: the caller makes the plain one. Any other result: AMD's context is in place and

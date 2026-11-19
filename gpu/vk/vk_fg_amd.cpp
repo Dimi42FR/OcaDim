@@ -386,6 +386,10 @@ bool create_fg(uint32_t w, uint32_t h, VkFormat fmt, bool depth_reversed, float 
 
 }  // namespace
 
+/// (OcaDim) the generated frames AMD's swapchain has made so far: the HUD's real figure (the game's presents never count
+/// them, so shown - game was always 0)
+uint64_t fg_amd_generated() { return st().generated; }
+
 bool fg_amd_requested() {
     bool v = false;
     // (OcaDim) RX_VK_FG_AMD_FORCE=<3|4>: AMD's generation on for this run, with that version, whatever the rows say
