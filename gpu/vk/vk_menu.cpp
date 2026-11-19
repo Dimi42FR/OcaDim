@@ -1971,8 +1971,8 @@ Row rows[] = {
      "résolution choisie dans Graphismes, et celle-ci revient dès que la ligne est sur Désactivée.",
      hn_drs, false, true},
     {TAB_OCADIM, "Budget VRAM", &opts.vram_budget, 0, 5, 1, tx_vram_budget,   // (OcaDim: the cap, measured for now)
-     "Le plafond de mémoire vidéo à ne pas dépasser. Pour l'instant il se contente de le dire dans la ligne Mémoire vidéo "
-     "(« PLAFOND DÉPASSÉ ») : l'éviction des textures vient ensuite. Auto : pas de plafond.",
+     "Le plafond de mémoire vidéo à ne pas dépasser. C'est le seuil du garde-fou mémoire : au-delà, la 3D baisse d'un cran "
+     "et Entrée annule. Auto : 90 % du budget pilote.",
      hn_vram, false, true},
     {TAB_OCADIM, "Ombrage à taux variable", &opts.vrs, 0, 3, 1, tx_vrs,   // (OcaDim: VRS)
      "Réduit la finesse d'ombrage à l'intérieur des surfaces, la garde fine sur les contours : le GPU travaille moins. Le HUD "
@@ -3756,7 +3756,11 @@ void guard_check(int64_t now) {
     const bool ram_ok = GlobalMemoryStatusEx(&ms) != 0;
     uint64_t used = 0, allowed = 0;
     const bool vram_ok = vram_usage(&used, &allowed) && allowed > 0;
-    const bool vram_high = vram_ok && used * 10 >= allowed * 9;
+    // (OcaDim) the manual Budget VRAM is the guard's ceiling when it is set; Auto keeps the driver's 90 %
+    static const double kCaps[] = {0, 2, 3, 4, 6, 8};
+    const double cap_gb = kCaps[opts.vram_budget >= 0 && opts.vram_budget <= 5 ? opts.vram_budget : 0];
+    const bool over_cap = cap_gb > 0 && (double)used >= cap_gb * 1073741824.0;
+    const bool vram_high = vram_ok && (over_cap || (!cap_gb && used * 10 >= allowed * 9));
     const bool ram_high = ram_ok && ms.dwMemoryLoad >= 90;
     if (!vram_high && !ram_high) return;
     Row* r = row_for_value(&opts.resolution);
