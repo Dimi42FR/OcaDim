@@ -256,3 +256,17 @@ Objectif : une fenetre claire, en francais, qui explique au lieu d'effrayer. Con
 - **Un bouton « Redemarrer avec les reglages surs »** (DRS et VRS desactives, low_mem a 0, preset Minimum).
 - Aucune donnee de jeu envoyee : le rapport est copie, jamais transmis.
 
+
+## Bug connu : textures qui clignotent (0,1 s, rare)
+
+Symptome : parfois un ecran noir bref ou des lignes, puis retour a la normale. Rare, non reproductible a volonte.
+
+Pistes, dans l'ordre :
+
+1. **Mips a la demande** : si la ligne est sur Active, les niveaux sont tronques a l'upload ; un retour de mip manquant peut donner un ecran noir d'une frame. A tester avec Desactive.
+2. **ASTC en RGBA8** : le contournement reencode des textures ; sur AMD il peut laisser un trou le temps de la conversion.
+3. **Eviction / budget VRAM** : une texture evincee puis redemandee dans la meme frame.
+4. **Upload de texture en streaming** : le jeu envoie une texture pendant que la frame la lit.
+
+A faire : un log (une ligne) quand une texture est evincee, reencodee ou reuploadee en jeu, avec sa taille et la frame. C'est trois lignes et ca dira laquelle des quatre pistes c'est, sans toucher au rendu.
+
