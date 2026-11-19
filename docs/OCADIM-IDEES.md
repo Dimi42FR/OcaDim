@@ -243,3 +243,16 @@ Le budget VRAM reste **manuel** (Auto / 2 / 3 / 4 / 6 / 8 Go) et se contente de 
 
 Cible de la prepasse de profondeur et des lots statiques : la Plaine, 1 %% low 21,7 ms et GPU 8,5 ms.
 
+
+## 0.0.4 : nouvelle fenetre de crash
+
+Objectif : une fenetre claire, en francais, qui explique au lieu d'effrayer. Contenu prevu :
+
+- **Ce qui s'est passe** en une phrase : device lost, plantage du jeu, memoire, plantage du pilote.
+- **La cause probable** : GPU sature, device lost, memoire epuisee, pilote, mod.
+- **Les 10 dernieres lignes du log**, lisibles, sans chemins techniques.
+- **La config** : carte, pilote, version d'OcaDim, scene, duree de la session.
+- **Les boutons** : Copier le rapport, Ouvrir la page du ticket, Relancer le jeu, Fermer.
+- **Un bouton « Redemarrer avec les reglages surs »** (DRS et VRS desactives, low_mem a 0, preset Minimum).
+- Aucune donnee de jeu envoyee : le rapport est copie, jamais transmis.
+
