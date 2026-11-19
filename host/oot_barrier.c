@@ -16,6 +16,21 @@ static int64_t hos_ab_value(const char* name, int64_t value) {
     (void)name;
     return value;
 }
+/* (OcaDim) Barrières de jobs : the menu's row (barrier_mode in ocadim_options.ini) turns them off when the player asks, even
+   with HOS_OOT_BARRIER_WAIT unset. Env still wins. Read once, here. */
+static int barrier_row_off(void) {
+    extern const char* hos_options_file(void);
+    const char* path = hos_options_file();
+    if (!path || !*path) return 0;
+    FILE* f = fopen(path, "rb");
+    if (!f) return 0;
+    char line[256];
+    int mode = 0;
+    while (fgets(line, sizeof line, f))
+        if (!strncmp(line, "barrier_mode=", 13)) mode = atoi(line + 13);
+    fclose(f);
+    return mode == 1;   // (1 Désactivé)
+}
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
@@ -66,6 +81,7 @@ int hos_oot_barrier_on(void) {
     if (__builtin_expect(m < 0, 0)) {
         const char *e = getenv("HOS_OOT_BARRIER_WAIT");
         m = !(e && env_value_off(e));
+        if (!e && barrier_row_off()) m = 0;   // (OcaDim: the Barrières de jobs row, Désactivé)
         barrier_bound = barrier_bind();
         if (m && !barrier_bound) {
             hos_log("barrier: no WaitOnAddress on this system: the game's job barriers sleep as before");

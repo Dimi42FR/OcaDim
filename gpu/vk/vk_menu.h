@@ -144,6 +144,7 @@ struct Options {
     int precompile = 0;   // (OcaDim) prepare a zone's pipelines during its loading screen: 0 off, 1 on
     int mips = 0;         // (OcaDim) keep only the mip levels the distance needs: 0 Auto (small cards only), 1 on for all
     int low_mem = 0;      // (OcaDim) reduced memory: the recording ring keeps 24 frames instead of 48 (vk_replay.cpp rec_cap)
+    int barrier_mode = 0; // (OcaDim) job barriers: 0 Auto (the game's masks), 1 off (back to the 20 us sleeps). Read at start
 };
 extern Options opts;
 constexpr int kAutoPreset = 6;   // (the Quality preset Auto (this PC): menu_auto_for_gpu, auto_settings.h)

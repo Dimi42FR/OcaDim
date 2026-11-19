@@ -2006,6 +2006,9 @@ Row rows[] = {
     {TAB_OCADIM, "Mode mémoire réduite", &opts.low_mem, 0, 1, 1, tx_onoff,   // (OcaDim: a shorter recording ring)
      "Garde 24 frames d'enregistrement au lieu de 48 : moins de mémoire et de travail en retard. À activer sur une petite "
      "machine. Immédiat, sans redémarrage.", nullptr, false, true},
+    {TAB_OCADIM, "Barrières de jobs", &opts.barrier_mode, 0, 1, 1, tx_onoff,   // (OcaDim: the jobs' masks instead of 20 us sleeps)
+     "Les barrières de jobs du jeu attendent leur masque au lieu de dormir 20 µs : moins de CPU perdu, un peu plus de mémoire. "
+     "Désactivé : les sommeils d'origine. Prend effet après un redémarrage.", nullptr, false, true},
     {TAB_OCADIM, "Profil de performance", &opts.preset, 0, 5, 1, tx_profile_fr,   // (OcaDim: the assistant's profiles)
      "Le profil que l'assistant proposerait : Minimum (4 Go), Faible (6 Go), Équilibré (8 Go), Qualité (12 Go), Ultra "
      "(16 Go et plus). Il règle la résolution, l'upscaler, la netteté et les ombres d'un coup, comme la ligne Profil "
@@ -2460,6 +2463,7 @@ const char* ini_key(const Row& r) {
     if (r.value == &opts.precompile) return "precompile";
     if (r.value == &opts.mips) return "mips";
     if (r.value == &opts.low_mem) return "low_mem";
+    if (r.value == &opts.barrier_mode) return "barrier_mode";
     if (r.value == &opts.intel_compiles) return "intel_shader_compiles";   // (two rows, one key)
     if (r.value == &opts.preset) return "quality_preset";   // (two rows, one key: Affichage's Profil and OcaDim's)
     if (r.value == &opts.fps_cap) return "frame_rate_cap";   // (host/nn_vi.c reads it at the start, then HOS_OPT_FPS_CAP)
