@@ -243,6 +243,10 @@ sealed class WizardForm : Form
         var hotBox = Check("Optimisations CPU maximales — recommandé (chunk chaud à -O2, profil de jeu)", setup.HotCode);
         hotBox.CheckedChanged += (_, _) => setup.HotCode = hotBox.Checked;
         Add(hotBox);
+        var hotNote = Paragraph("Décochez si le jeu plante au démarrage ou en jeu : le build standard est plus lent, mais c'est " +
+                                "celui qu'on teste le plus. Le choix ne change pas le contenu du jeu, seulement la compilation.");
+        hotNote.ForeColor = Muted;
+        Add(hotNote);
         // (OcaDim) a small PC that ran out of memory during the build: one compiler at a time
         var lightBox = Check("Compilation légère (petit PC : beaucoup plus lente, mais ne sature pas la mémoire)", Setup.Light);
         lightBox.CheckedChanged += (_, _) => Setup.Light = lightBox.Checked;

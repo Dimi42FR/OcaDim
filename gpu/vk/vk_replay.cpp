@@ -198,7 +198,7 @@ uint64_t rec_end_pos[kRecordings];   // (RX_VK_RECORDER_OWN: the recorder ring's
 int recording_index = 0;
 /// (OcaDim) Mode mémoire réduite: the ring keeps 24 frames instead of 48 (the arrays stay at 48). The present is 2-3 frames
 /// behind the recording, so 24 still leaves a wide margin; the 10-minute test is what proves it.
-static int rec_cap() { return opts.low_mem ? 24 : kRecordings; }
+static int rec_cap() { return kRecordings; }   // (OcaDim) the reduced ring (24) is withdrawn: it caused device lost
 
 /// (a recording slot's last submit done: before it is used again)
 void recording_wait(Recording& r) {
