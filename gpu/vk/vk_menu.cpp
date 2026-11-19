@@ -2004,8 +2004,9 @@ Row rows[] = {
      "lointaines un peu plus douces. Auto le fait déjà sur une petite carte ; Activé l'impose partout. Immédiat.",
      nullptr, false, true},
     {TAB_OCADIM, "Mode mémoire réduite", &opts.low_mem, 0, 1, 1, tx_onoff,   // (OcaDim: a shorter recording ring)
-     "Garde 24 frames d'enregistrement au lieu de 48 : moins de mémoire et de travail en retard. À activer sur une petite "
-     "machine. Immédiat, sans redémarrage.", nullptr, false, true},
+     "EXPÉRIMENTAL ET À RISQUE. Garde 24 frames d'enregistrement au lieu de 48 : moins de mémoire, mais l'anneau peut revenir "
+     "sur une frame encore en vol et le pilote réinitialiser le GPU (device lost) sur certaines machines. Laissez Désactivé "
+     "sauf pour un test, et signalez tout plantage.", nullptr, false, true},
     {TAB_OCADIM, "Barrières de jobs", &opts.barrier_mode, 0, 1, 1, tx_onoff,   // (OcaDim: the jobs' masks instead of 20 us sleeps)
      "Les barrières de jobs du jeu attendent leur masque au lieu de dormir 20 µs : moins de CPU perdu, un peu plus de mémoire. "
      "Désactivé : les sommeils d'origine. Prend effet après un redémarrage.", nullptr, false, true},
