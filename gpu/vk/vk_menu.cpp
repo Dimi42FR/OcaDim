@@ -7240,10 +7240,13 @@ void menu_tick() {
         if (fps_take(now, shown_frames.load(), game_frames.load(), &next, &last_shown, &last_game, &shown, &game)) {
             snprintf(fps_text, sizeof fps_text, "%.0f", shown);
             fps_rate_now = opts.framegen >= 1 ? game : shown;   // (the game's own against its cap, with frame generation too)
-            // (the game's own rate, "Base", and who makes the frames: DLSS FG, FSR 3.1 FG or Built-in FG, or DLSS FG paused)
+            // (the game's own rate, "Base", how many the generator added, and who makes them: DLSS FG, FSR 3.1 FG or
+            // Built-in FG, or DLSS FG paused. The number shown is the presented rate, the base plus what was generated)
             const char* who = framegen_maker_name();
-            if (opts.framegen >= 1 && who) snprintf(fps_sub, sizeof fps_sub, "Base %.0f, %s", game, who);
-            else if (opts.framegen >= 1) snprintf(fps_sub, sizeof fps_sub, "Base %.0f", game);
+            const double made = shown > game ? shown - game : 0;
+            if (opts.framegen >= 1 && who)
+                snprintf(fps_sub, sizeof fps_sub, "Base %.0f · %.0f générées · %s", game, made, who);
+            else if (opts.framegen >= 1) snprintf(fps_sub, sizeof fps_sub, "Base %.0f · %.0f générées", game, made);
             else fps_sub[0] = 0;
             // (in the menu's language: the counter draws with Tab, past ui::'s translation, so it is put in here)
             if (const char* t = i18n::tr(fps_sub); t != fps_sub) snprintf(fps_sub, sizeof fps_sub, "%s", t);
