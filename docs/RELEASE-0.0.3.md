@@ -85,6 +85,23 @@ Le menu F1 (rail des sections à gauche, en-tête OCADIM) est **intégralement t
   DLSS en passant en 0.0.3, sans réinstaller.
 - Sur les cartes AMD, la case NVIDIA ne change rien.
 
+### Les outils de compilation sont maintenant livrés avec le Setup
+
+L'archive est plus grosse (**343 Mo**) parce qu'elle contient désormais **tous les outils de compilation**
+(`clang`, `lld`, la bibliothèque standard, `python`, les dépendances). C'est un choix :
+
+- **un seul téléchargement**, puis plus rien à récupérer pendant l'installation ;
+- **plus de dépendance à des dépôts externes** : si un hébergement disparaît, OcaDim continue de compiler ;
+- les empreintes de `tools.lock` vérifient chaque fichier.
+
+Avant, le Setup téléchargeait ces mêmes ~450 Mo au moment du build. La différence, c'est *quand* : tout de
+suite et une fois, au lieu de pendant les 40 minutes de compilation.
+
+### Compilation légère (petit PC)
+
+L'assistant propose **« Compilation légère »** : un seul compilateur à la fois. Beaucoup plus lent, mais une
+machine avec peu de RAM ne tombe plus en panne pendant le build.
+
 ## 4. Vérifié
 
 - RX 9070 XT, pilote 26.10.2 : FSR 4, FSR 3.1, bascule à chaud, HDR10, VRS chargé, précompilation 3,4 s,
