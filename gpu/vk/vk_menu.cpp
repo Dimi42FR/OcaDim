@@ -198,8 +198,9 @@ const char* tx_vcore(int v) {
 }
 const char* hn_vcore(int, int k) {
     if (k) return nullptr;
-    return "Combien de temps un thread peut attendre un cœur avant de tourner sans (2 s, ou 200 ms en Réactif). Réactif aide "
-           "les petits CPU, au prix de quelques échanges en plus. Prend effet après un redémarrage.";
+    return "Combien de temps un thread attend un cœur avant de tourner sans, et au bout de combien il passe devant les autres. "
+           "Standard : 2 s. Réactif : 200 ms et préemption deux fois plus rapide, pour les petits CPU. Prend effet après un "
+           "redémarrage.";
 }
 const char* tx_fps_cap(int v) {
     if (v == -1) return "30";
