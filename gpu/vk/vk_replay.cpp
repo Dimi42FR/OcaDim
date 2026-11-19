@@ -5913,7 +5913,7 @@ void present_image(VkImage src, uint32_t sw, uint32_t sh, const int crop[4], VkI
     {   // (OcaDim) precompile a zone's pipelines when the scene goes away for a load, never in the menus
         static bool was_scene = true;
         const bool scene = temporal_scene_now();
-        if (opts.precompile && was_scene && !scene && !menu_is_open())
+        if (opts.precompile && was_scene && !scene)   // (OcaDim) aussi pendant le menu F1 : c'est un moment mort
             logf("OcaDim: précompilation de zone en %.0f ms", precompile_zone());
         was_scene = scene;
     }
