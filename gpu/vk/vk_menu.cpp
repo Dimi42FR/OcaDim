@@ -193,8 +193,8 @@ const char* hn_vrs(int, int k) {
            "texte restent nets. Désactivé : rien ne change.";
 }
 const char* tx_vcore(int v) {
-    static const char* const t[] = {"Auto", "Standard (2 s)", "Réactif (200 ms)"};
-    return t[v < 0 ? 0 : v > 2 ? 2 : v];
+    static const char* const t[] = {"Auto", "Standard (2 s)", "Réactif (200 ms)", "Ultra réactif (200 ms, 1 ms)"};
+    return t[v < 0 ? 0 : v > 3 ? 3 : v];
 }
 const char* hn_vcore(int, int k) {
     if (k) return nullptr;
@@ -1978,7 +1978,7 @@ Row rows[] = {
     {TAB_OCADIM, "Ombrage à taux variable", &opts.vrs, 0, 3, 1, tx_vrs,   // (OcaDim: VRS)
      "Réduit la finesse d'ombrage à l'intérieur des surfaces, la garde fine sur les contours : le GPU travaille moins. Le HUD "
      "et le texte restent nets. Désactivé : aucun changement. Auto et 2x visent les petites cartes.", hn_vrs, false, true},
-    {TAB_OCADIM, "Ordonnanceur de vcores", &opts.vcore_mode, 0, 2, 1, tx_vcore,   // (OcaDim: the wait before running without a core)
+    {TAB_OCADIM, "Ordonnanceur de vcores", &opts.vcore_mode, 0, 3, 1, tx_vcore,   // (OcaDim: the wait before running without a core)
      "Combien de temps un thread attend un cœur avant de tourner sans, et au bout de combien il passe devant les autres. "
      "Standard : 2 s. Réactif : 200 ms, pour les petits CPU. Prend effet après un redémarrage.", hn_vcore, false, true},
     {TAB_OCADIM, "Précompilation au chargement", &opts.precompile, 0, 1, 1, tx_onoff,   // (OcaDim: pipelines built while loading)

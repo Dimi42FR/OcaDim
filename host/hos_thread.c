@@ -1826,10 +1826,10 @@ static void vc_acquire(HosThread *t) {
                 fclose(f);
             }
         }
-        const int64_t def = mode == 2 ? 200000 : 2000000;
+        const int64_t def = mode >= 2 ? 200000 : 2000000;
         esc_eq = vc_env_ns("HOS_VCORE_ESCAPE_EQ_US", def);
         esc_better = vc_env_ns("HOS_VCORE_ESCAPE_US", def);
-        slice = vc_env_ns("HOS_VCORE_SLICE_US", mode == 2 ? 1000 : 2000);   // (Réactif preempts a holder twice as fast)
+        slice = vc_env_ns("HOS_VCORE_SLICE_US", mode == 3 ? 1000 : 2000);   // (Ultra réactif preempts a holder twice as fast)
         starve = vc_env_ns("HOS_VCORE_STARVE_US", 1000000);
     }
     AcquireSRWLockExclusive(&vc_lock);
