@@ -192,8 +192,11 @@ const char* hn_vrs(int, int k) {
     return "Ombrage réduit à l'intérieur des surfaces, fin sur les contours : soulage le GPU des petites cartes. Le HUD et le "
            "texte restent nets. Désactivé : rien ne change.";
 }
-const char* tx_vcore(int v) {
-    static const char* const t[] = {"Auto", "Standard (2 s)", "Réactif (200 ms)", "Ultra réactif (200 ms, 1 ms)"};
+const char* tx_compile_fr(int v) {
+    static const char* const t[] = {"Auto", "Côte à côte", "Un à la fois"};
+    return t[v < 0 ? 0 : v > 2 ? 2 : v];
+}
+const char* tx_vcore(int v) {    static const char* const t[] = {"Auto", "Standard (2 s)", "Réactif (200 ms)", "Ultra réactif (200 ms, 1 ms)"};
     return t[v < 0 ? 0 : v > 3 ? 3 : v];
 }
 const char* hn_vcore(int, int k) {
@@ -1992,6 +1995,9 @@ Row rows[] = {
     {TAB_OCADIM, "Mode mémoire réduite", &opts.low_mem, 0, 1, 1, tx_onoff,   // (OcaDim: a shorter recording ring)
      "Garde 24 frames d'enregistrement au lieu de 48 : moins de mémoire et de travail en retard. À activer sur une petite "
      "machine. Immédiat, sans redémarrage.", nullptr, false, true},
+    {TAB_OCADIM, "Compilation des shaders", &opts.intel_compiles, 0, 2, 1, tx_compile_fr,   // (OcaDim: Intel only)
+     "Sur une carte Intel : combien de shaders le compilateur reçoit à la fois. Auto le passe côte à côte sur un processeur "
+     "de 8 cœurs ou plus. Prend effet après un redémarrage.", nullptr, false, true},
     {TAB_DEBUG, "Robust buffers", &opts.robust, 0, 2, 1, tx_robust,
      "Bounds-checked buffer reads: a read past a buffer's end is dropped instead of stopping the GPU. Applies after a "
      "restart.", hn_robust, true, true},
@@ -2439,6 +2445,7 @@ const char* ini_key(const Row& r) {
     if (r.value == &opts.precompile) return "precompile";
     if (r.value == &opts.mips) return "mips";
     if (r.value == &opts.low_mem) return "low_mem";
+    if (r.value == &opts.intel_compiles) return "intel_shader_compiles";   // (two rows, one key)
     if (r.value == &opts.fps_cap) return "frame_rate_cap";   // (host/nn_vi.c reads it at the start, then HOS_OPT_FPS_CAP)
     if (r.value == &opts.upscale) return "upscaling";
     if (r.value == &opts.dlss) return "dlss";   // (as opts.dlss and RX_VK_DLSS)
