@@ -84,7 +84,7 @@ extern char** environ;
 #endif
 // (OcaDim) the product version players see (the window, the start-up screen, the banner and the log):
 // this build's own, not the upstream release the sources come from
-#define OCADIM_VERSION "0.0.3-TEST"
+#define OCADIM_VERSION "0.0.3-2"
 
 namespace mkwvk {
 int64_t slot_wait_ns();   // (vk_replay.cpp: the replay's waits for a recording slot so far, the FPS counter's Dev line)
