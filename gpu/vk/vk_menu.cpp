@@ -3759,7 +3759,7 @@ void guard_check(int64_t now) {
     // (OcaDim) the manual Budget VRAM is the guard's ceiling when it is set; Auto keeps the driver's 90 %
     static const double kCaps[] = {0, 2, 3, 4, 6, 8};
     const double cap_gb = kCaps[opts.vram_budget >= 0 && opts.vram_budget <= 5 ? opts.vram_budget : 0];
-    const bool over_cap = cap_gb > 0 && (double)used >= cap_gb * 1073741824.0;
+    const bool over_cap = cap_gb > 0 && (double)used >= cap_gb * 1073741824.0 * 0.9;   // (90 % of the chosen cap: a margin)
     const bool vram_high = vram_ok && (over_cap || (!cap_gb && used * 10 >= allowed * 9));
     const bool ram_high = ram_ok && ms.dwMemoryLoad >= 90;
     if (!vram_high && !ram_high) return;
@@ -3779,7 +3779,10 @@ void guard_check(int64_t now) {
     }
     if (!to || to == opts.resolution) return;
     char b[224];
-    if (vram_high)
+    if (over_cap)
+        snprintf(b, sizeof b, "garde-fou mémoire : plafond de %.0f Go dépassé (%.1f Go utilisés), résolution de la 3D de %d %% à %d %% (Entrée annule)",
+                 cap_gb, used / 1073741824.0, ur::percent(opts.resolution), ur::percent(to));
+    else if (vram_high)
         snprintf(b, sizeof b, "garde-fou mémoire : mémoire vidéo à %.0f %%, résolution de la 3D de %d %% à %d %% (Entrée annule)",
                  100.0 * used / allowed, ur::percent(opts.resolution), ur::percent(to));
     else
