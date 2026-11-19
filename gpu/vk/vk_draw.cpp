@@ -2654,7 +2654,9 @@ PipeEntry* graphics_pipeline(const Program& p, const NvnState& s, const Targets&
     // (new to the notes and one the preparation predicted: only the prediction put it in a cache. Counted once made, by how)
     const bool fresh = pipeline_note(key, p, s, at, topo, color_types);
     const bool predicted = fresh && predicted_key(key);
-    static const bool sync = env_on("RX_VK_SYNC_PIPELINES");
+    // (OcaDim) NVIDIA's driver resets the GPU while building pipelines on a worker thread (a player's RTX 4070 log):
+    // build them here, one at a time, unless RX_VK_SYNC_PIPELINES says otherwise
+    static const bool sync = env_on("RX_VK_SYNC_PIPELINES") || dev.props.vendorID == 0x10DE;
     if (sync) {
         if (program_cache_complete_graphics(p)) e->pipeline = build_graphics(p, s, at, topo);
         e->ready = true;
