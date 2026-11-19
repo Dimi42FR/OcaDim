@@ -377,7 +377,7 @@ float body(ui::Ctx& c, const Layout& l, const MkwCrashPage& p, float y, bool dra
 }
 
 int page(Window& w, const MkwCrashPage& p) {
-    ((void (*)(void*, const char*))w.sdl.SetTitle)(w.win, p.title ? p.title : "Longshot");
+    ((void (*)(void*, const char*))w.sdl.SetTitle)(w.win, p.title ? p.title : "OcaDim");
     int sel = 0, pressed = -1, result = -3;   // (pressed: the button the mouse went down on, on this page only)
     float scroll = 0, mx = -1, my = -1;
     bool dirty = true;
@@ -483,7 +483,7 @@ __attribute__((visibility("default")))
 #endif
 int mkwvk_crash_page(const MkwCrashSdl* sdl, const MkwCrashPage* p) {
     if (!sdl || !p || p->nbuttons < 1 || p->nbuttons > 4) return -2;
-    Window* w = open_window(sdl, p->title ? p->title : "Longshot");
+    Window* w = open_window(sdl, p->title ? p->title : "OcaDim");
     if (!w) return -2;
     ImGui::SetCurrentContext(w->ctx);
     return page(*w, *p);
