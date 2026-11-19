@@ -36,6 +36,9 @@ FILES = [
      "38a56a01fb3565c0757d9f5c1e4e69de4b65e5f2e5769b323b200dc1f142bab9", "amd_fidelityfx_loader_vk.dll"),
     ("Kits/FidelityFX/signedbin/amd_fidelityfx_upscaler_vk.dll",
      "4a7e895af6e0b615d40a84d59eb8c2b1054ad91cdd0c739567940270d51bdab7", "amd_fidelityfx_upscaler_vk.dll"),
+    # (OcaDim) the frame generation runtime: without it the game has no AMD FG, and asking for it crashed
+    ("Kits/FidelityFX/signedbin/amd_fidelityfx_framegeneration_vk.dll",
+     "d002dabff8c5e71eaa715fc99438cd4dc81230262a7897b16bc402efec3498b4", "amd_fidelityfx_framegeneration_vk.dll"),
     ("Kits/FidelityFX/docs/license.md",
      "32357259b965d6a8001e9e508ba60eda6034027c5923a7d226ffbaff813c2bfb", "LICENSE-AMD-FSR-SDK.md"),
 ]
