@@ -10,6 +10,12 @@
 #include "../gpu/vk/compat/longshot_env.h"
 #endif
 #include <stdlib.h>
+/* (OcaDim) the A/B reader the upstream barrier commit calls (host/hos_ab.c upstream): no experiments are shipped here, so the
+   value the environment or the row chose is the one used. Declared before its first use. */
+static int64_t hos_ab_value(const char* name, int64_t value) {
+    (void)name;
+    return value;
+}
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
