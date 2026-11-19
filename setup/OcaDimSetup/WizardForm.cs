@@ -54,7 +54,7 @@ sealed class WizardForm : Form
         try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application; }
         catch (Exception) { }
 
-        var header = new Panel { Dock = DockStyle.Top, Height = 104, BackColor = Ink };
+        var header = new Panel { Dock = DockStyle.Top, Height = 118, BackColor = Ink };
         var emblem = new PictureBox { Left = 32, Top = 14, Width = 72, Height = 72, SizeMode = PictureBoxSizeMode.Zoom, Image = Emblem() };
         var wordmark = new Label
         {
@@ -63,7 +63,7 @@ sealed class WizardForm : Form
         };
         var sub = new Label
         {
-            Text = "le port natif · " + Setup.Version, Left = 128, Top = 66, AutoSize = true, ForeColor = Muted,
+            Text = "le port natif · v" + Setup.Version, Left = 128, Top = 76, AutoSize = true, ForeColor = Muted,
             Font = new Font("Segoe UI", 10f),
         };
         header.Controls.AddRange(new Control[] { emblem, wordmark, sub });
@@ -163,7 +163,7 @@ sealed class WizardForm : Form
             "Ocarina of Time, porté nativement en Vulkan. Ce programme ne contient aucun fichier du jeu : il prend votre " +
             "propre copie, récupère les outils de compilation, et compile le jeu sur votre machine."));
         Add(Bullet("Votre copie du jeu en .nup — programme 0400486024DEC000, build e0f3ccfa."));
-        Add(Bullet("Environ 60 Go libres sur le disque, et Windows 10 ou 11 en 64 bits."));
+        Add(Bullet("Environ 33 Go libres au maximum sur le disque (le build les rend ensuite), et Windows 10 ou 11 en 64 bits."));
         Add(Bullet("Environ 40 minutes la première fois (la compilation et la préparation des shaders)."));
         SetFooter("", "Continuer", true, false);
     }
@@ -243,6 +243,10 @@ sealed class WizardForm : Form
         var hotBox = Check("Optimisations CPU maximales — recommandé (chunk chaud à -O2, profil de jeu)", setup.HotCode);
         hotBox.CheckedChanged += (_, _) => setup.HotCode = hotBox.Checked;
         Add(hotBox);
+        // (OcaDim) a small PC that ran out of memory during the build: one compiler at a time
+        var lightBox = Check("Compilation légère (petit PC : beaucoup plus lente, mais ne sature pas la mémoire)", Setup.Light);
+        lightBox.CheckedChanged += (_, _) => Setup.Light = lightBox.Checked;
+        Add(lightBox);
         var credit = Paragraph("Fonctions les plus chaudes compilées à -O2 et le renderer avec son profil de jeu : c'est le CPU " +
                                "qui limite ce jeu. Plus long à compiler, aucune contrepartie en jeu.  Ajouté par Dimi42FR.");
         credit.ForeColor = Muted;
@@ -357,6 +361,9 @@ sealed class WizardForm : Form
             guard = BuildLock.Take(setup.ToolsDir);
             var tools = setup.Tools(source, Line);
             if (setup.ToolsFrom != null) tools.Seed(setup.ToolsFrom);
+            // (OcaDim) outils livrés avec le Setup : <dossier du Setup>\tools-seed, copiés au lieu d'être téléchargés
+            var bundled = Path.Combine(AppContext.BaseDirectory, "tools-seed");
+            if (Directory.Exists(bundled)) tools.Seed(bundled);
             Stage("Outils de compilation", 0.02);
             await tools.InstallAsync((fraction, text) =>
             {

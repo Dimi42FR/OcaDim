@@ -220,7 +220,7 @@ reste — les outils, ~250 Mo — se télécharge au premier lancement, **chaque
   outils ; « Désinstaller » retire le jeu et les raccourcis.
 - La **préparation des shaders n'est jamais tuée** : son cache vaut une demi-heure.
 - **Rien ne sort de la machine** : aucune télémétrie, aucun serveur, aucune mise à jour en ligne.
-- Il faut : ta copie du jeu, **~60 Go** libres, Windows 10/11 x64. Compte **~40 minutes** la première fois.
+- Il faut : ta copie du jeu, **33 Go** libres au maximum, Windows 10/11 x64. Compte **~40 minutes** la première fois.
 
 Et l'identité : le jeu s'appelle **OcaDim 0.0.1** partout (fenêtre, titre, sauvegardes dans `%LOCALAPPDATA%\OcaDim`,
 statut Discord « Playing OcaDim » avec son artwork et le temps joué), un **backdrop** et un blason dessinés pour le
@@ -457,7 +457,7 @@ frame rate: the game runs on more than this, and performance depends on the reso
 | **Mesh shaders** | Not required: without them, Longshot draws through a slower compute fallback. | **Strongly recommended:** NVIDIA RTX 20 series and newer, AMD RX 6000 series and newer, Intel Arc. |
 | **Video memory (VRAM)** | **4 GB**, with the in-game Minimum (4GB) or Low (6GB) quality preset. | **8 GB or more.** |
 | **System memory (RAM)** | **16 GB.** See the memory guidance below. | **16 GB or more.** |
-| **Storage** | **About 60 GB free while building.** A hard drive works, but builds are much slower. | **An SSD with about 60 GB free.** |
+| **Storage** | **About 33 GB free at most while building.** A hard drive works, but builds are much slower. | **An SSD with about 60 GB free.** |
 
 **Below the minimum:** a laptop with Intel UHD graphics and a 4-thread CPU is below both minimums. The game has been
 reported to start on one (Intel UHD, 4 threads, 16 GB, Windows), at about 35 fps on the title and with crashes
