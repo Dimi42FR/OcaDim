@@ -182,9 +182,12 @@ void main() {
                        (1.0 - smoothstep(0.65 * pc.max_dist, pc.max_dist, hit_t));
     const vec3 refl = textureLod(color_tex, hit_uv, 0.0).rgb;
     // (Fresnel : un reflet est faible de face et fort en incidence rasante, comme l'eau ou une vitre. Sans materiaux,
-    // c'est ce qui evite que tous les murs deviennent des miroirs : F0 = 0,02, l'exposant de Schlick)
+    // c'est ce qui evite que tous les murs deviennent des miroirs. Un sol, lui, garde un reflet quel que soit l'angle de la
+    // camera : sa normale pointe vers le haut de l'ecran (n.y), meme quand on regarde ses pieds)
     const float ndv = clamp(dot(n, eye), 0.0, 1.0);
-    const float fresnel = 0.02 + 0.98 * pow(1.0 - ndv, 5.0);
+    const float fresnel = 0.08 + 0.92 * pow(1.0 - ndv, 3.0);
+    const float floor_ref = 0.40 * clamp(n.y, 0.0, 1.0);
+    const float weight = max(fresnel, floor_ref);
     if (pc.pad0 == 1) {   // (debug : magenta partout ou un reflet est trouve)
         imageStore(out_img, px, vec4(1.0, 0.0, 1.0, 1.0));
         return;
@@ -197,5 +200,5 @@ void main() {
         imageStore(out_img, px, vec4(n * 0.5 + 0.5, 1.0));
         return;
     }
-    imageStore(out_img, px, vec4(mix(base.rgb, refl, clamp(pc.strength * fresnel * fade, 0.0, 1.0)), base.a));
+    imageStore(out_img, px, vec4(mix(base.rgb, refl, clamp(pc.strength * weight * fade, 0.0, 1.0)), base.a));
 }
