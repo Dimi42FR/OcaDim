@@ -1225,6 +1225,9 @@ struct PfItem {
     bool start = false;          // (the buffer's first stretch: it carries the updates before the buffer)
     size_t ub0 = 0;              // (start only: how many entries the updates before the buffer were)
     std::vector<PfUb> ubs;       // (start only: their copies; the list may prune under a lagged helper)
+    // (OcaDim) the capture's view and the submission, read where the item is queued: a lagged helper read them when it got
+    // to the stretch, by then a later submission's, so the key it published never matched the record's ask
+    uint64_t view = 0, rec = 0;
 };
 std::mutex pf_mu;
 std::condition_variable pf_cv;
@@ -1460,7 +1463,7 @@ void pf_helper_main() {
         // point had it: the record asks for ranges the helper did not publish, and builds them itself)
         s = it.pt.s;
         size_t lim = it.pt.ub;   // (the updates before the stretch: the record's overlays there see exactly these)
-        const uint64_t view = memory_capture_view(), rec = rec_value_now;
+        const uint64_t view = it.view, rec = it.rec;   // (OcaDim: read where it was queued, not where the helper got to)
         const uint8_t* p = it.pt.p;
         for (;;) {
             if (it.end && p == it.end) break;
@@ -2384,7 +2387,9 @@ void replay(VkCommandBuffer& cmd, NvnState& s, const uint8_t* p, const uint8_t* 
                         if (!pf_queue.empty() && !pf_queue.back().closed && !pf_queue.back().end)
                             pf_queue.back().end = par_points.back().p;
                         if (pf_queue.size() < kPfQueueMax) {
-                            pf_queue.push_back({par_points.back(), nullptr, false, false, 0, {}});
+                            PfItem queued{par_points.back(), nullptr, false, false, 0, {}};
+                            queued.view = memory_capture_view(), queued.rec = rec_value_now;   // (OcaDim: the key at queue time)
+                            pf_queue.push_back(std::move(queued));
                             pf_queued.fetch_add(1, std::memory_order_relaxed);
                             pf_cv.notify_one();
                         } else {
@@ -2714,6 +2719,7 @@ const uint8_t* replay_handle(VkCommandBuffer& cmd, const uint8_t* h, bool may_st
     if (desc_prefetch_on()) {   // (OcaDim) the buffer's first stretch: from its start to the first point
         pf_start();
         PfItem it{{h, start, ub0, par_conds.size(), 0}, nullptr, false, true, ub0, {}};
+        it.view = memory_capture_view(), it.rec = rec_value_now;   // (OcaDim: the key at queue time)
         // (the updates before this buffer, copied now: the list is pruned between submissions and the helper may only get
         // here after; its overlays apply these by copy, never by the list's place)
         for (size_t i = 0; i < ub0; i++)
