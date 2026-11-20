@@ -87,7 +87,7 @@ void main() {
     const float dr = textureLod(depth_tex, uv + vec2(tx.x, 0.0), 0.0).r;
     const float du = textureLod(depth_tex, uv - vec2(0.0, tx.y), 0.0).r;
     const float dd = textureLod(depth_tex, uv + vec2(0.0, tx.y), 0.0).r;
-    const float reach = 0.15 * abs(p.z) + 1.0;
+    const float reach = 0.5 * abs(p.z) + 2.0;   // (un sol vu de pres change vite d'un pixel a l'autre : 0,15|z|+1 le rejetait)
     if (dl >= 0.99995 || dr >= 0.99995 || du >= 0.99995 || dd >= 0.99995) {
         imageStore(out_img, px, base);
         return;
@@ -120,11 +120,9 @@ void main() {
         return;
     }
     const vec3 r = reflect(normalize(p), n);
-    // (un rayon qui repart vers la camera ne trouvera rien devant lui)
-    if (dot(r, eye) > 0.999) {
-        imageStore(out_img, px, base);
-        return;
-    }
+    // (pas de rejet des rayons qui repartent vers la camera : un sol vu de haut reflechit justement vers l'oeil, et le
+    // seuil dot(r, eye) > 0,999 coupait le reflet des qu'on baissait un peu la vue. La marche et le repli s'en chargent)
+
     // (Fresnel : un reflet est faible de face et fort en incidence rasante, comme l'eau ou une vitre. Sans materiaux,
     // c'est ce qui evite que tous les murs deviennent des miroirs. Un sol, lui, garde un reflet quel que soit l'angle de la
     // camera : sa normale pointe vers le haut du monde, meme quand on regarde ses pieds)
@@ -137,7 +135,7 @@ void main() {
     const float up_mask = smoothstep(0.20, 0.60, up);
     // (seulement les surfaces bien a plat : une pente ou un rocher inclinait le rayon a chaque pixel et donnait des
     // eclats ; le chemin, l'eau et les dalles gardent leur reflet)
-    const float floor_ref = 0.35 * smoothstep(0.35, 0.85, up);
+    const float floor_ref = 0.55 * smoothstep(0.35, 0.85, up);
     const float weight = max(fresnel * up_mask, floor_ref);
 
     // (la marche : un pas fixe en distance, du proche au loin ; a chaque pas, on projette et on lit la profondeur)
