@@ -6444,7 +6444,7 @@ bool ssr_make_pipelines() {
 
 /// (apres la passe de scene : la couleur et la profondeur sont encore celles du jeu, avant le HUD et avant l'upscaler)
 void ssr_after_pass(VkCommandBuffer cmd, const Pass& ps) {
-    if (!opts.ssr || g_ssr.failed || par_active.load(std::memory_order_relaxed)) return;
+    if (opts.ssr <= 0 || g_ssr.failed || par_active.load(std::memory_order_relaxed)) return;
     if (ps.n < 1 || !ps.tex[0] || !ps.color[0] || !ps.depth || !ps.depth_tex) return;
     if (ps.level[0] != 0 || ps.layer[0] != 0 || ps.depth_level != 0 || ps.depth_layer != 0) return;
     if (ps.samples != VK_SAMPLE_COUNT_1_BIT || ps.has_block_images) return;
@@ -6460,12 +6460,22 @@ void ssr_after_pass(VkCommandBuffer cmd, const Pass& ps) {
     // la projection qui manque au SSR)
     float proj[16], near_z = 0, far_z = 0;
     uint32_t cw = 0, ch = 0;
-    if (!temporal_scene_camera(depth, proj, &near_z, &far_z, &cw, &ch)) return;
-    if (near_z <= 0.0f || cw != w || ch != h) return;
+    const bool cam = temporal_scene_camera(depth, proj, &near_z, &far_z, &cw, &ch);
+    if (!cam || near_z <= 0.0f || cw != w || ch != h) {
+        // (diagnostic, avec RX_VK_SSR_DEBUG seulement : la passe est-elle bien la scene ?)
+        static const bool dbg = getenv("RX_VK_SSR_DEBUG") != nullptr;
+        static uint64_t told_frame;
+        if (dbg && texture_frame_no() - told_frame > 300) {
+            told_frame = texture_frame_no();
+            logf("vk: OcaDim : SSR : passe %ux%u f%d, camera %s %ux%u proche %.2f : rien cette image", w, h, (int)fmt,
+                 cam ? "oui" : "non", cw, ch, near_z);
+        }
+        return;
+    }
     // (une fois par image et par profondeur : une passe rouverte plus tard ne se reflechit pas elle-meme)
-    static thread_local uint64_t seen_frame;
-    static thread_local VkImage seen_depth;
-    if (seen_frame == texture_frame_no() && seen_depth == depth->image) return;
+    // (OcaDim : la scene peut finir en plusieurs passes ; la derniere est l'image que l'upscaler prend, c'est elle qui doit
+    // porter les reflets. On applique donc a chaque fin de passe de cette profondeur, la derniere gagne. Le cout est celui
+    // d'une passe par fin de passe ; le jeu n'en a qu'une en pratique)
     SsrImage* im = ssr_image(w, h, cmd);
     if (!im) {
         g_ssr.failed = true;
@@ -6478,7 +6488,6 @@ void ssr_after_pass(VkCommandBuffer cmd, const Pass& ps) {
     if (!cv || !dv) return;
     VkPipeline blit = ssr_blit_pipeline(fmt, ps.samples);
     if (!blit) return;
-    seen_frame = texture_frame_no(), seen_depth = depth->image;
     if (!g_ssr.color_sampler) {
         VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
         si.magFilter = si.minFilter = VK_FILTER_LINEAR;
@@ -6496,11 +6505,17 @@ void ssr_after_pass(VkCommandBuffer cmd, const Pass& ps) {
     pc.inv_size[0] = 1.0f / (float)w, pc.inv_size[1] = 1.0f / (float)h;
     pc.near_z = near_z, pc.max_dist = max_dist;
     pc.thickness = std::max(2.0f, max_dist / (float)steps * 1.5f);
-    pc.strength = 0.85f, pc.steps = (int32_t)steps;
+    pc.strength = std::clamp(opts.ssr, 0, 100) / 100.0f, pc.steps = (int32_t)steps;
+    static const int debug = getenv("RX_VK_SSR_DEBUG") ? atoi(getenv("RX_VK_SSR_DEBUG")) : 0;
+    pc.pad0 = debug;   // (1 : le masque des reflets, 2 : le reflet seul, 3 : les normales)
     static bool told;
     if (!told) {
         told = true;
-        logf("vk: OcaDim : SSR actif sur la scene %ux%u (proche %.2f, loin %.0f, portee %.0f)", w, h, near_z, far_z, max_dist);
+        logf("vk: OcaDim : SSR actif sur la scene %ux%u (proche %.2f, loin %.0f, portee %.0f, intensite %d %%%s)", w, h, near_z,
+             far_z, max_dist, std::clamp(opts.ssr, 0, 100),
+             debug == 1 ? ", debug : masque des reflets" : debug == 2 ? ", debug : reflet seul" :
+             debug == 3 ? ", debug : normales" : debug == 4 ? ", debug : vert" : debug == 5 ? ", debug : profondeur" :
+             debug == 6 ? ", debug : normales" : debug == 7 ? ", debug : profondeur et normales" : "");
     }
     // (1) la scene -> couleur + reflet, dans l'image temporaire
     full_barrier(cmd, "barrier (avant le SSR)");

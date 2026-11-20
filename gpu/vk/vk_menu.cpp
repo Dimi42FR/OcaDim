@@ -1359,6 +1359,12 @@ const char* hn_threaded(int v, int variant) {
 /// (les textes des lignes OcaDim ajoutées : en français, comme le reste de l'onglet)
 const char* tx_auto_fr(int v) { static const char* const t[] = {"Auto", "Activé", "Désactivé"}; return t[std::clamp(v, 0, 2)]; }
 const char* tx_onoff_fr(int v) { return v ? "Activé" : "Désactivé"; }
+const char* tx_ssr_fr(int v) {   // (OcaDim: les réflexions écran, Désactivée puis l'intensité en pour cent)
+    if (v <= 0) return "Désactivée";
+    static char b[8];
+    snprintf(b, sizeof b, "%d%%", v);
+    return b;
+}
 const char* tx_workers_fr(int v) { static const char* const t[] = {"Auto", "1", "2", "3", "4"}; return t[std::clamp(v, 0, 4)]; }
 const char* tx_seg_fr(int v) { static const char* const t[] = {"Auto (160)", "32", "64", "160"}; return t[std::clamp(v, 0, 3)]; }
 const char* tx_bg_fr(int v) { static const char* const t[] = {"Désactivé", "15 s", "30 s"}; return t[std::clamp(v, 0, 2)]; }
@@ -2129,10 +2135,11 @@ Row rows[] = {
      "cancels."},
     // ---- (OcaDim) Ray-Tracing : les essais, séparés de l'onglet OcaDim. Le SSR y est branché ; le SSAO a été retiré ----
     {TAB_RT, "Ray-Tracing (TEST)", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, false, true, -1, true},
-    {TAB_RT, "Réflexions écran (SSR)", &opts.ssr, 0, 1, 1, tx_onoff_fr,   // (OcaDim: les reflets dans la profondeur)
+    {TAB_RT, "Réflexions écran (SSR)", &opts.ssr, 0, 100, 5, tx_ssr_fr,   // (OcaDim: les reflets dans la profondeur)
      "Les reflets sur l'eau, les sols et les vitres, calculés à partir de la couleur et de la profondeur de la scène : "
-     "seuls les reflets visibles à l'écran existent, et les bords s'effacent. Désactivée par défaut, expérimentale : à "
-     "tester sur une copie de l'installation, une passe de calcul par image (sans effet avec les threads du replay).",
+     "seuls les reflets visibles à l'écran existent, et les bords s'effacent. Désactivée par défaut. Au-dessus, la part "
+     "du reflet mélangée à la couleur (100 % : miroir) ; plus haut, plus visible, sans changer le coût. Expérimentale : "
+     "à tester sur une copie de l'installation, une passe de calcul par image (sans effet avec les threads du replay).",
      nullptr, false, true},
     {TAB_GAMEPLAY, "Quit", nullptr, 0, 0, 0, nullptr,
      "Save your progress first. Press Enter or A twice to quit. Esc or B cancels."},

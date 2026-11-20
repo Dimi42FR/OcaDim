@@ -58,6 +58,10 @@ void main() {
     if (px.x >= size.x || px.y >= size.y) return;
     const vec2 uv = (vec2(px) + 0.5) * pc.inv_size;
     const vec4 base = textureLod(color_tex, uv, 0.0);
+    if (pc.pad0 == 4) {   // (debug : le blit et le calcul tournent-ils ? tout l'ecran en vert)
+        imageStore(out_img, px, vec4(0.0, 1.0, 0.0, 1.0));
+        return;
+    }
     const float d = textureLod(depth_tex, uv, 0.0).r;
     // (un ciel, ou un endroit ou rien n'a ete ecrit : rien a reflechir)
     if (d >= 0.99995) {
@@ -65,6 +69,11 @@ void main() {
         return;
     }
     const vec3 p = view_pos(uv, d);
+    if (pc.pad0 == 5) {   // (debug : la profondeur reconstruite, en niveaux de gris)
+        const float g = clamp(-p.z / max(pc.max_dist, 1.0), 0.0, 1.0);
+        imageStore(out_img, px, vec4(g, g, g, 1.0));
+        return;
+    }
     if (p.z >= -pc.near_z * 0.5) {   // (derriere la camera)
         imageStore(out_img, px, base);
         return;
@@ -99,6 +108,15 @@ void main() {
     // (la normale face a la camera : le sens des differences depend de la main du jeu)
     const vec3 eye = normalize(-p);
     if (dot(n, eye) < 0.0) n = -n;
+    if (pc.pad0 == 6) {   // (debug : la normale reconstruite, en couleur)
+        imageStore(out_img, px, vec4(n * 0.5 + 0.5, 1.0));
+        return;
+    }
+    if (pc.pad0 == 7) {   // (debug : R = profondeur, G/B = normale : le blit tourne-t-il, et la profondeur se lit-elle ?)
+        const float g = clamp(-p.z / max(pc.max_dist, 1.0), 0.0, 1.0);
+        imageStore(out_img, px, vec4(g, n.x * 0.5 + 0.5, n.y * 0.5 + 0.5, 1.0));
+        return;
+    }
     const vec3 r = reflect(normalize(p), n);
     // (un rayon qui repart vers la camera ne trouvera rien devant lui)
     if (dot(r, eye) > 0.999) {
@@ -163,5 +181,21 @@ void main() {
     const float fade = smoothstep(0.0, 0.03, edge_src) * smoothstep(0.0, 0.03, edge_hit) *
                        (1.0 - smoothstep(0.65 * pc.max_dist, pc.max_dist, hit_t));
     const vec3 refl = textureLod(color_tex, hit_uv, 0.0).rgb;
-    imageStore(out_img, px, vec4(mix(base.rgb, refl, clamp(pc.strength * fade, 0.0, 1.0)), base.a));
+    // (Fresnel : un reflet est faible de face et fort en incidence rasante, comme l'eau ou une vitre. Sans materiaux,
+    // c'est ce qui evite que tous les murs deviennent des miroirs : F0 = 0,02, l'exposant de Schlick)
+    const float ndv = clamp(dot(n, eye), 0.0, 1.0);
+    const float fresnel = 0.02 + 0.98 * pow(1.0 - ndv, 5.0);
+    if (pc.pad0 == 1) {   // (debug : magenta partout ou un reflet est trouve)
+        imageStore(out_img, px, vec4(1.0, 0.0, 1.0, 1.0));
+        return;
+    }
+    if (pc.pad0 == 2) {   // (debug : le reflet seul, pour verifier son sens)
+        imageStore(out_img, px, vec4(refl, 1.0));
+        return;
+    }
+    if (pc.pad0 == 3) {   // (debug : la normale reconstruite, en couleur)
+        imageStore(out_img, px, vec4(n * 0.5 + 0.5, 1.0));
+        return;
+    }
+    imageStore(out_img, px, vec4(mix(base.rgb, refl, clamp(pc.strength * fresnel * fade, 0.0, 1.0)), base.a));
 }

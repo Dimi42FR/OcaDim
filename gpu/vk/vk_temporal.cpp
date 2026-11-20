@@ -189,6 +189,9 @@ struct State {
     bool psycho_last = false; // A tone mapper or input encoding change discards temporal history.
     VkFormat history_input = VK_FORMAT_UNDEFINED;
     Camera cam;               // (this frame's, since the last upscale)
+    // (OcaDim, SSR) the frame's scene camera kept after temporal_upscale invalidated cam: the scene may end in more than
+    // one pass, and the last one is the picture the upscaler takes (temporal_scene_camera)
+    Camera frame_cam;
     // (the gameplay upscale's output, as last seen: the scene sizes the upscaler can take follow from it,
     // temporal_scene_size. Read on the game's draws without the lock)
     std::atomic<uint32_t> out_w{0}, out_h{0};
@@ -898,19 +901,24 @@ void temporal_note_scene_draw(const Texture* color0, uint32_t width, uint32_t he
     k.width = width, k.height = height, k.depth = depth, k.depth_gen = texture_destroy_generation(), k.frame = now;
     k.scene_format = color0->format;
     k.valid = true;
+    s.frame_cam = k;   // (OcaDim, SSR : la meme image, gardee pour les passes de scene qui suivent l'upscale)
 }
 
 bool temporal_scene_camera(const Texture* depth, float projection[16], float* near_z, float* far_z, uint32_t* width,
                            uint32_t* height) {
     State& s = st();
     std::lock_guard lk(s.mu);
-    // (l'image de cette image-ci seulement : la camera d'une image precedente ferait glisser les reflets)
-    if (!s.cam.valid || s.cam.depth != depth || s.cam.frame != texture_frame_no()) return false;
-    std::memcpy(projection, s.cam.projection, sizeof(float) * 16);
-    if (near_z) *near_z = s.cam.near_z;
-    if (far_z) *far_z = s.cam.far_z;
-    if (width) *width = s.cam.width;
-    if (height) *height = s.cam.height;
+    // (l'image de cette image-ci seulement : la camera d'une image precedente ferait glisser les reflets. Celle de la
+    // frame survit a l'invalidation de l'upscale : la passe qui termine la scene peut venir apres lui)
+    const Camera* k = nullptr;
+    if (s.cam.valid && s.cam.depth == depth && s.cam.frame == texture_frame_no()) k = &s.cam;
+    else if (s.frame_cam.frame == texture_frame_no() && s.frame_cam.depth == depth) k = &s.frame_cam;
+    if (!k) return false;
+    std::memcpy(projection, k->projection, sizeof(float) * 16);
+    if (near_z) *near_z = k->near_z;
+    if (far_z) *far_z = k->far_z;
+    if (width) *width = k->width;
+    if (height) *height = k->height;
     return true;
 }
 
