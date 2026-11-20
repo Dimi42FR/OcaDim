@@ -121,10 +121,12 @@ Toutes dans l'onglet **OcaDim** du F1, en français, avec leur clé ini ASCII da
 - **Toujours perdu** : la ligne « Batched submits » (devenue une politique, `device_policy.h`) ; le volet « eau à pas fixes » des correctifs 60 fps (l'amont a réécrit le hook en `hos_oot_solver_steps`) ; l'outillage « demande de test » (`.claude/skills`, `scripts/test_requests.py`, `docs/test-requests.md`, `tests/test_test_requests.py`).
 - **Pour rouvrir** : `git show mine-a-before-upstream:gpu/vk/...` ; le prefetch et les lignes ci-dessus ont été reportés depuis `dfd1bdeb^1`.
 
-## 8 ter. Liste de pipelines et prefetch (20/11)
+## 8 ter. Liste de pipelines, prefetch et précompilation en arrière-plan (20/11)
 
 - **Liste** : session de téléportations (30 destinations, enfant et adulte) sur une **copie** de la sauvegarde, `--profile test` : **+1 121 pipelines neufs** (`assets/pipeline_states/contrib/dimi42fr-tour-teleports-2026-11-20`). Liste fusionnée : 67 694 pipelines de 22 844 programmes. Le jeu les embarque au build suivant (`make_game.py`).
-- **Prefetch** : la clé (vue, soumission) est maintenant capturée **à l'empilement**, pas quand le helper traite. Mesure après correctif, Market, 2 threads : **320 servis sur 622 028** (0,05 %), 2 879 publiés. Donc la cause est ailleurs (`lim` ou l'adresse demandée). Le prefetch reste **éteint par défaut**, et **exige ≥ 2 threads du replay** (`replay_handle` sort par le chemin simple sinon) — couplage à retirer si on veut le rendre autonome.
+- **Prefetch** : la clé (vue, soumission) est maintenant capturée **à l'empilement**, pas quand le helper traite. Mesure après correctif, Market, 2 threads : **320 servis sur 622 028** (0,05 %), 2 879 publiés. Donc la cause est ailleurs (`lim` ou l'adresse demandée). Le prefetch reste **éteint par défaut**, et **exige ≥ 2 threads du replay** (`replay_handle` sort par le chemin simple sinon).
+- **Tranche multi-démarrages : abandonnée.** Le 2e démarrage ne retrouve plus les variantes des programmes restants (1 790 notes « non gardées »), et `.built` est écrit quand même. Le garde-fou (empreinte du préfixe dans `.done`) est en place mais ne règle pas la rétention.
+- **Précompilation en arrière-plan (le design retenu)** : ligne OcaDim **Précompilation en arrière-plan**, **Désactivé par défaut**, 15 s ou 30 s (`precompile_background`). Le titre s'affiche après ce temps et la compilation continue derrière, **quatre threads en priorité basse** ; en mode `RX_VK_LOAD=create`, la préparation est lancée derrière le jeu. Mesure sur cache vraiment froid (fichier du jeu **et** cache du pilote AMD vides) : **187,8 s** tout avant le titre, **32,7 s** avec 15 s. `RX_VK_PRECOMPILE_BACKGROUND_S` reste prioritaire. Attention : la valeur est lue **sans static** — `precompile_run` est appelé une première fois avant que le fichier d'options et `ocadim_env.txt` ne soient lus.
 
 ## 9. Les règles du projet
 
