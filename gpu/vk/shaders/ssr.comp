@@ -180,11 +180,11 @@ void main() {
     }
     if (hit_t < 0.0) {
         // (repli : le rayon sort de l'ecran - le ciel ou le decor au bord. C'est ce qui garde un sol reflechissant quand
-        // on regarde ses pieds : vers le bas, le ciel n'est pas dans la profondeur, le SSR seul n'a rien a toucher)
-        const float e = min(min(miss_uv.x, 1.0 - miss_uv.x), min(miss_uv.y, 1.0 - miss_uv.y));
-        const float ef = smoothstep(0.0, 0.03, e) * (1.0 - smoothstep(0.65 * pc.max_dist, pc.max_dist, miss_t));
-        const vec3 env = textureLod(color_tex, miss_uv, 0.0).rgb;
-        const float w = pc.strength * weight * 0.6 * ef;
+        // on regarde ses pieds : vers le bas, le ciel n'est pas dans la profondeur, le SSR seul n'a rien a toucher. Pas
+        // de fondu de bord ici : le dernier point est par definition au bord, il annulait le repli)
+        const float ef = 1.0 - smoothstep(0.65 * pc.max_dist, pc.max_dist, miss_t);
+        const vec3 env = textureLod(color_tex, clamp(miss_uv, vec2(0.005), vec2(0.995)), 0.0).rgb;
+        const float w = pc.strength * weight * 0.8 * ef;
         imageStore(out_img, px, vec4(mix(base.rgb, env, clamp(w, 0.0, 1.0)), base.a));
         return;
     }
