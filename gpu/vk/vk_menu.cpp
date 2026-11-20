@@ -2125,12 +2125,9 @@ Row rows[] = {
      "cancels."},
     // ---- (OcaDim) Ray-Tracing : les essais, séparés de l'onglet OcaDim. Rien n'est branché pour l'instant --------------
     {TAB_RT, "Ray-Tracing (TEST)", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, false, true, -1, true},
-    {TAB_RT, "Occlusion ambiante (SSAO)", &opts.ssao, 0, 1, 1, tx_onoff_fr,
-     "Assombrit les recoins et les contacts à partir de la profondeur de la scène, avant le HUD. Expérimental : mesure le "
-     "contraste de profondeur autour de chaque pixel (pas encore de vraies normales ni de rayons par pixel)."},
-    {TAB_RT, "Aucun autre essai branché", nullptr, 0, 0, 0, nullptr,
-     "Cet onglet accueillera les essais suivants : réflexions écran (SSR), puis ombres ray-tracées. Rien d'autre n'est "
-     "implémenté pour l'instant."},
+    {TAB_RT, "Aucun essai branché", nullptr, 0, 0, 0, nullptr,
+     "Onglet réservé aux essais de rendu : occlusion ambiante (SSAO), réflexions écran (SSR), puis ombres ray-tracées. "
+     "Rien n'est implémenté pour l'instant ; les lignes viendront ici, une par essai, sans toucher aux options OcaDim."},
     {TAB_GAMEPLAY, "Quit", nullptr, 0, 0, 0, nullptr,
      "Save your progress first. Press Enter or A twice to quit. Esc or B cancels."},
 };
@@ -2557,7 +2554,6 @@ const char* ini_key(const Row& r) {
     if (r.value == &opts.draw_order) return "draw_order";
     if (r.value == &opts.ccx_split) return "ccx_split";
     if (r.value == &opts.precompile_bg) return "precompile_background";
-    if (r.value == &opts.ssao) return "ssao";
     if (r.value == &opts.intel_compiles) return "intel_shader_compiles";   // (two rows, one key)
     if (r.value == &opts.preset) return "quality_preset";   // (two rows, one key: Affichage's Profil and OcaDim's)
     if (r.value == &opts.fps_cap) return "frame_rate_cap";   // (host/nn_vi.c reads it at the start, then HOS_OPT_FPS_CAP)

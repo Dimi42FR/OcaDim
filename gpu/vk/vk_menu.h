@@ -160,8 +160,6 @@ struct Options {
                             // 0 Auto (from 12 logical processors), 1 on, 2 off (vk_replay.cpp par_pin_upper_half)
     int precompile_bg = 0;  // (OcaDim) the preparation before the title: 0 all of it before the title (as before), 1 fifteen
                             // seconds then behind the game, 2 thirty seconds (vk_draw.cpp precompile_run)
-    int ssao = 0;           // (OcaDim, onglet Ray-Tracing) occlusion ambiante écran : 0 désactivé, 1 activé (vk_draw.cpp
-                            // ssao_after_pass, expérimental)
 };
 extern Options opts;
 constexpr int kAutoPreset = 6;   // (the Quality preset Auto (this PC): menu_auto_for_gpu, auto_settings.h)
