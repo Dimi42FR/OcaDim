@@ -2059,10 +2059,10 @@ Row rows[] = {
      "15 s ou 30 s : le titre s'affiche au bout de ce temps et la compilation continue derrière, sur quatre threads en "
      "priorité basse, le jeu peut donc avoir quelques à-coups tant qu'elle n'est pas finie. Désactivé : tout avant le "
      "titre, comme avant. Prend effet après un redémarrage.", nullptr, true, true},
-    {TAB_OCADIM, "Programmes avant le titre", &opts.load_start, 0, 1, 1, tx_onoff_fr,   // (OcaDim: fewer hitches in play)
-     "Charge tous les programmes du jeu avant le titre, au lieu de les lire quand le jeu les demande : plus de gels en "
-     "partie, un démarrage plus long et un peu plus de mémoire. Désactivé : le choix de l'émulateur (au chargement sur "
-     "NVIDIA, avant le titre ailleurs). Prend effet après un redémarrage.", nullptr, true, true},
+    {TAB_OCADIM, "Programmes avant le titre", &opts.load_start, 0, 2, 1, tx_auto_fr,   // (OcaDim: fewer hitches in play)
+     "Auto (chargés au lancement) et Activé : tous les programmes sont chargés avant le titre, au lieu d'être lus quand le "
+     "jeu les demande — plus de gels en partie, un démarrage plus long et un peu plus de mémoire. Désactivé : le mode de "
+     "l'émulateur (au chargement sur NVIDIA). Prend effet après un redémarrage.", nullptr, true, true},
     {TAB_OCADIM, "Mode mémoire réduite (expérimental)", &opts.low_mem, 0, 1, 1, tx_onoff,   // (OcaDim: risky)
      "EXPÉRIMENTAL, DÉSACTIVÉ PAR DÉFAUT. Garde 24 frames d'enregistrement au lieu de 48 : moins de mémoire, mais l'anneau peut "
      "revenir sur une frame encore en vol et le pilote réinitialiser le GPU (device lost). À n'activer que pour un test, et à "
@@ -2130,8 +2130,8 @@ Row rows[] = {
     // ---- (OcaDim) Ray-Tracing : les essais, séparés de l'onglet OcaDim. Rien n'est branché pour l'instant --------------
     {TAB_RT, "Ray-Tracing (TEST)", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, false, true, -1, true},
     {TAB_RT, "Aucun essai branché", nullptr, 0, 0, 0, nullptr,
-     "Onglet réservé aux essais de rendu : occlusion ambiante (SSAO), réflexions écran (SSR), puis ombres ray-tracées. "
-     "Rien n'est implémenté pour l'instant ; les lignes viendront ici, une par essai, sans toucher aux options OcaDim."},
+     "Prochains essais : réflexions écran (SSR), puis ombres ray-tracées. Le SSAO a été retiré : sa passe faisait "
+     "tomber le GPU (voir la passation)."},
     {TAB_GAMEPLAY, "Quit", nullptr, 0, 0, 0, nullptr,
      "Save your progress first. Press Enter or A twice to quit. Esc or B cancels."},
 };
@@ -6163,11 +6163,11 @@ void menu_auto_for_gpu(const VkPhysicalDeviceProperties& props, ::auto_settings:
 
 // (the switches read once, at the first present: they are for the whole run, and each present asked twice)
 int menu_vsync() { static const int run = env_on("RX_VK_FIFO") ? 1 : env_on("RX_VK_IMMEDIATE") ? 2 : 0; return run ? run : opts.vsync; }
-/// (OcaDim) La ligne Programmes avant le titre : true, tous les programmes avant le titre, quel que soit le mode que
-/// l'émulateur choisirait (au chargement sur NVIDIA). RX_VK_LOAD, réglé, l'emporte (vk_programs.cpp programs_load_decide)
+/// (OcaDim) La ligne Programmes avant le titre : Auto (0) et Activé (1) chargent tous les programmes avant le titre ;
+/// Désactivé (2) laisse le mode de l'émulateur (au chargement sur NVIDIA). RX_VK_LOAD, réglé, l'emporte
 bool menu_load_start() {
     menu_init();
-    return opts.load_start != 0;
+    return std::clamp(opts.load_start, 0, 2) != 2;
 }
 /// (OcaDim) The Descriptor prefetch row, resolved once for the run: Auto is par_scale.h's rule (on from six logical
 /// processors, where the helper's own thread does not take a core the game needs). vk_replay.cpp desc_prefetch_on asks it

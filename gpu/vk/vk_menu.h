@@ -160,8 +160,8 @@ struct Options {
                             // 0 Auto (from 12 logical processors), 1 on, 2 off (vk_replay.cpp par_pin_upper_half)
     int precompile_bg = 0;  // (OcaDim) the preparation before the title: 0 all of it before the title (as before), 1 fifteen
                             // seconds then behind the game, 2 thirty seconds (vk_draw.cpp precompile_run)
-    int load_start = 0;     // (OcaDim) 0: the emulator's mode (at create on NVIDIA, before the title elsewhere), 1: every
-                            // program before the title, for fewer hitches in play (vk_programs.cpp programs_load_decide)
+    int load_start = 0;     // (OcaDim) programmes : 0 Auto (chargés au lancement, avant le titre), 1 Activé (idem), 2 Désactivé
+                            // (le mode de l'émulateur : au chargement sur NVIDIA) — vk_programs.cpp programs_load_decide
 };
 extern Options opts;
 constexpr int kAutoPreset = 6;   // (the Quality preset Auto (this PC): menu_auto_for_gpu, auto_settings.h)
