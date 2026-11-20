@@ -81,6 +81,9 @@
 #include "shaders/clear_vert_spv.h"
 #include "shaders/taau_upscale_comp_spv.h"
 #include "shaders/taau_upscale_rgba_comp_spv.h"
+#include "shaders/ssao_comp_spv.h"
+#include "shaders/ssao_apply_comp_spv.h"
+#include "shaders/ssao_apply_rgba_comp_spv.h"
 #include "shaders/shadow_stab_comp_spv.h"
 #include "shaders/movie_upscale_comp_spv.h"
 #include "shader_recompiler/backend/spirv/mma_layout.h"
@@ -6225,12 +6228,175 @@ void probe_log(uint64_t f) {
 namespace {
 TLS_OBJECT(dump_mesh_indirect, std::vector<std::pair<uint64_t, uint64_t>>)   // (program key, indirect address)
 } // namespace
+// ---- (OcaDim) SSAO, l'onglet Ray-Tracing (TEST) : la couleur et la profondeur d'une passe de scene ------------------
+// Deux dispatchs et une copie : la profondeur donne le facteur d'occlusion, la couleur le multiplie dans une image
+// temporaire, que l'on recopie dans la cible du jeu (une image ne peut pas etre lue et ecrite dans le meme passage).
+// Tout reste en VK_IMAGE_LAYOUT_GENERAL, comme le reste du renderer : aucune transition de layout a suivre.
+namespace {
+struct SsaoPass {
+    VkImage ao = VK_NULL_HANDLE, tmp = VK_NULL_HANDLE;
+    VmaAllocation ao_mem = nullptr, tmp_mem = nullptr;
+    VkImageView ao_view = VK_NULL_HANDLE, tmp_view = VK_NULL_HANDLE;
+    uint32_t w = 0, h = 0;
+    VkFormat fmt = VK_FORMAT_UNDEFINED;
+    VkSampler sampler = VK_NULL_HANDLE;
+    VkDescriptorSetLayout set_ao = VK_NULL_HANDLE, set_apply = VK_NULL_HANDLE;
+    VkPipelineLayout lay_ao = VK_NULL_HANDLE, lay_apply = VK_NULL_HANDLE;
+    VkPipeline pipe_ao = VK_NULL_HANDLE, pipe_apply = VK_NULL_HANDLE, pipe_apply_rgba = VK_NULL_HANDLE;
+    bool failed = false;
+};
+SsaoPass g_ssao;
+struct SsaoPush { float inv_w, inv_h, reach, strength; int reversed, taps; };
+struct SsaoApplyPush { int32_t w, h; float strength; };
+
+bool ssao_make_images(uint32_t w, uint32_t h, VkFormat fmt) {
+    SsaoPass& s = g_ssao;
+    if (s.w == w && s.h == h && s.fmt == fmt && s.ao && s.tmp) return true;
+    if (!s.sampler) {
+        VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+        si.magFilter = si.minFilter = VK_FILTER_NEAREST;
+        si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.maxLod = 0.0f;
+        if (vkCreateSampler(dev.device, &si, nullptr, &s.sampler) != VK_SUCCESS) return false;
+    }
+    if (s.ao_view) vkDestroyImageView(dev.device, s.ao_view, nullptr), s.ao_view = VK_NULL_HANDLE;
+    if (s.ao) destroy_image(s.ao, s.ao_mem), s.ao = VK_NULL_HANDLE, s.ao_mem = nullptr;
+    if (s.tmp_view) vkDestroyImageView(dev.device, s.tmp_view, nullptr), s.tmp_view = VK_NULL_HANDLE;
+    if (s.tmp) destroy_image(s.tmp, s.tmp_mem), s.tmp = VK_NULL_HANDLE, s.tmp_mem = nullptr;
+    const auto make = [&](VkFormat f, VkImageUsageFlags use, VkImage& img, VmaAllocation& mem, VkImageView& view) {
+        VkImageCreateInfo ic{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        ic.imageType = VK_IMAGE_TYPE_2D, ic.format = f, ic.extent = {w, h, 1};
+        ic.mipLevels = 1, ic.arrayLayers = 1, ic.samples = VK_SAMPLE_COUNT_1_BIT;
+        ic.tiling = VK_IMAGE_TILING_OPTIMAL, ic.usage = use;
+        if (!create_image(ic, img, mem)) return false;
+        VkImageViewCreateInfo vc{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        vc.image = img, vc.viewType = VK_IMAGE_VIEW_TYPE_2D, vc.format = f;
+        vc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        if (vkCreateImageView(dev.device, &vc, nullptr, &view) != VK_SUCCESS) return false;
+        return true;
+    };
+    if (!make(VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, s.ao, s.ao_mem, s.ao_view))
+        return false;
+    if (!make(fmt, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, s.tmp, s.tmp_mem,
+              s.tmp_view))
+        return false;
+    s.w = w, s.h = h, s.fmt = fmt;
+    logf("vk: OcaDim : SSAO : images %ux%u (%s)", w, h, fmt == VK_FORMAT_R16G16B16A16_SFLOAT ? "RGBA16F" : "R11G11B10");
+    return true;
+}
+
+bool ssao_make_pipelines() {
+    SsaoPass& s = g_ssao;
+    if (s.pipe_ao) return true;
+    const auto set_layout = [](bool apply) {
+        VkDescriptorSetLayoutBinding b[3]{};
+        b[0].binding = 0, b[0].descriptorCount = 1, b[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        b[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        if (!apply) {
+            b[1].binding = 1, b[1].descriptorCount = 1, b[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            b[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        } else {
+            b[1].binding = 1, b[1].descriptorCount = 1, b[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            b[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            b[2].binding = 2, b[2].descriptorCount = 1, b[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            b[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        }
+        VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        li.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+        li.bindingCount = apply ? 3u : 2u, li.pBindings = b;
+        VkDescriptorSetLayout out{};
+        vkCreateDescriptorSetLayout(dev.device, &li, nullptr, &out);
+        return out;
+    };
+    s.set_ao = set_layout(false), s.set_apply = set_layout(true);
+    if (!s.set_ao || !s.set_apply) return false;
+    const auto make = [&](VkDescriptorSetLayout set, uint32_t push, const uint32_t* words, size_t bytes, VkPipelineLayout& lay,
+                          VkPipeline& pipe) {
+        VkPushConstantRange pr{VK_SHADER_STAGE_COMPUTE_BIT, 0, push};
+        VkPipelineLayoutCreateInfo pi{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        pi.setLayoutCount = 1, pi.pSetLayouts = &set, pi.pushConstantRangeCount = 1, pi.pPushConstantRanges = &pr;
+        if (vkCreatePipelineLayout(dev.device, &pi, nullptr, &lay) != VK_SUCCESS) return false;
+        VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+        mi.codeSize = bytes, mi.pCode = words;
+        VkShaderModule m{};
+        IntelDriverGate gate;
+        if (guarded_shader_module(&mi, &m) != VK_SUCCESS) return false;
+        VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+        ci.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_COMPUTE_BIT, m, "main", nullptr};
+        ci.layout = lay;
+        const bool ok = guarded_compute(VK_NULL_HANDLE, &ci, &pipe) == VK_SUCCESS;
+        vkDestroyShaderModule(dev.device, m, nullptr);
+        return ok;
+    };
+    const auto ao = BUILTIN_SPV(SSAO_COMP_SPV);
+    const auto ap = BUILTIN_SPV(SSAO_APPLY_COMP_SPV);
+    const auto apr = BUILTIN_SPV(SSAO_APPLY_RGBA_COMP_SPV);
+    if (!make(s.set_ao, sizeof(SsaoPush), ao.code, ao.size, s.lay_ao, s.pipe_ao)) return false;
+    if (!make(s.set_apply, sizeof(SsaoApplyPush), ap.code, ap.size, s.lay_apply, s.pipe_apply)) return false;
+    if (!make(s.set_apply, sizeof(SsaoApplyPush), apr.code, apr.size, s.lay_apply, s.pipe_apply_rgba)) return false;
+    logf("vk: OcaDim : SSAO : passages prets");
+    return true;
+}
+
+void ssao_after_pass(VkCommandBuffer cmd, const Pass& ps) {
+    if (!opts.ssao || g_ssao.failed || !ps.depth || !ps.color[0] || ps.n <= 0 || !ps.tex[0] || ps.level[0] != 0) return;
+    const uint32_t w = ps.width, h = ps.height;
+    const VkFormat fmt = ps.format0;
+    if (w < 64 || h < 64) return;
+    if (fmt != VK_FORMAT_R16G16B16A16_SFLOAT && fmt != VK_FORMAT_B10G11R11_UFLOAT_PACK32) return;
+    if (!ssao_make_images(w, h, fmt) || !ssao_make_pipelines()) {
+        g_ssao.failed = true;
+        logf("vk: OcaDim : SSAO : ses ressources n'ont pas pu etre faites : la ligne est sans effet");
+        return;
+    }
+    SsaoPass& s = g_ssao;
+    full_barrier(cmd, "barrier (avant le SSAO)");
+    // (1) la profondeur -> le facteur d'occlusion
+    VkDescriptorImageInfo d0{s.sampler, ps.depth, VK_IMAGE_LAYOUT_GENERAL};
+    VkDescriptorImageInfo d1{VK_NULL_HANDLE, s.ao_view, VK_IMAGE_LAYOUT_GENERAL};
+    VkWriteDescriptorSet wr[2]{};
+    wr[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 0, 0, 1,
+             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &d0, nullptr, nullptr};
+    wr[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 1, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+             &d1, nullptr, nullptr};
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, s.pipe_ao);
+    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, s.lay_ao, 0, 2, wr);
+    SsaoPush pc{1.0f / (float)w, 1.0f / (float)h, 24.0f, 0.6f, 0, 12};
+    vkCmdPushConstants(cmd, s.lay_ao, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof pc, &pc);
+    vkCmdDispatch(cmd, (w + 7) / 8, (h + 7) / 8, 1);
+    // (2) la couleur x le facteur -> l'image temporaire, puis la copie dans la cible du jeu
+    full_barrier(cmd, "barrier (SSAO, application)");
+    VkDescriptorImageInfo a0{s.sampler, ps.color[0], VK_IMAGE_LAYOUT_GENERAL};
+    VkDescriptorImageInfo a1{s.sampler, s.ao_view, VK_IMAGE_LAYOUT_GENERAL};
+    VkDescriptorImageInfo a2{VK_NULL_HANDLE, s.tmp_view, VK_IMAGE_LAYOUT_GENERAL};
+    VkWriteDescriptorSet wa[3]{};
+    wa[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 0, 0, 1,
+             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &a0, nullptr, nullptr};
+    wa[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 1, 0, 1,
+             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &a1, nullptr, nullptr};
+    wa[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 2, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+             &a2, nullptr, nullptr};
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                      fmt == VK_FORMAT_R16G16B16A16_SFLOAT ? s.pipe_apply_rgba : s.pipe_apply);
+    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, s.lay_apply, 0, 3, wa);
+    SsaoApplyPush apc{(int32_t)w, (int32_t)h, 1.0f};
+    vkCmdPushConstants(cmd, s.lay_apply, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof apc, &apc);
+    vkCmdDispatch(cmd, (w + 7) / 8, (h + 7) / 8, 1);
+    full_barrier(cmd, "barrier (SSAO, copie)");
+    const VkImageCopy region{{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0},
+                             {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0}, {w, h, 1}};
+    vkCmdCopyImage(cmd, s.tmp, VK_IMAGE_LAYOUT_GENERAL, ps.tex[0]->image, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+    full_barrier(cmd, "barrier (apres le SSAO)");
+}
+}  // namespace
+
 void end_pass(VkCommandBuffer cmd) {
     Pass& ps = pass();   // (once: the accessor is a call and a thread-local read at each use. The same object for the thread's life: draw_begin_recording resets it in place)
     if (!ps.open) return;
     vkCmdEndRendering(cmd);
     ps.open = false;
     note_pass_end(cmd);   // (before the dumps and probes below: they record work, and the next pass's barrier is then a full one)
+    ssao_after_pass(cmd, ps);   // (OcaDim: l'onglet Ray-Tracing, rien quand la ligne est sur Désactivé)
     if (ps.has_block_images) {
         full_barrier(cmd, "barrier (before BC slice stores)");
         for (int i = 0; i < ps.n; i++)

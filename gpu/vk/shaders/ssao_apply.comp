@@ -1,0 +1,28 @@
+#version 450
+// (OcaDim) La multiplication de l'image par le facteur d'occlusion, pour l'onglet Ray-Tracing (TEST).
+// L'occlusion ne peut pas lire et ecrire la meme image : ce passage lit la couleur et le facteur, et ecrit dans une
+// image temporaire, que l'on recopie ensuite dans la cible du jeu (vkCmdCopyImage, memes formats).
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0) uniform sampler2D colour;
+layout(binding = 1) uniform sampler2D ao;
+#ifdef APPLY_RGBA16F
+layout(binding = 2, rgba16f) uniform writeonly image2D dst;
+#else
+layout(binding = 2, r11f_g11f_b10f) uniform writeonly image2D dst;
+#endif
+
+layout(push_constant) uniform P {
+    ivec2 size;
+    float strength;   // 0 = image intacte, 1 = occlusion pleine
+} pc;
+
+void main() {
+    const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (px.x >= pc.size.x || px.y >= pc.size.y) return;
+    const vec2 uv = (vec2(px) + 0.5) / vec2(pc.size);
+    const vec3 c = textureLod(colour, uv, 0.0).rgb;
+    const float occluded = textureLod(ao, uv, 0.0).r;
+    const float f = mix(1.0, occluded, clamp(pc.strength, 0.0, 1.0));
+    imageStore(dst, px, vec4(c * f, 1.0));
+}
