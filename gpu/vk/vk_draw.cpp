@@ -5883,7 +5883,9 @@ void draw_flush_recording(int slot) {
 uint32_t vrs_rate() { return opts.vrs == 3 ? 4u : opts.vrs ? 2u : 1u; }
 PFN_vkCmdSetFragmentShadingRateKHR vrs_cmd = nullptr;   // (loaded by vk_main.cpp once the device exists)
 void vrs_set(VkCommandBuffer cmd, uint32_t x, uint32_t y) {
-    if (!dev.fragment_shading_rate || !vrs_cmd) return;
+    // (OcaDim) never touch the rate when the row is off: the call itself was untested on NVIDIA, and a device lost there
+    // is expensive to diagnose
+    if (!dev.fragment_shading_rate || !opts.vrs) return;
     const VkExtent2D e{x, y};
     const VkFragmentShadingRateCombinerOpKHR c[2] = {VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR,
                                                      VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR};
