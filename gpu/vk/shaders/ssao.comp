@@ -1,0 +1,70 @@
+#version 450
+// (OcaDim) Occlusion ambiante en espace écran, pour l'onglet Ray-Tracing (TEST). Premiere brique : elle ne lit que la
+// profondeur du rendu et ecrit un facteur d'occlusion, sans reconstruire la scene.
+//
+// Pourquoi pas un vrai SSAO a hemisphere : il faut la projection inverse et les normales, que le replay n'expose pas
+// encore (le jeu ne les donne pas). Ici, l'occlusion se mesure au contraste de profondeur autour du pixel : un voisin
+// nettement plus proche masque une part du ciel visible. C'est approximatif, mais stable, sans bruit de kernel et sans
+// debruiteur, et surtout ca valide toute la chaine (profondeur -> passe -> image) avant d'investir dans le reste.
+//
+// Entrees :
+//   binding 0 : la profondeur du rendu (sampler2D, la valeur telle que le jeu l'ecrit)
+//   binding 1 : la sortie, rgba16f, facteur d'occlusion dans .r (1 = rien, 0 = tres occlus)
+// Push constants : taille inverse, portee en texels, force, sens de la profondeur.
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0) uniform sampler2D depth_tex;
+layout(binding = 1, rgba16f) uniform writeonly image2D out_ao;
+
+layout(push_constant) uniform P {
+    vec2 inv_size;   // 1 / (largeur, hauteur) de la profondeur
+    float reach;     // portee du voisinage, en texels (16 a 64)
+    float strength;  // 0 = aucun effet, 1 = l'occlusion telle que mesuree
+    int reversed;    // 1 : profondeur inversee (1 = proche), 0 : classique (0 = proche)
+    int taps;        // nombre d'echantillons (8, 12, 16)
+} pc;
+
+float depth_at(vec2 uv) { return textureLod(depth_tex, uv, 0.0).r; }
+
+// (une profondeur "vers l'avant" : plus grand = plus loin, quel que soit le sens du jeu)
+float forward_depth(float d) { return pc.reversed != 0 ? 1.0 - d : d; }
+
+void main() {
+    const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    const ivec2 size = imageSize(out_ao);
+    if (px.x >= size.x || px.y >= size.y) return;
+    const vec2 uv = (vec2(px) + 0.5) * pc.inv_size;
+    const float center = forward_depth(depth_at(uv));
+    // (un ciel, ou un endroit ou rien n'a ete ecrit : rien a occlure)
+    if (center >= 0.9999) {
+        imageStore(out_ao, px, vec4(1.0));
+        return;
+    }
+    // (12 directions, deux anneaux : un spiral de Vogel, tourne par le pixel pour casser la trame)
+    float occ = 0.0;
+    float weight = 0.0;
+    const int taps = clamp(pc.taps, 4, 32);
+    const float reach = max(pc.reach, 1.0);
+    const float rot = 6.2831853 * fract(52.9829189 * fract(dot(vec2(px), vec2(0.06711056, 0.00583715))));
+    for (int i = 0; i < taps; i++) {
+        const float t = (float(i) + 0.5) / float(taps);
+        const float ang = rot + float(i) * 2.3999632;   // (l'angle d'or : les directions ne se repetent pas)
+        const float r = reach * sqrt(t);
+        const vec2 off = vec2(cos(ang), sin(ang)) * r;
+        const vec2 suv = uv + off * pc.inv_size;
+        if (suv.x < 0.0 || suv.y < 0.0 || suv.x > 1.0 || suv.y > 1.0) continue;
+        const float d = forward_depth(depth_at(suv));
+        if (d >= 0.9999) continue;
+        // (un voisin plus proche que le centre : il lui cache une part de l'hemisphere. Le poids decroit avec la distance
+        // et avec la difference de profondeur, pour ne pas marquer les silhouettes lointaines)
+        const float diff = (center - d) * (1.0 + r / reach);
+        if (diff > 0.0) {
+            const float w = 1.0 - r / (reach * 1.5);
+            occ += clamp(diff * 8.0, 0.0, 1.0) * max(w, 0.0);
+            weight += max(w, 0.0);
+        }
+    }
+    if (weight > 0.0) occ /= weight;
+    const float ao = clamp(1.0 - occ * pc.strength, 0.0, 1.0);
+    imageStore(out_ao, px, vec4(ao));
+}
