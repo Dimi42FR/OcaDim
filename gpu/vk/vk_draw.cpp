@@ -1746,26 +1746,34 @@ std::string pipe_notes_path() { return cache_path("ocadim_pipelines.bin"); }
 /// What adds notes without building them (state_list_prepare) removes it; a note play adds was built by play, into its cache
 std::string precompile_built_path() { return pipe_notes_path() + ".built"; }
 /// (OcaDim) ocadim_pipelines.bin.done: how far the precompile's slices got (RX_VK_PRECOMPILE_SLICE_S), as the number of the
-/// notes' programs built by earlier starts. Kept apart from .built on purpose: precompile_covers_notes reads the stamp alone,
-/// so a partial count written there would say every note is built and RX_VK_LOAD=create would load from caches that lack them.
-/// Its stamp is the program cache's, as the notes' own header: another program cache, and it starts again at zero.
+/// notes' programs built by earlier starts, plus a hash of that prefix of the programs. Kept apart from .built on purpose:
+/// precompile_covers_notes reads the stamp alone, so a partial count written there would say every note is built and
+/// RX_VK_LOAD=create would load from caches that lack them. Its stamp is the program cache's, as the notes' own header:
+/// another program cache, or a notes file whose programs are not the same prefix, and it starts again at zero.
 std::string precompile_done_path() { return pipe_notes_path() + ".done"; }
-size_t precompile_done_read() {
-    uint64_t rec[2] = {0, 0};
+uint64_t precompile_prefix_hash(const std::vector<uint64_t>& progs, size_t n) {
+    uint64_t h = 1469598103934665603ull;   // (FNV-1a over the keys: a resume that points into another file's programs is refused)
+    for (size_t i = 0; i < n && i < progs.size(); i++) h = (h ^ progs[i]) * 1099511628211ull;
+    return h;
+}
+size_t precompile_done_read(const std::vector<uint64_t>& progs) {
+    uint64_t rec[3] = {0, 0, 0};
     FILE* f = fopen(precompile_done_path().c_str(), "rb");
     if (!f) return 0;
-    const bool ok = fread(rec, 8, 2, f) == 2 && rec[0] == program_cache_stamp();
+    const bool ok = fread(rec, 8, 3, f) == 3 && rec[0] == program_cache_stamp();
     fclose(f);
-    if (!ok) {
+    const size_t k = (size_t)rec[1];
+    if (!ok || k > progs.size() || rec[2] != precompile_prefix_hash(progs, k)) {
+        // (another program cache, or the notes' programs changed under the count: the slice starts again)
         remove(precompile_done_path().c_str());
         return 0;
     }
-    return (size_t)rec[1];
+    return k;
 }
-void precompile_done_write(size_t programs) {
+void precompile_done_write(const std::vector<uint64_t>& progs, size_t programs) {
     if (FILE* f = fopen(precompile_done_path().c_str(), "wb")) {
-        const uint64_t rec[2] = {program_cache_stamp(), (uint64_t)programs};
-        fwrite(rec, 8, 2, f);
+        const uint64_t rec[3] = {program_cache_stamp(), (uint64_t)programs, precompile_prefix_hash(progs, programs)};
+        fwrite(rec, 8, 3, f);
         fclose(f);
     }
 }
@@ -9934,7 +9942,7 @@ bool precompile_warm(void (*progress)(size_t done, size_t total)) {
     // for the next one (ocadim_pipelines.bin.done, the programs built). 0 or unset: every one this start, as before. The
     // program cache is written after each slice, so what a slice built is asked of the cache, not compiled again.
     static const int slice_s = getenv("RX_VK_PRECOMPILE_SLICE_S") ? std::max(0, atoi(getenv("RX_VK_PRECOMPILE_SLICE_S"))) : 0;
-    const size_t first = slice_s ? std::min(precompile_done_read(), progs.size()) : 0;
+    const size_t first = slice_s ? precompile_done_read(progs) : 0;
     if (first) logf("vk: OcaDim : précompilation par tranches : %zu des %zu programmes déjà construits par les démarrages "
                     "précédents, on reprend là", first, progs.size());
     const auto slice_t0 = std::chrono::steady_clock::now();
@@ -10010,11 +10018,12 @@ bool precompile_warm(void (*progress)(size_t done, size_t total)) {
         const bool kept = pcache_save_outcome.what == precompile_save::Outcome::kWritten ||
                           pcache_save_outcome.what == precompile_save::Outcome::kSame;
         // (only once the cache holds them: the next start skips what this one built)
-        if (kept) precompile_done_write(warmed);
+        if (kept) precompile_done_write(progs, warmed);
         crash_markers::end(warming);
         logf("vk: OcaDim : précompilation par tranches : %zu programmes construits ce démarrage (%d s), %zu des %zu en tout%s ; "
-             "la suite au prochain démarrage, le jeu construit ce qu'il dessine d'ici là",
-             warmed - first, slice_s, warmed, progs.size(), kept ? "" : " (le cache n'a pas pu être écrit : la tranche sera refaite)");
+             "%zu notes sans programme gardé ; la suite au prochain démarrage, le jeu construit ce qu'il dessine d'ici là",
+             warmed - first, slice_s, warmed, progs.size(), kept ? "" : " (le cache n'a pas pu être écrit : la tranche sera refaite)",
+             no_program.load());
         return true;
     }
     if (all && !prepare_stopped()) {
