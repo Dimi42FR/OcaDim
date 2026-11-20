@@ -6244,6 +6244,8 @@ struct SsrPush {   // (doit suivre ssr.comp : 64 octets)
     float inv_size[2];
     float near_z, max_dist, thickness, strength;
     int32_t steps, pad0, pad1, pad2;
+    float view_up[3];   // (la verticale du monde en espace vue : un sol reste un sol quand la camera monte ou descend)
+    float pad3;
 };
 struct SsrImage {   // (une image temporaire par taille : gardee jusqu'a la fin du run)
     uint32_t w = 0, h = 0;
@@ -6458,9 +6460,9 @@ void ssr_after_pass(VkCommandBuffer cmd, const Pass& ps) {
     if (!(color->usage & VK_IMAGE_USAGE_SAMPLED_BIT) || !(depth->usage & VK_IMAGE_USAGE_SAMPLED_BIT)) return;
     // (la camera du jeu, prise par l'upscaler sur cette profondeur : elle dit que cette passe est bien la scene, et donne
     // la projection qui manque au SSR)
-    float proj[16], near_z = 0, far_z = 0;
+    float proj[16], view_up[3], near_z = 0, far_z = 0;
     uint32_t cw = 0, ch = 0;
-    const bool cam = temporal_scene_camera(depth, proj, &near_z, &far_z, &cw, &ch);
+    const bool cam = temporal_scene_camera(depth, proj, view_up, &near_z, &far_z, &cw, &ch);
     if (!cam || near_z <= 0.0f || cw != w || ch != h) {
         // (diagnostic, avec RX_VK_SSR_DEBUG seulement : la passe est-elle bien la scene ?)
         static const bool dbg = getenv("RX_VK_SSR_DEBUG") != nullptr;
@@ -6506,6 +6508,7 @@ void ssr_after_pass(VkCommandBuffer cmd, const Pass& ps) {
     pc.near_z = near_z, pc.max_dist = max_dist;
     pc.thickness = std::max(2.0f, max_dist / (float)steps * 1.5f);
     pc.strength = std::clamp(opts.ssr, 0, 100) / 100.0f, pc.steps = (int32_t)steps;
+    pc.view_up[0] = view_up[0], pc.view_up[1] = view_up[1], pc.view_up[2] = view_up[2];
     static const int debug = getenv("RX_VK_SSR_DEBUG") ? atoi(getenv("RX_VK_SSR_DEBUG")) : 0;
     pc.pad0 = debug;   // (1 : le masque des reflets, 2 : le reflet seul, 3 : les normales)
     static bool told;

@@ -904,8 +904,8 @@ void temporal_note_scene_draw(const Texture* color0, uint32_t width, uint32_t he
     s.frame_cam = k;   // (OcaDim, SSR : la meme image, gardee pour les passes de scene qui suivent l'upscale)
 }
 
-bool temporal_scene_camera(const Texture* depth, float projection[16], float* near_z, float* far_z, uint32_t* width,
-                           uint32_t* height) {
+bool temporal_scene_camera(const Texture* depth, float projection[16], float view_up[3], float* near_z, float* far_z,
+                           uint32_t* width, uint32_t* height) {
     State& s = st();
     std::lock_guard lk(s.mu);
     // (l'image de cette image-ci seulement : la camera d'une image precedente ferait glisser les reflets. Celle de la
@@ -915,6 +915,18 @@ bool temporal_scene_camera(const Texture* depth, float projection[16], float* ne
     else if (s.frame_cam.frame == texture_frame_no() && s.frame_cam.depth == depth) k = &s.frame_cam;
     if (!k) return false;
     std::memcpy(projection, k->projection, sizeof(float) * 16);
+    // (OcaDim, SSR) la verticale du monde en espace vue : V = inv(P) * VP, et sa deuxieme colonne. P est la projection
+    // perspective du jeu (a, b, jx/jy, c, d), VP sa vue-projection : on resout P * x = VP colonne 1, sans inverse 4x4.
+    {
+        const float a = k->projection[0], b = k->projection[5], jx = k->projection[2], jy = k->projection[6];
+        const float z = -k->current[13];
+        const float x = a != 0.0f ? (k->current[1] - jx * z) / a : 0.0f;
+        const float y = b != 0.0f ? (k->current[5] - jy * z) / b : 0.0f;
+        const float len = std::sqrt(x * x + y * y + z * z);
+        view_up[0] = len > 1e-6f ? x / len : 0.0f;
+        view_up[1] = len > 1e-6f ? y / len : 1.0f;
+        view_up[2] = len > 1e-6f ? z / len : 0.0f;
+    }
     if (near_z) *near_z = k->near_z;
     if (far_z) *far_z = k->far_z;
     if (width) *width = k->width;

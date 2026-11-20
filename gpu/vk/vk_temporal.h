@@ -43,9 +43,10 @@ bool temporal_full_scale();
 void temporal_note_scene_draw(const Texture* color0, uint32_t width, uint32_t height, Texture* depth, uint64_t camera,
                               uint64_t camera_size);
 /// (OcaDim, SSR) La camera de la scene telle qu'elle a ete prise pour cette profondeur (la projection du jeu, sans jitter
-/// ou avec celui de l'upscaler), quand c'est bien cette image et cette image-ci. Faux : pas de camera cette image.
-bool temporal_scene_camera(const Texture* depth, float projection[16], float* near_z, float* far_z, uint32_t* width,
-                           uint32_t* height);
+/// ou avec celui de l'upscaler), quand c'est bien cette image et cette image-ci. view_up: la verticale du monde en espace
+/// vue (la deuxieme colonne de la matrice de vue, deduite de la vue-projection et de la projection). Faux : pas de camera.
+bool temporal_scene_camera(const Texture* depth, float projection[16], float view_up[3], float* near_z, float* far_z,
+                           uint32_t* width, uint32_t* height);
 /// Whether a target of width x height can be the scene the gameplay upscale takes (1 to 3 times smaller than its output, as
 /// last seen; dlss_checks.h scene_size_fits): the camera, the actor motion and RX_VK_DLSS_TRACE take only those
 bool temporal_scene_size(uint32_t width, uint32_t height);

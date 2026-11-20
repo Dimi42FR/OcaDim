@@ -29,6 +29,8 @@ layout(push_constant) uniform P {
     int pad0;
     int pad1;
     int pad2;
+    vec3 view_up;    // (la verticale du monde en espace vue)
+    float pad3;
 } pc;
 
 // (la profondeur du jeu, en z d'espace vue : negatif devant la camera)
@@ -123,6 +125,20 @@ void main() {
         imageStore(out_img, px, base);
         return;
     }
+    // (Fresnel : un reflet est faible de face et fort en incidence rasante, comme l'eau ou une vitre. Sans materiaux,
+    // c'est ce qui evite que tous les murs deviennent des miroirs. Un sol, lui, garde un reflet quel que soit l'angle de la
+    // camera : sa normale pointe vers le haut du monde, meme quand on regarde ses pieds)
+    const float ndv = clamp(dot(n, eye), 0.0, 1.0);
+    const float fresnel = 0.08 + 0.92 * pow(1.0 - ndv, 3.0);
+    // (OcaDim : seulement les surfaces qui regardent le ciel - sols, eau, pierres a plat. Un mur, un drapeau ou une
+    // texture de maison est vertical : aucun reflet dessus. Le plafond non plus. La verticale est celle du monde, pas
+    // celle de l'ecran : un sol reste un sol quand la camera monte ou descend)
+    const float up = clamp(dot(n, pc.view_up), 0.0, 1.0);
+    const float up_mask = smoothstep(0.20, 0.60, up);
+    // (seulement les surfaces bien a plat : une pente ou un rocher inclinait le rayon a chaque pixel et donnait des
+    // eclats ; le chemin, l'eau et les dalles gardent leur reflet)
+    const float floor_ref = 0.35 * smoothstep(0.35, 0.85, up);
+    const float weight = max(fresnel * up_mask, floor_ref);
 
     // (la marche : un pas fixe en distance, du proche au loin ; a chaque pas, on projette et on lit la profondeur)
     const int steps = clamp(pc.steps, 8, 48);
@@ -130,12 +146,15 @@ void main() {
     float prev_t = 0.0;
     float hit_t = -1.0;
     vec2 hit_uv = uv;
+    vec2 miss_uv = uv;   // (le dernier point encore a l'ecran, pour le repli)
+    float miss_t = 0.0;
     for (int i = 1; i <= steps; i++) {
         const float t = pc.max_dist * float(i) / float(steps);
         const vec3 cur = p + r * t;
         if (cur.z >= -pc.near_z * 0.5) break;   // (le rayon passe derriere la camera)
         const vec2 suv = project(cur);
         if (!inside(suv)) break;
+        miss_uv = suv, miss_t = t;
         const float sd = textureLod(depth_tex, suv, 0.0).r;
         if (sd >= 0.99995) {
             prev = cur, prev_t = t;
@@ -160,7 +179,13 @@ void main() {
         prev = cur, prev_t = t;
     }
     if (hit_t < 0.0) {
-        imageStore(out_img, px, base);
+        // (repli : le rayon sort de l'ecran - le ciel ou le decor au bord. C'est ce qui garde un sol reflechissant quand
+        // on regarde ses pieds : vers le bas, le ciel n'est pas dans la profondeur, le SSR seul n'a rien a toucher)
+        const float e = min(min(miss_uv.x, 1.0 - miss_uv.x), min(miss_uv.y, 1.0 - miss_uv.y));
+        const float ef = smoothstep(0.0, 0.03, e) * (1.0 - smoothstep(0.65 * pc.max_dist, pc.max_dist, miss_t));
+        const vec3 env = textureLod(color_tex, miss_uv, 0.0).rgb;
+        const float w = pc.strength * weight * 0.6 * ef;
+        imageStore(out_img, px, vec4(mix(base.rgb, env, clamp(w, 0.0, 1.0)), base.a));
         return;
     }
     // (l'epaisseur : derriere une silhouette lointaine, le rayon a traverse un mur, il n'y a pas de reflet)
@@ -181,13 +206,6 @@ void main() {
     const float fade = smoothstep(0.0, 0.03, edge_src) * smoothstep(0.0, 0.03, edge_hit) *
                        (1.0 - smoothstep(0.65 * pc.max_dist, pc.max_dist, hit_t));
     const vec3 refl = textureLod(color_tex, hit_uv, 0.0).rgb;
-    // (Fresnel : un reflet est faible de face et fort en incidence rasante, comme l'eau ou une vitre. Sans materiaux,
-    // c'est ce qui evite que tous les murs deviennent des miroirs. Un sol, lui, garde un reflet quel que soit l'angle de la
-    // camera : sa normale pointe vers le haut de l'ecran (n.y), meme quand on regarde ses pieds)
-    const float ndv = clamp(dot(n, eye), 0.0, 1.0);
-    const float fresnel = 0.08 + 0.92 * pow(1.0 - ndv, 3.0);
-    const float floor_ref = 0.40 * clamp(n.y, 0.0, 1.0);
-    const float weight = max(fresnel, floor_ref);
     if (pc.pad0 == 1) {   // (debug : magenta partout ou un reflet est trouve)
         imageStore(out_img, px, vec4(1.0, 0.0, 1.0, 1.0));
         return;
