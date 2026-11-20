@@ -1,0 +1,167 @@
+#version 450
+// (OcaDim, Ray-Tracing TEST) Reflexions ecran (SSR). Pour chaque pixel, le rayon reflechi par la surface est marche
+// dans la profondeur de la scene ; a l'intersection, la couleur de la scene est prise. Seuls les reflets visibles a
+// l'ecran existent (l'eau, les sols, les vitres), et rien hors champ.
+//
+// Entrees :
+//   binding 0 : la couleur de la scene (telle que la passe vient de l'ecrire)
+//   binding 1 : la profondeur de la scene (la valeur telle que le jeu l'ecrit, 0 pres, 1 loin)
+//   binding 2 : la sortie, rgba16f (couleur + reflet, puis le blit la dessine dans la cible)
+//
+// Les positions sont reconstruites en espace vue avec la projection du jeu (la meme matrice que l'upscaler prend,
+// vk_temporal.cpp temporal_scene_camera) : pas besoin de matrice de vue, la camera est a l'origine. Les normales
+// viennent des differences de profondeur (le jeu n'a pas de G-buffer).
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0) uniform sampler2D color_tex;
+layout(binding = 1) uniform sampler2D depth_tex;
+layout(binding = 2, rgba16f) uniform writeonly image2D out_img;
+
+layout(push_constant) uniform P {
+    vec4 proj;       // (p00, p11, p22, p23 de la projection, rangee par rangee)
+    vec2 jitter;     // (p02, p12 : le decalage de la projection, celui de l'upscaler)
+    vec2 inv_size;   // (1 / largeur, 1 / hauteur)
+    float near_z;    // (le plan proche, en unites du monde)
+    float max_dist;  // (jusqu'ou un rayon est marche)
+    float thickness; // (l'epaisseur acceptee derriere une surface, pour ne pas traverser un mur)
+    float strength;  // (0 = aucun effet, 1 = le reflet tel que marche)
+    int steps;       // (les pas de la marche)
+    int pad0;
+    int pad1;
+    int pad2;
+} pc;
+
+// (la profondeur du jeu, en z d'espace vue : negatif devant la camera)
+float scene_z(float d) { return -pc.proj.w / (d * 2.0 - 1.0 + pc.proj.z); }
+
+// (le pixel (uv, d) en espace vue. L'axe y de l'ecran va vers le bas, celui de la vue vers le haut)
+vec3 view_pos(vec2 uv, float d) {
+    const float z = scene_z(d);
+    const float nx = uv.x * 2.0 - 1.0;
+    const float ny = 1.0 - uv.y * 2.0;
+    return vec3(-(nx + pc.jitter.x) * z / pc.proj.x, -(ny + pc.jitter.y) * z / pc.proj.y, z);
+}
+
+// (un point d'espace vue vers (uv, profondeur) : la meme projection, pour suivre le rayon a l'ecran)
+vec2 project(vec3 p) {
+    const float w = -p.z;
+    const float cx = pc.proj.x * p.x + pc.jitter.x * p.z;
+    const float cy = pc.proj.y * p.y + pc.jitter.y * p.z;
+    return vec2(0.5 + 0.5 * cx / w, 0.5 - 0.5 * cy / w);
+}
+
+bool inside(vec2 uv) { return uv.x >= 0.0 && uv.y >= 0.0 && uv.x <= 1.0 && uv.y <= 1.0; }
+
+void main() {
+    const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    const ivec2 size = imageSize(out_img);
+    if (px.x >= size.x || px.y >= size.y) return;
+    const vec2 uv = (vec2(px) + 0.5) * pc.inv_size;
+    const vec4 base = textureLod(color_tex, uv, 0.0);
+    const float d = textureLod(depth_tex, uv, 0.0).r;
+    // (un ciel, ou un endroit ou rien n'a ete ecrit : rien a reflechir)
+    if (d >= 0.99995) {
+        imageStore(out_img, px, base);
+        return;
+    }
+    const vec3 p = view_pos(uv, d);
+    if (p.z >= -pc.near_z * 0.5) {   // (derriere la camera)
+        imageStore(out_img, px, base);
+        return;
+    }
+    // (les quatre voisins : la normale vient de leurs positions. Un voisin trop loin en profondeur est une silhouette,
+    // pas la meme surface : la encore, aucun reflet, pour ne pas baver sur les bords)
+    const vec2 tx = pc.inv_size;
+    const float dl = textureLod(depth_tex, uv - vec2(tx.x, 0.0), 0.0).r;
+    const float dr = textureLod(depth_tex, uv + vec2(tx.x, 0.0), 0.0).r;
+    const float du = textureLod(depth_tex, uv - vec2(0.0, tx.y), 0.0).r;
+    const float dd = textureLod(depth_tex, uv + vec2(0.0, tx.y), 0.0).r;
+    const float reach = 0.15 * abs(p.z) + 1.0;
+    if (dl >= 0.99995 || dr >= 0.99995 || du >= 0.99995 || dd >= 0.99995) {
+        imageStore(out_img, px, base);
+        return;
+    }
+    const vec3 pl = view_pos(uv - vec2(tx.x, 0.0), dl);
+    const vec3 pr = view_pos(uv + vec2(tx.x, 0.0), dr);
+    const vec3 pu = view_pos(uv - vec2(0.0, tx.y), du);
+    const vec3 pd = view_pos(uv + vec2(0.0, tx.y), dd);
+    if (abs(pl.z - p.z) > reach || abs(pr.z - p.z) > reach || abs(pu.z - p.z) > reach || abs(pd.z - p.z) > reach) {
+        imageStore(out_img, px, base);
+        return;
+    }
+    vec3 n = cross(pd - pu, pr - pl);
+    const float nl = length(n);
+    if (nl < 1e-8) {
+        imageStore(out_img, px, base);
+        return;
+    }
+    n /= nl;
+    // (la normale face a la camera : le sens des differences depend de la main du jeu)
+    const vec3 eye = normalize(-p);
+    if (dot(n, eye) < 0.0) n = -n;
+    const vec3 r = reflect(normalize(p), n);
+    // (un rayon qui repart vers la camera ne trouvera rien devant lui)
+    if (dot(r, eye) > 0.999) {
+        imageStore(out_img, px, base);
+        return;
+    }
+
+    // (la marche : un pas fixe en distance, du proche au loin ; a chaque pas, on projette et on lit la profondeur)
+    const int steps = clamp(pc.steps, 8, 48);
+    vec3 prev = p + n * max(pc.near_z * 0.05, 0.01);
+    float prev_t = 0.0;
+    float hit_t = -1.0;
+    vec2 hit_uv = uv;
+    for (int i = 1; i <= steps; i++) {
+        const float t = pc.max_dist * float(i) / float(steps);
+        const vec3 cur = p + r * t;
+        if (cur.z >= -pc.near_z * 0.5) break;   // (le rayon passe derriere la camera)
+        const vec2 suv = project(cur);
+        if (!inside(suv)) break;
+        const float sd = textureLod(depth_tex, suv, 0.0).r;
+        if (sd >= 0.99995) {
+            prev = cur, prev_t = t;
+            continue;
+        }
+        const float sz = scene_z(sd);
+        if (sz > cur.z) {   // (le rayon est passe derriere la surface)
+            // (une dichotomie entre le pas d'avant, devant, et celui-ci, derriere)
+            float a = prev_t, b = t;
+            for (int j = 0; j < 6; j++) {
+                const float m = 0.5 * (a + b);
+                const vec2 muv = project(p + r * m);
+                const float md = textureLod(depth_tex, muv, 0.0).r;
+                if (md >= 0.99995) { a = m; continue; }
+                if (scene_z(md) > (p + r * m).z) b = m;
+                else a = m;
+            }
+            hit_t = b;
+            hit_uv = project(p + r * b);
+            break;
+        }
+        prev = cur, prev_t = t;
+    }
+    if (hit_t < 0.0) {
+        imageStore(out_img, px, base);
+        return;
+    }
+    // (l'epaisseur : derriere une silhouette lointaine, le rayon a traverse un mur, il n'y a pas de reflet)
+    const float hd = textureLod(depth_tex, hit_uv, 0.0).r;
+    if (hd >= 0.99995) {
+        imageStore(out_img, px, base);
+        return;
+    }
+    const vec3 hit = p + r * hit_t;
+    const float gap = scene_z(hd) - hit.z;
+    if (gap < 0.0 || gap > pc.thickness) {
+        imageStore(out_img, px, base);
+        return;
+    }
+    // (les bords de l'ecran et le lointain s'effacent, sinon le reflet s'arrete net)
+    const float edge_src = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));
+    const float edge_hit = min(min(hit_uv.x, 1.0 - hit_uv.x), min(hit_uv.y, 1.0 - hit_uv.y));
+    const float fade = smoothstep(0.0, 0.03, edge_src) * smoothstep(0.0, 0.03, edge_hit) *
+                       (1.0 - smoothstep(0.65 * pc.max_dist, pc.max_dist, hit_t));
+    const vec3 refl = textureLod(color_tex, hit_uv, 0.0).rgb;
+    imageStore(out_img, px, vec4(mix(base.rgb, refl, clamp(pc.strength * fade, 0.0, 1.0)), base.a));
+}

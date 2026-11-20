@@ -19,7 +19,7 @@ ce qui est fait, ce qui reste, et les règles du projet.
 | `C:\Users\Administrator\Desktop\Nouveau dossier (9)\OcaDim` | **Le paquet du Setup** : `OcaDimSetup.exe`, runtime .NET, `source.zip`, `tools-seed/`. C'est ce dossier qu'on zippe pour la release. |
 | `C:\Users\Administrator\AppData\Local\HookshotBuilder\versions\v2.1.0\HookshotBuilder\tools` | **Les outils de compilation** (emsdk, llvm-mingw, cpm, python, wgpu-native, third_party, et **glslang** depuis le 20/11). Source de `tools-seed`. |
 
-**Les builds du 20/11, dans `F:\OcaDim-SAVE-17-11`** (du plus récent au plus ancien) : `build-0.0.4-loadstart-auto` (le déployé), `build-0.0.4-loadstart`, `build-0.0.4-onglet-rt`, `build-0.0.4-bg-titre`, `build-0.0.4-liste-20-11`, `build-0.0.4-lignes-ocadim`. Chacun contient `ocadim.exe` + `ocadim_vk.dll` (certains aussi la liste de pipelines livrée).
+**Les builds du 20/11, dans `F:\OcaDim-SAVE-17-11`** (du plus récent au plus ancien) : `build-0.0.4-ssr` (les réflexions écran), `build-0.0.4-loadstart-auto` (le déployé), `build-0.0.4-loadstart`, `build-0.0.4-onglet-rt`, `build-0.0.4-bg-titre`, `build-0.0.4-liste-20-11`, `build-0.0.4-lignes-ocadim`. Chacun contient `ocadim.exe` + `ocadim_vk.dll` (certains aussi la liste de pipelines livrée).
 
 ## 2. Construire le jeu (build de dev)
 
@@ -74,16 +74,17 @@ py -3.12 -I scripts/longshot_ctl.py --sock "\\.\pipe\ocadim-test" quit
 
 | Fichier | Ce qu'on y a mis |
 |---|---|
-| `gpu/vk/vk_menu.cpp` | Les lignes **OcaDim** (dont les six remises : Préchargement des descripteurs, Barrières d'ordre des rendus, Correctifs au-dessus de 60 fps, Threads/Segments du replay, Affinité CPU (CCX)), Ça rame, Petit PC, garde-fou, DRS, VRS, mips, profil, précompilation (+ **en arrière-plan**), compteur FG, **onglet Ray-Tracing**, aide/traductions. |
+| `gpu/vk/vk_menu.cpp` | Les lignes **OcaDim** (dont les six remises : Préchargement des descripteurs, Barrières d'ordre des rendus, Correctifs au-dessus de 60 fps, Threads/Segments du replay, Affinité CPU (CCX)), Ça rame, Petit PC, garde-fou, DRS, VRS, mips, profil, précompilation (+ **en arrière-plan**), compteur FG, **onglet Ray-Tracing** (dont **Réflexions écran (SSR)**), aide/traductions. |
 | `gpu/vk/vk_menu.h` | `struct Options` — **tout nouveau champ va À LA FIN**. |
 | `gpu/vk/menu_i18n.h` | Table française (et 12 autres langues). Une aide renvoie `k==0 ? texte : nullptr`. |
-| `gpu/vk/vk_draw.cpp` | `vrs_set`/`vrs_rate`, `precompile_zone`, **`precompile_run` (budget d'arrière-plan)**, `precompile_warm` (tranche, `.done`), diagnostic pipeline/frame lente, `build_graphics`, `jobs_wait`. |
+| `gpu/vk/vk_draw.cpp` | `vrs_set`/`vrs_rate`, `precompile_zone`, **`precompile_run` (budget d'arrière-plan)**, `precompile_warm` (tranche, `.done`), diagnostic pipeline/frame lente, `build_graphics`, `jobs_wait`, **`ssr_after_pass` (réflexions écran : calcul + blit, images gardées)**. |
 | `gpu/vk/vk_main.cpp` | Extension et fonctionnalité VRS, chargement de `vkCmdSetFragmentShadingRateKHR`. |
 | `gpu/vk/vk_replay.cpp` | `rec_cap` (mode mémoire réduite), déclencheur de précompilation, `vrs_set` par frame, **prefetch de descripteurs** (`fg_lost_note`, `pf_*`), **`par_threads`/`par_pin_upper_half`/`per`**, `device_lost`. |
 | `gpu/vk/vk_fg_amd.cpp` | FG AMD, compteur `generated`, `fg_amd_generated()`, **garde `opts.framegen == 0`** (le secours FG). |
 | `gpu/vk/vk_texture.cpp` | `low_vram_texture_mips` (ligne mips), **`game_order()`/`pass_start_barrier`** (barrières d'ordre des rendus). |
+| `gpu/vk/vk_temporal.cpp` | **`temporal_scene_camera()`** (la projection et les plans de la scène, pour le SSR ; la caméra est aussi prise quand `ssr` est actif), chaîne temporelle du jeu. |
 | `host/oot_high_fps.c` | **`above60_fixes()`** (`rx_option(HOS_OPT_ABOVE60_FIXES)`), le solveur au-dessus de 60 fps. |
-| `gpu/vk/shaders/` | Les shaders du renderer en GLSL + leur SPIR-V (`*_spv.h`). **`ssao.comp`, `ssao_apply.comp`** (Ray-Tracing, essai). |
+| `gpu/vk/shaders/` | Les shaders du renderer en GLSL + leur SPIR-V (`*_spv.h`). **`ssr.comp`** (réflexions écran), **`ssao.comp`, `ssao_apply.comp`** (SSAO, essai abandonné) ; **`ssao_blit.vert/.frag`** (triangle plein écran, corrigé pour le SSR). |
 | `tools\glslang` | **glslang 16.6**, ajouté le 20/11 : aucun compilateur GLSL n'existait. `bin\glslang.exe -V --target-env vulkan1.2 -o s.spv s.comp`. |
 | `gpu/vk/vk_crash_window.cpp`, `host/hos_crash_dialog.c` | Fenêtre de crash **OcaDim** + texte « poster sur le ticket ou le Discord dimiviveamd ». |
 | `host/hos_thread.c` | Ordonnanceur de vcores (mode Réactif/Ultra) + `barrier_mode`. |
@@ -96,8 +97,8 @@ py -3.12 -I scripts/longshot_ctl.py --sock "\\.\pipe\ocadim-test" quit
 
 - **Dernière release** : `v0.0.4-2` — « NVIDIA réparé (merci Qeviin) », archive `OcaDimSetup-0.0.4.zip`.
 - `v0.0.4`, `v0.0.3-2` (test), `v0.0.3` (stable, **étiquetée `0.0.3-TEST` par erreur**).
-- `main` = commit du correctif VRS (`790cbcd8`), **non mis à jour depuis** : `merge-amont` est en avance de 10 commits (tout le travail du 20/11), et rien n'a été poussé.
-- Installations : `D:\ocarina3` et `F:\test` = build du 20/11 20:40 (onglet Ray-Tracing, précompilation en arrière-plan sur Désactivé).
+- `main` = commit du correctif VRS (`790cbcd8`), **non mis à jour depuis** : `merge-amont` est en avance de 10 commits (tout le travail du 20/11, SSR compris), et rien n'a été poussé.
+- Installations : `D:\ocarina3` et `F:\test` = build du 20/11 20:40 (onglet Ray-Tracing, précompilation en arrière-plan sur Désactivé). Le build du **SSR** est seulement dans `F:\OcaDim-SAVE-17-11\build-0.0.4-ssr` et sur `F:\test-prefetch`.
 
 ## 7. Problèmes connus, et ce qu'on sait
 
@@ -111,6 +112,7 @@ py -3.12 -I scripts/longshot_ctl.py --sock "\\.\pipe\ocadim-test" quit
 6. **Pas de corrections** sur : LTO (build), aliasing mémoire, constantes de spécialisation (gros).
 7. **Prefetch de descripteurs** : remis, mais **0,05 % de coups** (320 sur 622 028) — la valeur est dans les négatifs. Éteint par défaut, et il faut ≥ 2 threads du replay.
 8. **SSAO** : shaders prêts, premier branchement **retiré** (crash, voir 8 quater). Aucune option active.
+9. **SSR (TEST)** : branché le 20/11 (voir 8 quater bis), désactivé par défaut. Reste : une session longue pour confirmer qu'il ne fait pas tomber le GPU, et le comportement avec les threads du replay (sans effet pour l'instant).
 
 ## 8. Le mode de secours FG (codé)
 
@@ -160,15 +162,17 @@ Toutes dans l'onglet **OcaDim** du F1, en français, avec leur clé ini ASCII da
   3. **garde de taille** : `w >= 1024 && h >= 576` seulement (la scène, jamais une shadow map) ;
   4. **désactivé par défaut**, testé uniquement sur une **copie** de l'installation (`F:\test-prefetch`), avec `ctl shot` avant/après.
 
-## 8 quater. SSR (réflexions écran) — le prochain essai
+## 8 quater bis. SSR (réflexions écran) — fait le 20/11 (TEST)
 
-- **Ce que c'est** : pour chaque pixel, le rayon réfléchi par la surface est marché **en espace écran** dans la profondeur ; à l'intersection, la couleur de la scène est prise. Seuls les reflets **visibles à l'écran** existent (l'eau, les sols, les vitres).
-- **Entrées** : couleur de la scène, profondeur (les deux déjà utilisées par le SSAO), et des normales **reconstruites** depuis la profondeur (pas de G-buffer dans ce jeu).
-- **Sortie** : couleur + reflet, dans l'image temporaire, puis le blit dans la cible (conception ci-dessus).
-- **Coût** : une passe de calcul (marche de 24 à 32 pas) + le blit, à la résolution de la scène.
-- **Où** : `end_pass()`, après la passe 3D, avant le HUD et avant FSR 4.
-- **Réglages** : une ligne **Réflexions écran (SSR)** dans l'onglet Ray-Tracing, **Désactivée** par défaut, puis un curseur d'intensité si ça tient.
-- **Pièges** : pas de réflexion hors écran (bords), pas de réflexion derrière un objet ; il faut une atténuation par la distance et un fondu aux bords, sinon ça « bave ».
+- **Ligne** : onglet Ray-Tracing, **Réflexions écran (SSR)**, **Désactivée par défaut**, clé ini ASCII `ssr`, aide en français.
+- **Où** : `end_pass()` (`vk_draw.cpp`, `ssr_after_pass`), après la fin de la passe de scène, **avant le HUD et avant FSR 4**. La passe est reconnue par la **caméra de l'upscaler sur la même profondeur** (`temporal_scene_camera`, `vk_temporal.cpp`) et par sa taille, pas par un programme : une shadow map ou une passe de menus ne passe pas.
+- **Calcul** (`gpu/vk/shaders/ssr.comp`) : la couleur et la profondeur de la scène, positions reconstruites en espace vue avec la **projection du jeu** (p00/p11/p22/p23 + le jitter), normales reconstruites de la profondeur (pas de G-buffer), rayon réfléchi marché en 32 pas + 6 dichotomies, épaisseur de 1,5 pas, fondu aux bords de l'écran et au loin. Écrit couleur + reflet dans une image temporaire RGBA16F.
+- **Sortie** : triangle plein écran `ssao_blit.vert/.frag`, **corrigé** (le v était inversé, l'alpha est maintenant celui de la scène), **dessiné** dans la cible par un rendu — jamais de copie (les cibles n'ont pas `TRANSFER_DST`, c'est le crash du SSAO).
+- **Ressources** : une image RGBA16F **par taille**, gardée jusqu'à la fin du run et **jamais détruite** (plafond 8 tailles, celles de la résolution dynamique) ; vues d'échantillonnage créées à part (une vue d'attachement n'a pas `SAMPLED`) ; pipelines calcul/blit construits une fois par (format, échantillons).
+- **Gardes** : ligne active, mono-échantillon, couleur RGBA16F ou B10G11R11, `w >= 1024 && h >= 576`, niveau/couche 0, pas d'images BC, caméra de cette image-ci, **une fois par image**, rien avec les threads du replay (`par_active`).
+- **Mesures (20/11, `F:\test-prefetch`, 2560×1440, RX 9070 XT)** : Market_Child et ZoraDomain/ZoraFountain_Child, **57 à 68 fps SSR activé, 63 à 67 désactivé** (le jeu est au plafond) ; **GPU ~8,9-9,5 ms** dans les deux cas. Captures `ssr-market.png`, `ssr-zora-on/off.png`, `ssr-fountain-on/off.png` dans `F:\test-prefetch`.
+- **À confirmer** : le **premier** lancement a disparu sans ligne de perte GPU après ~3 min avec le SSR actif ; le second a tenu 2 min et plus à 56-62 fps. À refaire sur une **session longue** (et en Zora) avant de livrer. Intensité fixe à 0,85 ; un curseur seulement si le rendu tient.
+- **Limites connues** : pas de débruitage, reflets pris dans la couleur déjà éclairée, rien hors écran (bords) ; les surfaces rugueuses (l'herbe, la pierre) prennent le même reflet que l'eau, faute de matériaux.
 
 ## 8 quinquies. Ombres ray-tracées — après le SSR
 
@@ -177,7 +181,7 @@ Toutes dans l'onglet **OcaDim** du F1, en français, avec leur clé ini ASCII da
 
 ## 8 sexies. Ce qui reste, dans l'ordre
 
-1. **SSR** (conception ci-dessus) + capture de contrôle.
+1. **Session longue SSR** (30 min et plus, Zora) avec captures avant/après : confirmer la stabilité et régler l'intensité/la portée.
 2. **A/B perf** 0.0.4 contre le build courant, même sauvegarde et même scène.
 3. **Session longue FG 2x** pour retrouver le device lost ; le marqueur `cache/ocadim_fg_lost.txt` le consigne.
 4. **HUD hors de la FG** (picture sans HUD → génération → HUD).

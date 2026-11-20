@@ -870,7 +870,8 @@ void temporal_note_scene_draw(const Texture* color0, uint32_t width, uint32_t he
     if (!color0 || !depth || !camera || camera_size < 0x230 || !temporal_scene_size(width, height)) return;
     // (with the Upscaler Off too: its stretch takes the fixed shares' networks only with the frame's scene as their input)
     // (and with no engine, for frame generation's inputs: temporal_fg_inputs)
-    if (!temporal_scene_format(color0->format) || (!temporal_wanted() && !temporal_off() && !temporal_fg_inputs())) return;
+    if (!temporal_scene_format(color0->format) || (!temporal_wanted() && !temporal_off() && !temporal_fg_inputs() && !opts.ssr))
+        return;
     State& s = st();
     std::lock_guard lk(s.mu);
     const uint64_t now = texture_frame_no();
@@ -897,6 +898,20 @@ void temporal_note_scene_draw(const Texture* color0, uint32_t width, uint32_t he
     k.width = width, k.height = height, k.depth = depth, k.depth_gen = texture_destroy_generation(), k.frame = now;
     k.scene_format = color0->format;
     k.valid = true;
+}
+
+bool temporal_scene_camera(const Texture* depth, float projection[16], float* near_z, float* far_z, uint32_t* width,
+                           uint32_t* height) {
+    State& s = st();
+    std::lock_guard lk(s.mu);
+    // (l'image de cette image-ci seulement : la camera d'une image precedente ferait glisser les reflets)
+    if (!s.cam.valid || s.cam.depth != depth || s.cam.frame != texture_frame_no()) return false;
+    std::memcpy(projection, s.cam.projection, sizeof(float) * 16);
+    if (near_z) *near_z = s.cam.near_z;
+    if (far_z) *far_z = s.cam.far_z;
+    if (width) *width = s.cam.width;
+    if (height) *height = s.cam.height;
+    return true;
 }
 
 bool temporal_scene_size(uint32_t width, uint32_t height) {

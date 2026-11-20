@@ -162,6 +162,8 @@ struct Options {
                             // seconds then behind the game, 2 thirty seconds (vk_draw.cpp precompile_run)
     int load_start = 0;     // (OcaDim) programmes : 0 Auto (chargés au lancement, avant le titre), 1 Activé (idem), 2 Désactivé
                             // (le mode de l'émulateur : au chargement sur NVIDIA) — vk_programs.cpp programs_load_decide
+    int ssr = 0;            // (OcaDim) réflexions écran (SSR), onglet Ray-Tracing : 0 Désactivé, 1 Activé
+                            // (vk_draw.cpp ssr_after_pass). Expérimental, testé sur F:\test-prefetch
 };
 extern Options opts;
 constexpr int kAutoPreset = 6;   // (the Quality preset Auto (this PC): menu_auto_for_gpu, auto_settings.h)

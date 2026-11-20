@@ -81,6 +81,9 @@
 #include "shaders/clear_vert_spv.h"
 #include "shaders/taau_upscale_comp_spv.h"
 #include "shaders/taau_upscale_rgba_comp_spv.h"
+#include "shaders/ssr_comp_spv.h"
+#include "shaders/ssao_blit_vert_spv.h"
+#include "shaders/ssao_blit_frag_spv.h"
 #include "shaders/shadow_stab_comp_spv.h"
 #include "shaders/movie_upscale_comp_spv.h"
 #include "shader_recompiler/backend/spirv/mma_layout.h"
@@ -5035,6 +5038,7 @@ struct Pass {
     VkImageView depth = VK_NULL_HANDLE;
     int n = 0;
     uint32_t width = 0, height = 0;
+    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;   // (OcaDim: the SSR blits only single-sampled scenes)
     int draws = 0;           // (RX_VK_GPU_PROFILE: its draws, and its label's targets)
     uint32_t wm_or = 0, wm_n = 0;   // (RX_VK_PASS_TRACE: the colour write masks its draws set, target 0, and the targets)
     int clears = 0;          // (RX_VK_PASS_TRACE: its clears, and the first program it drew with)
@@ -5202,7 +5206,7 @@ void begin_pass(VkCommandBuffer cmd, const Targets& at) {
     ps.depth = at.depth_view;
     ps.has_block_images = at.has_block_images;
     ps.depth_tex = at.depth, ps.depth_level = at.depth_level, ps.depth_layer = at.depth_layer;
-    ps.n = at.n, ps.width = at.width, ps.height = at.height;
+    ps.n = at.n, ps.width = at.width, ps.height = at.height, ps.samples = at.samples;
     VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
     ri.renderArea = {{0, 0}, {at.width, at.height}};
     ri.layerCount = 1;
@@ -6225,12 +6229,329 @@ void probe_log(uint64_t f) {
 namespace {
 TLS_OBJECT(dump_mesh_indirect, std::vector<std::pair<uint64_t, uint64_t>>)   // (program key, indirect address)
 } // namespace
+// ---- (OcaDim) Reflexions ecran (SSR), l'onglet Ray-Tracing (TEST) ------------------------------------------------
+// Une passe de calcul marche le rayon reflechi dans la profondeur de la scene et ecrit couleur + reflet dans une image
+// temporaire, puis un triangle plein ecran la dessine dans la cible du jeu (une copie ne va pas : les cibles n'ont pas
+// TRANSFER_DST). La projection du jeu vient de l'upscaler (temporal_scene_camera) : pas de matrice de vue a deviner.
+//
+// La lecon du SSAO : une image par taille gardee jusqu'a la fin du run, jamais detruite pendant que le GPU la lit, et
+// aucune vue de jeu utilisee pour echantillonner (une vue d'attachement n'a pas l'usage SAMPLED : on en fait une autre).
+// Rien n'est appele quand la ligne est sur Desactive, ni sur une cible plus petite que la scene (une shadow map).
+namespace {
+struct SsrPush {   // (doit suivre ssr.comp : 64 octets)
+    float proj[4];      // (p00, p11, p22, p23)
+    float jitter[2];    // (p02, p12)
+    float inv_size[2];
+    float near_z, max_dist, thickness, strength;
+    int32_t steps, pad0, pad1, pad2;
+};
+struct SsrImage {   // (une image temporaire par taille : gardee jusqu'a la fin du run)
+    uint32_t w = 0, h = 0;
+    VkImage image = VK_NULL_HANDLE;
+    VmaAllocation mem = nullptr;
+    VkImageView view = VK_NULL_HANDLE;
+};
+struct SsrView {    // (une vue echantillonnable d'une cible du jeu, cachee par image et aspect)
+    VkImage image = VK_NULL_HANDLE;
+    uint32_t id = 0;
+    VkFormat format = VK_FORMAT_UNDEFINED;
+    VkImageAspectFlags aspect = 0;
+    VkImageView view = VK_NULL_HANDLE;
+};
+struct SsrBlit {    // (le blit depend du format et des echantillons de la cible)
+    VkFormat format = VK_FORMAT_UNDEFINED;
+    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+    VkPipeline pipe = VK_NULL_HANDLE;
+    bool failed = false;
+};
+struct SsrState {
+    std::vector<SsrImage> images;
+    std::vector<SsrView> views;
+    std::vector<SsrBlit> blits;
+    VkSampler color_sampler = VK_NULL_HANDLE, depth_sampler = VK_NULL_HANDLE;
+    VkDescriptorSetLayout set_compute = VK_NULL_HANDLE, set_blit = VK_NULL_HANDLE;
+    VkPipelineLayout lay_compute = VK_NULL_HANDLE, lay_blit = VK_NULL_HANDLE;
+    VkPipeline compute = VK_NULL_HANDLE;
+    bool failed = false;
+};
+SsrState g_ssr;
+
+SsrImage* ssr_image(uint32_t w, uint32_t h, VkCommandBuffer cmd) {
+    SsrState& s = g_ssr;
+    for (SsrImage& im : s.images)
+        if (im.w == w && im.h == h) return &im;
+    if (s.images.size() >= 8) return nullptr;   // (un petit tableau : les quelques tailles de la resolution dynamique)
+    SsrImage im;
+    im.w = w, im.h = h;
+    VkImageCreateInfo ic{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    ic.imageType = VK_IMAGE_TYPE_2D, ic.format = VK_FORMAT_R16G16B16A16_SFLOAT, ic.extent = {w, h, 1};
+    ic.mipLevels = 1, ic.arrayLayers = 1, ic.samples = VK_SAMPLE_COUNT_1_BIT;
+    ic.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ic.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    if (!create_image(ic, im.image, im.mem)) return nullptr;
+    VkImageViewCreateInfo vc{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vc.image = im.image, vc.viewType = VK_IMAGE_VIEW_TYPE_2D, vc.format = ic.format;
+    vc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    if (vkCreateImageView(dev.device, &vc, nullptr, &im.view) != VK_SUCCESS) {
+        destroy_image(im.image, im.mem);
+        return nullptr;
+    }
+    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};   // (UNDEFINED -> GENERAL, une fois)
+    b.srcStageMask = VK_PIPELINE_STAGE_2_NONE, b.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    b.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+    b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED, b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.image = im.image, b.subresourceRange = vc.subresourceRange;
+    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    di.imageMemoryBarrierCount = 1, di.pImageMemoryBarriers = &b;
+    vkCmdPipelineBarrier2(cmd, &di);
+    s.images.push_back(im);
+    logf("vk: OcaDim : SSR : image temporaire %ux%u RGBA16F", w, h);
+    return &s.images.back();
+}
+
+VkImageView ssr_sampled_view(Texture* t, VkImageAspectFlags aspect) {
+    SsrState& s = g_ssr;
+    for (const SsrView& v : s.views)
+        if (v.image == t->image && v.id == t->id && v.format == t->format && v.aspect == aspect) return v.view;
+    if (s.views.size() >= 128) return VK_NULL_HANDLE;
+    // (une vue d'echantillonnage, pas celle de l'attachement : une vue d'attachement n'a pas l'usage SAMPLED)
+    VkImageViewCreateInfo vc{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vc.image = t->image, vc.viewType = VK_IMAGE_VIEW_TYPE_2D, vc.format = t->format;
+    vc.subresourceRange = {aspect, 0, 1, 0, 1};
+    VkImageView view = VK_NULL_HANDLE;
+    if (vkCreateImageView(dev.device, &vc, nullptr, &view) != VK_SUCCESS) return VK_NULL_HANDLE;
+    s.views.push_back({t->image, t->id, t->format, aspect, view});
+    return view;
+}
+
+VkPipeline ssr_blit_pipeline(VkFormat format, VkSampleCountFlagBits samples) {
+    SsrState& s = g_ssr;
+    for (const SsrBlit& b : s.blits)
+        if (b.format == format && b.samples == samples) return b.failed ? VK_NULL_HANDLE : b.pipe;
+    if (s.blits.size() >= 16) return VK_NULL_HANDLE;
+    SsrBlit b;
+    b.format = format, b.samples = samples;
+    IntelDriverGate gate;
+    VkShaderModule vm = VK_NULL_HANDLE, fm = VK_NULL_HANDLE;
+    const auto vert = BUILTIN_SPV(SSAO_BLIT_VERT_SPV), frag = BUILTIN_SPV(SSAO_BLIT_FRAG_SPV);
+    VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+    mi.codeSize = vert.size, mi.pCode = vert.code;
+    if (guarded_shader_module(&mi, &vm) != VK_SUCCESS) {
+        b.failed = true, s.failed = true;
+        s.blits.push_back(b);
+        return VK_NULL_HANDLE;
+    }
+    mi.codeSize = frag.size, mi.pCode = frag.code;
+    if (guarded_shader_module(&mi, &fm) != VK_SUCCESS) {
+        vkDestroyShaderModule(dev.device, vm, nullptr);
+        b.failed = true, s.failed = true;
+        s.blits.push_back(b);
+        return VK_NULL_HANDLE;
+    }
+    VkPipelineShaderStageCreateInfo st[2]{{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO},
+                                          {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO}};
+    st[0].stage = VK_SHADER_STAGE_VERTEX_BIT, st[0].module = vm, st[0].pName = "main";
+    st[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT, st[1].module = fm, st[1].pName = "main";
+    VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    vp.viewportCount = vp.scissorCount = 1;
+    VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    rs.polygonMode = VK_POLYGON_MODE_FILL, rs.cullMode = VK_CULL_MODE_NONE, rs.lineWidth = 1.0f;
+    VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    ms.rasterizationSamples = samples;
+    VkPipelineColorBlendAttachmentState cb{};
+    cb.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
+                        VK_COLOR_COMPONENT_A_BIT;
+    VkPipelineColorBlendStateCreateInfo bs{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    bs.attachmentCount = 1, bs.pAttachments = &cb;
+    const VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dy{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    dy.dynamicStateCount = 2, dy.pDynamicStates = dyn;
+    VkPipelineRenderingCreateInfo rci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+    rci.colorAttachmentCount = 1, rci.pColorAttachmentFormats = &format;
+    VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    ci.pNext = &rci;
+    ci.stageCount = 2, ci.pStages = st;
+    ci.pVertexInputState = &vi, ci.pInputAssemblyState = &ia, ci.pViewportState = &vp, ci.pRasterizationState = &rs;
+    ci.pMultisampleState = &ms, ci.pColorBlendState = &bs, ci.pDynamicState = &dy, ci.layout = s.lay_blit;
+    const bool ok = guarded_graphics(VK_NULL_HANDLE, &ci, &b.pipe) == VK_SUCCESS && b.pipe;
+    vkDestroyShaderModule(dev.device, vm, nullptr);
+    vkDestroyShaderModule(dev.device, fm, nullptr);
+    if (!ok) b.pipe = VK_NULL_HANDLE, b.failed = true, s.failed = true;
+    s.blits.push_back(b);
+    return b.pipe;
+}
+
+bool ssr_make_pipelines() {
+    SsrState& s = g_ssr;
+    if (s.compute) return true;
+    if (s.failed || !dev.push_descriptor || !vkCmdPushDescriptorSetKHR) return false;
+    const VkDescriptorType types_compute[3] = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                               VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE};
+    const VkDescriptorType types_blit[1] = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER};
+    const auto set_layout = [](const VkDescriptorType* types, uint32_t n) {
+        VkDescriptorSetLayoutBinding b[3]{};
+        for (uint32_t i = 0; i < n; i++) b[i] = {i, types[i], 1, VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        li.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+        li.bindingCount = n, li.pBindings = b;
+        VkDescriptorSetLayout out = VK_NULL_HANDLE;
+        return vkCreateDescriptorSetLayout(dev.device, &li, nullptr, &out) == VK_SUCCESS ? out : VK_NULL_HANDLE;
+    };
+    s.set_compute = set_layout(types_compute, 3), s.set_blit = set_layout(types_blit, 1);
+    if (!s.set_compute || !s.set_blit) {
+        s.failed = true;
+        logf("vk: OcaDim : SSR : ses jeux de descripteurs n'ont pas pu etre faits : la ligne est sans effet");
+        return false;
+    }
+    const auto make_layout = [](VkDescriptorSetLayout set, uint32_t push, VkPipelineLayout& out) {
+        VkPushConstantRange pr{VK_SHADER_STAGE_COMPUTE_BIT, 0, push};
+        VkPipelineLayoutCreateInfo pi{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        pi.setLayoutCount = 1, pi.pSetLayouts = &set;
+        if (push) pi.pushConstantRangeCount = 1, pi.pPushConstantRanges = &pr;
+        return vkCreatePipelineLayout(dev.device, &pi, nullptr, &out) == VK_SUCCESS && out;
+    };
+    if (!make_layout(s.set_compute, sizeof(SsrPush), s.lay_compute) || !make_layout(s.set_blit, 0, s.lay_blit)) {
+        s.failed = true;
+        logf("vk: OcaDim : SSR : ses dispositions de pipeline n'ont pas pu etre faites : la ligne est sans effet");
+        return false;
+    }
+    IntelDriverGate gate;
+    const auto spv = BUILTIN_SPV(SSR_COMP_SPV);
+    VkShaderModule m = VK_NULL_HANDLE;
+    VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+    mi.codeSize = spv.size, mi.pCode = spv.code;
+    if (guarded_shader_module(&mi, &m) != VK_SUCCESS) {
+        s.failed = true;
+        logf("vk: OcaDim : SSR : son module de calcul n'a pas pu etre fait : la ligne est sans effet");
+        return false;
+    }
+    VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+    ci.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_COMPUTE_BIT, m, "main", nullptr};
+    ci.layout = s.lay_compute;
+    const bool ok = guarded_compute(VK_NULL_HANDLE, &ci, &s.compute) == VK_SUCCESS && s.compute;
+    vkDestroyShaderModule(dev.device, m, nullptr);
+    if (!ok) {
+        s.compute = VK_NULL_HANDLE, s.failed = true;
+        logf("vk: OcaDim : SSR : son pipeline de calcul n'a pas pu etre fait : la ligne est sans effet");
+        return false;
+    }
+    return true;
+}
+
+/// (apres la passe de scene : la couleur et la profondeur sont encore celles du jeu, avant le HUD et avant l'upscaler)
+void ssr_after_pass(VkCommandBuffer cmd, const Pass& ps) {
+    if (!opts.ssr || g_ssr.failed || par_active.load(std::memory_order_relaxed)) return;
+    if (ps.n < 1 || !ps.tex[0] || !ps.color[0] || !ps.depth || !ps.depth_tex) return;
+    if (ps.level[0] != 0 || ps.layer[0] != 0 || ps.depth_level != 0 || ps.depth_layer != 0) return;
+    if (ps.samples != VK_SAMPLE_COUNT_1_BIT || ps.has_block_images) return;
+    const uint32_t w = ps.width, h = ps.height;
+    if (w < 1024 || h < 576) return;   // (la scene, jamais une shadow map)
+    const VkFormat fmt = ps.format0;
+    if (fmt != VK_FORMAT_R16G16B16A16_SFLOAT && fmt != VK_FORMAT_B10G11R11_UFLOAT_PACK32) return;
+    Texture* color = ps.tex[0];
+    Texture* depth = ps.depth_tex;
+    if (color->type != VK_IMAGE_TYPE_2D || depth->type != VK_IMAGE_TYPE_2D) return;
+    if (!(color->usage & VK_IMAGE_USAGE_SAMPLED_BIT) || !(depth->usage & VK_IMAGE_USAGE_SAMPLED_BIT)) return;
+    // (la camera du jeu, prise par l'upscaler sur cette profondeur : elle dit que cette passe est bien la scene, et donne
+    // la projection qui manque au SSR)
+    float proj[16], near_z = 0, far_z = 0;
+    uint32_t cw = 0, ch = 0;
+    if (!temporal_scene_camera(depth, proj, &near_z, &far_z, &cw, &ch)) return;
+    if (near_z <= 0.0f || cw != w || ch != h) return;
+    // (une fois par image et par profondeur : une passe rouverte plus tard ne se reflechit pas elle-meme)
+    static thread_local uint64_t seen_frame;
+    static thread_local VkImage seen_depth;
+    if (seen_frame == texture_frame_no() && seen_depth == depth->image) return;
+    SsrImage* im = ssr_image(w, h, cmd);
+    if (!im) {
+        g_ssr.failed = true;
+        logf("vk: OcaDim : SSR : son image temporaire n'a pas pu etre faite : la ligne est sans effet");
+        return;
+    }
+    if (!ssr_make_pipelines()) return;
+    VkImageView cv = ssr_sampled_view(color, VK_IMAGE_ASPECT_COLOR_BIT);
+    VkImageView dv = ssr_sampled_view(depth, VK_IMAGE_ASPECT_DEPTH_BIT);
+    if (!cv || !dv) return;
+    VkPipeline blit = ssr_blit_pipeline(fmt, ps.samples);
+    if (!blit) return;
+    seen_frame = texture_frame_no(), seen_depth = depth->image;
+    if (!g_ssr.color_sampler) {
+        VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+        si.magFilter = si.minFilter = VK_FILTER_LINEAR;
+        si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.maxLod = 0.0f;
+        if (vkCreateSampler(dev.device, &si, nullptr, &g_ssr.color_sampler) != VK_SUCCESS) return;
+        si.magFilter = si.minFilter = VK_FILTER_NEAREST;
+        if (vkCreateSampler(dev.device, &si, nullptr, &g_ssr.depth_sampler) != VK_SUCCESS) return;
+    }
+    const uint32_t steps = 32;
+    const float max_dist = std::min(4000.0f, std::max(250.0f, far_z * 0.05f));
+    SsrPush pc{};
+    pc.proj[0] = proj[0], pc.proj[1] = proj[5], pc.proj[2] = proj[10], pc.proj[3] = proj[11];
+    pc.jitter[0] = proj[2], pc.jitter[1] = proj[6];
+    pc.inv_size[0] = 1.0f / (float)w, pc.inv_size[1] = 1.0f / (float)h;
+    pc.near_z = near_z, pc.max_dist = max_dist;
+    pc.thickness = std::max(2.0f, max_dist / (float)steps * 1.5f);
+    pc.strength = 0.85f, pc.steps = (int32_t)steps;
+    static bool told;
+    if (!told) {
+        told = true;
+        logf("vk: OcaDim : SSR actif sur la scene %ux%u (proche %.2f, loin %.0f, portee %.0f)", w, h, near_z, far_z, max_dist);
+    }
+    // (1) la scene -> couleur + reflet, dans l'image temporaire
+    full_barrier(cmd, "barrier (avant le SSR)");
+    VkDescriptorImageInfo ci{g_ssr.color_sampler, cv, VK_IMAGE_LAYOUT_GENERAL};
+    VkDescriptorImageInfo di{g_ssr.depth_sampler, dv, VK_IMAGE_LAYOUT_GENERAL};
+    VkDescriptorImageInfo oi{VK_NULL_HANDLE, im->view, VK_IMAGE_LAYOUT_GENERAL};
+    VkWriteDescriptorSet wr[3]{};
+    wr[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 0, 0, 1,
+             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &ci, nullptr, nullptr};
+    wr[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 1, 0, 1,
+             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &di, nullptr, nullptr};
+    wr[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 2, 0, 1,
+             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &oi, nullptr, nullptr};
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g_ssr.compute);
+    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g_ssr.lay_compute, 0, 3, wr);
+    vkCmdPushConstants(cmd, g_ssr.lay_compute, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof pc, &pc);
+    vkCmdDispatch(cmd, (w + 7) / 8, (h + 7) / 8, 1);
+    // (2) l'image temporaire dessinee dans la cible (le triangle plein ecran), sans profondeur : la cible reste en GENERAL
+    full_barrier(cmd, "barrier (SSR, avant le blit)");
+    VkRenderingAttachmentInfo ca{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    ca.imageView = ps.color[0];
+    ca.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    ca.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    ca.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+    ri.renderArea = {{0, 0}, {w, h}};
+    ri.layerCount = 1;
+    ri.colorAttachmentCount = 1, ri.pColorAttachments = &ca;
+    vkCmdBeginRendering(cmd, &ri);
+    const VkViewport vp{0.0f, 0.0f, (float)w, (float)h, 0.0f, 1.0f};
+    const VkRect2D sc{{0, 0}, {w, h}};
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    vkCmdSetScissor(cmd, 0, 1, &sc);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, blit);
+    VkDescriptorImageInfo bi{g_ssr.color_sampler, im->view, VK_IMAGE_LAYOUT_GENERAL};
+    VkWriteDescriptorSet wb{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 0, 0, 1,
+                            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &bi, nullptr, nullptr};
+    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_ssr.lay_blit, 0, 1, &wb);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRendering(cmd);
+    bound().reset();   // (le blit a lie son pipeline et son etat : les draws suivants les remettent)
+    full_barrier(cmd, "barrier (apres le SSR)");
+}
+}  // namespace
 void end_pass(VkCommandBuffer cmd) {
     Pass& ps = pass();   // (once: the accessor is a call and a thread-local read at each use. The same object for the thread's life: draw_begin_recording resets it in place)
     if (!ps.open) return;
     vkCmdEndRendering(cmd);
     ps.open = false;
     note_pass_end(cmd);   // (before the dumps and probes below: they record work, and the next pass's barrier is then a full one)
+    ssr_after_pass(cmd, ps);   // (OcaDim: l'onglet Ray-Tracing, rien quand la ligne est sur Désactivé)
     if (ps.has_block_images) {
         full_barrier(cmd, "barrier (before BC slice stores)");
         for (int i = 0; i < ps.n; i++)

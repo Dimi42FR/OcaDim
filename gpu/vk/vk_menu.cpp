@@ -2127,11 +2127,13 @@ Row rows[] = {
     {TAB_GAMEPLAY, "Restart", nullptr, 0, 0, 0, nullptr,
      "Starts the game again. Save your progress first. Press Enter or A twice to restart. Esc or B "
      "cancels."},
-    // ---- (OcaDim) Ray-Tracing : les essais, séparés de l'onglet OcaDim. Rien n'est branché pour l'instant --------------
+    // ---- (OcaDim) Ray-Tracing : les essais, séparés de l'onglet OcaDim. Le SSR y est branché ; le SSAO a été retiré ----
     {TAB_RT, "Ray-Tracing (TEST)", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, false, true, -1, true},
-    {TAB_RT, "Aucun essai branché", nullptr, 0, 0, 0, nullptr,
-     "Prochains essais : réflexions écran (SSR), puis ombres ray-tracées. Le SSAO a été retiré : sa passe faisait "
-     "tomber le GPU (voir la passation)."},
+    {TAB_RT, "Réflexions écran (SSR)", &opts.ssr, 0, 1, 1, tx_onoff_fr,   // (OcaDim: les reflets dans la profondeur)
+     "Les reflets sur l'eau, les sols et les vitres, calculés à partir de la couleur et de la profondeur de la scène : "
+     "seuls les reflets visibles à l'écran existent, et les bords s'effacent. Désactivée par défaut, expérimentale : à "
+     "tester sur une copie de l'installation, une passe de calcul par image (sans effet avec les threads du replay).",
+     nullptr, false, true},
     {TAB_GAMEPLAY, "Quit", nullptr, 0, 0, 0, nullptr,
      "Save your progress first. Press Enter or A twice to quit. Esc or B cancels."},
 };
@@ -2559,6 +2561,7 @@ const char* ini_key(const Row& r) {
     if (r.value == &opts.ccx_split) return "ccx_split";
     if (r.value == &opts.precompile_bg) return "precompile_background";
     if (r.value == &opts.load_start) return "load_start";
+    if (r.value == &opts.ssr) return "ssr";   // (OcaDim: les réflexions écran, onglet Ray-Tracing)
     if (r.value == &opts.intel_compiles) return "intel_shader_compiles";   // (two rows, one key)
     if (r.value == &opts.preset) return "quality_preset";   // (two rows, one key: Affichage's Profil and OcaDim's)
     if (r.value == &opts.fps_cap) return "frame_rate_cap";   // (host/nn_vi.c reads it at the start, then HOS_OPT_FPS_CAP)
