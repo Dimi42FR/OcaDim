@@ -128,6 +128,24 @@ Toutes dans l'onglet **OcaDim** du F1, en français, avec leur clé ini ASCII da
 - **Tranche multi-démarrages : abandonnée.** Le 2e démarrage ne retrouve plus les variantes des programmes restants (1 790 notes « non gardées »), et `.built` est écrit quand même. Le garde-fou (empreinte du préfixe dans `.done`) est en place mais ne règle pas la rétention.
 - **Précompilation en arrière-plan (le design retenu)** : ligne OcaDim **Précompilation en arrière-plan**, **Désactivé par défaut**, 15 s ou 30 s (`precompile_background`). Le titre s'affiche après ce temps et la compilation continue derrière, **quatre threads en priorité basse** ; en mode `RX_VK_LOAD=create`, la préparation est lancée derrière le jeu. Mesure sur cache vraiment froid (fichier du jeu **et** cache du pilote AMD vides) : **187,8 s** tout avant le titre, **32,7 s** avec 15 s. `RX_VK_PRECOMPILE_BACKGROUND_S` reste prioritaire. Attention : la valeur est lue **sans static** — `precompile_run` est appelé une première fois avant que le fichier d'options et `ocadim_env.txt` ne soient lus.
 
+## 8 quater. Ray-Tracing (TEST) — état au 20/11
+
+- **Onglet** « Ray-Tracing » dans le F1, entre OcaDim et NVIDIA : titre + ligne d'attente en français (`0ff189fc`).
+- **Outillage shader** : `glslang 16.6` installé dans `tools\glslang` (il n'y en avait **aucun** sur la machine ; tout nouveau shader en dépend). Commande : `tools\glslang\bin\glslang.exe -V --target-env vulkan1.2 -o s.spv gpu\vk\shaders\s.comp`, puis un header `const uint32_t ...[]` (modèle : `gpu\vk\shaders\ssao_comp_spv.h`).
+- **SSAO** : `gpu\vk\shaders\ssao.comp` écrit et **compilé** (12 directions en spirale de Vogel sur la profondeur ; pas de kernel au hasard, donc pas de débruiteur). **Pas encore branché.**
+- **Où le brancher** : `end_pass()` (`vk_draw.cpp:6228`), le seul endroit qui a **la couleur et la profondeur de la scène** en même temps, avant le HUD et avant FSR 4. Sur cet install, **c'est FSR 4 qui upscale** : ni TAAU ni `temporal_stand_in` ne conviennent.
+- **Les trois dispatches** : profondeur → AO ; couleur × AO → image temporaire ; copie temporaire → cible de couleur. Puis une ligne « Occlusion ambiante (SSAO) » dans l'onglet RT, vérifiée par `ctl shot` avant/après.
+- **Ordre prudent** : d'abord « enregistrer la profondeur en PNG » (hors rendu, zéro risque) pour confirmer quelle profondeur on lit, ensuite seulement toucher à `end_pass`.
+- **Déployé** : `D:\ocarina3` et `F:\test` (build du 20:40), sauvegarde `F:\OcaDim-SAVE-17-11\build-0.0.4-onglet-rt`.
+
+## 8 quinquies. Ce qui reste, dans l'ordre
+
+1. **SSAO** (les trois dispatches ci-dessus) + capture de contrôle.
+2. **A/B perf** 0.0.4 contre le build courant, même sauvegarde et même scène (ton doute « plus de fps avant »).
+3. **Session longue FG 2x** pour retrouver le device lost ; le marqueur `cache/ocadim_fg_lost.txt` le consigne.
+4. **HUD hors de la FG** (picture sans HUD → génération → HUD).
+5. **Release** : tag, push, Setup, `OcaDimSetup-0.0.4-3.zip`. Tout est local aujourd'hui.
+
 ## 9. Les règles du projet
 
 - **Un changement à la fois**, build + test + sauvegarde + tag.
