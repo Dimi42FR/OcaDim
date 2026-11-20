@@ -158,6 +158,8 @@ struct Options {
                             // (vk_texture.cpp game_order); RX_VK_GAME_ORDER, when set, is over it
     int ccx_split = 0;      // (OcaDim) the replay's workers on the upper half of the logical CPUs (the second CCD on a Ryzen):
                             // 0 Auto (from 12 logical processors), 1 on, 2 off (vk_replay.cpp par_pin_upper_half)
+    int precompile_bg = 0;  // (OcaDim) the preparation before the title: 0 all of it before the title (as before), 1 fifteen
+                            // seconds then behind the game, 2 thirty seconds (vk_draw.cpp precompile_run)
 };
 extern Options opts;
 constexpr int kAutoPreset = 6;   // (the Quality preset Auto (this PC): menu_auto_for_gpu, auto_settings.h)
@@ -183,6 +185,8 @@ int menu_replay_workers();
 int menu_replay_seg();
 bool menu_draw_order();
 bool menu_ccx_split();
+/// (OcaDim) La précompilation en arrière-plan, en secondes avant le titre (0 : tout avant le titre, comme avant)
+int menu_precompile_background();
 void menu_set_gpu_count(int count);
 std::string driver_text();   // (vk_main.cpp: the driver as it names itself, for the log and Save my pipeline list)
 std::string device_name_text();   // (vk_main.cpp: the GPU the game runs on, as its driver names it)

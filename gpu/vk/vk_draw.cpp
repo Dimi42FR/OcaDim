@@ -10256,6 +10256,14 @@ bool notes_lost_by_driver() {
 }
 
 void precompile_run(void (*progress)(size_t done, size_t total)) {
+    // (OcaDim) RX_VK_PRECOMPILE_BACKGROUND_S=<seconds> over the F1's row (Précompilation en arrière-plan): 0, everything
+    // before the title as before. Set, the start waits that long at most and the workers keep building behind the game, few
+    // and below normal priority; in the load-at-create mode the warm starts behind the game and the title does not wait.
+    // (no static: precompile_run is called once early, before the options file is read, and a static would keep that value)
+    const int background_s = [] {
+        if (const char* e = getenv("RX_VK_PRECOMPILE_BACKGROUND_S")) return std::max(0, atoi(e));
+        return menu_precompile_background();
+    }();
     // (longshot, RX_VK_LOAD=create: only once every note has been built into the pipeline cache, so that a load from the
     // caches alone never meets a pipeline the prepare should have compiled. The first start after a preparation builds them
     // there and lets each go, precompile_warm: before the game, and never more of them alive than workers)
@@ -10265,11 +10273,20 @@ void precompile_run(void (*progress)(size_t done, size_t total)) {
         // (and where the driver's own cache lost what the marker says was built: notes_lost_by_driver)
         if (precompile_covers_notes() && !env_on("LONGSHOT_PREPARE_ONLY") && notes_lost_by_driver())
             remove(precompile_built_path().c_str());
-        if (!precompile_covers_notes() && precompile_warm(progress)) {
-            // (OcaDim) the slice used its seconds: the next start goes on, and play builds what it draws until then
-            logf("vk: OcaDim : précompilation par tranches : la suite au prochain démarrage (celui-ci ne construit pas le reste "
-                 "avant le titre)");
-            return;
+        if (!precompile_covers_notes()) {
+            if (background_s) {
+                // (OcaDim) the title does not wait: the warm fills the pipeline caches behind the game, and the next start
+                // finds them (it writes .built when it gets to its end)
+                std::thread([] { precompile_warm(nullptr); }).detach();
+                logf("vk: OcaDim : précompilation : lancée derrière le jeu, le titre ne l'attend pas");
+                return;
+            }
+            if (precompile_warm(progress)) {
+                // (OcaDim) the slice used its seconds: the next start goes on, and play builds what it draws until then
+                logf("vk: OcaDim : précompilation par tranches : la suite au prochain démarrage (celui-ci ne construit pas le reste "
+                     "avant le titre)");
+                return;
+            }
         }
         if (precompile_covers_notes()) return precompile_at_create(progress);
         // (the window was closed in it; or this is the preparation's own process, which leaves no marker: its warm filled
@@ -10361,15 +10378,22 @@ void precompile_run(void (*progress)(size_t done, size_t total)) {
         std::atomic<size_t> computes_cached{0}, computes_compiled{0}, computes_failed{0};
         std::mutex mu, first_graphics;
         std::atomic<bool> graphics_begun{false};
+        std::atomic<bool> background{false};   // (OcaDim: the start may go on, the workers keep building below normal priority)
         bool abandoned = false;
     };
     const size_t graphics_n = notes.size(), computes_n = computes.size(), fallbacks_n = fallbacks.size();
     Pre* pre = new Pre;
+    pre->background.store(background_s > 0, std::memory_order_relaxed);
     pre->notes = std::move(notes), pre->computes = std::move(computes), pre->fallbacks = std::move(fallbacks);
     auto& next = pre->next;
     auto& done = pre->done;
+    // (the budget: background_s, read at the top of precompile_run)
     const auto worker = [pre, total] {
         ub_thread_off();   // (a background thread: see ub_thread_off)
+#ifdef _WIN32
+        if (pre->background.load(std::memory_order_relaxed))
+            SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);   // (the game's threads first)
+#endif
         auto& notes = pre->notes;
         auto& computes = pre->computes;
         auto& fallbacks = pre->fallbacks;
@@ -10434,7 +10458,9 @@ void precompile_run(void (*progress)(size_t done, size_t total)) {
     };
     std::vector<std::thread> threads;
     const unsigned cpus = usable_cpus();
-    for (unsigned i = 0; i < std::min(cpus, 64u); i++) threads.emplace_back(worker);
+    // (OcaDim) with a background budget: few threads, so the game keeps its cores when the start goes on
+    const unsigned threads_n = background_s ? std::min(4u, cpus) : std::min(cpus, 64u);
+    for (unsigned i = 0; i < threads_n; i++) threads.emplace_back(worker);
     static const int stall_s = getenv("RX_VK_PRECOMPILE_STALL_S") ? atoi(getenv("RX_VK_PRECOMPILE_STALL_S")) : 30;
     size_t last_done = 0;
     auto last_change = std::chrono::steady_clock::now();
@@ -10445,6 +10471,16 @@ void precompile_run(void (*progress)(size_t done, size_t total)) {
         if (progress) progress(done.load(), total);
         prepare_progress_log("noted pipelines", done.load(), total, built0, log_at);
         Sleep(100);
+        // (OcaDim) the budget: the start goes on, the workers keep building behind the game
+        if (background_s && !gone_on &&
+            std::chrono::steady_clock::now() - built0 >= std::chrono::seconds(background_s)) {
+            std::lock_guard lk(pre->mu);
+            pre->abandoned = true;
+            gone_on = true;
+            logf("vk: OcaDim : précompilation : %d s avant le titre, %zu des %zu faits ; le reste continue derrière le jeu "
+                 "(%u threads, priorité basse)", background_s, done.load(), total, threads_n);
+            break;
+        }
         if (next.load() >= total + threads.size()) break;
         const auto now = std::chrono::steady_clock::now();
         if (done.load() != last_done) last_done = done.load(), last_change = now;

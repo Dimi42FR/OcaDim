@@ -544,6 +544,7 @@ SW(RX_VK_PLAY_CACHE, kill, bool, "on (what play makes goes into play cache files
 SW(RX_VK_PLAY_SAVE_START_MB, tune, int, "64 MB (0: any growth, as before)", "Growth of the start's pipeline cache past which it is written again in play.")
 SW(RX_VK_POOL_IDLE, tune, int, "8 presents (target_pool::kIdlePresents)", "How many presents a pooled render target may wait unused before it is destroyed.")
 SW(RX_VK_PRECOMPILE, kill, bool, "on in LONGSHOT_RELEASE builds (the builders'), off in development builds", "Turns the shader preparation before the title off (0) or on (1).")
+SW(RX_VK_PRECOMPILE_BACKGROUND_S, tune, int, "0: every noted pipeline before the title, as before", "Seconds the start waits at most for the noted pipelines; past it the game goes on and the workers keep building behind it, four at most and below normal priority.")
 SW(RX_VK_PRECOMPILE_COMPUTES, tune, enum, "the computes play dispatched plus the shipped list's; every kept one on a first start; listed on Mesa's Intel driver", "Which compute programs the preparation builds: all, listed, learned or none.")
 SW(RX_VK_PRECOMPILE_SAVE_S, tune, int, "30 seconds (0: never)", "Build time of the noted pipelines past which the pipeline cache is written before the title.")
 SW(RX_VK_PRECOMPILE_SLICE_S, tune, int, "0: a start builds every noted pipeline before the title", "Seconds of noted pipelines a start builds before the title; the next start goes on with the rest (ocadim_pipelines.bin.done).")

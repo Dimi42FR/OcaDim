@@ -1360,6 +1360,7 @@ const char* tx_auto_fr(int v) { static const char* const t[] = {"Auto", "Activé
 const char* tx_onoff_fr(int v) { return v ? "Activé" : "Désactivé"; }
 const char* tx_workers_fr(int v) { static const char* const t[] = {"Auto", "1", "2", "3", "4"}; return t[std::clamp(v, 0, 4)]; }
 const char* tx_seg_fr(int v) { static const char* const t[] = {"Auto (160)", "32", "64", "160"}; return t[std::clamp(v, 0, 3)]; }
+const char* tx_bg_fr(int v) { static const char* const t[] = {"Désactivé", "15 s", "30 s"}; return t[std::clamp(v, 0, 2)]; }
 /// (l'interrupteur d'environnement de ce lancement, par-dessus la ligne : ici RX_VK_DESC_PREFETCH)
 const char* prefetch_env() { return getenv("RX_VK_DESC_PREFETCH") ? "RX_VK_DESC_PREFETCH" : nullptr; }
 const char* hn_desc_prefetch(int v, int variant) {
@@ -2052,6 +2053,11 @@ Row rows[] = {
      "Prépare les pipelines de la zone pendant son écran de chargement, au lieu de les compiler en pleine partie : moins "
      "d'à-coups à l'arrivée. Le chargement dure un peu plus longtemps. Désactivé : comportement actuel.",
      nullptr, false, true},
+    {TAB_OCADIM, "Précompilation en arrière-plan", &opts.precompile_bg, 0, 2, 1, tx_bg_fr,   // (OcaDim: behind the title)
+     "Au premier lancement, le jeu compile des milliers de pipelines avant le titre (environ trois minutes sur nos PC). "
+     "15 s ou 30 s : le titre s'affiche au bout de ce temps et la compilation continue derrière, sur quatre threads en "
+     "priorité basse, le jeu peut donc avoir quelques à-coups tant qu'elle n'est pas finie. Désactivé : tout avant le "
+     "titre, comme avant. Prend effet après un redémarrage.", nullptr, true, true},
     {TAB_OCADIM, "Mode mémoire réduite (expérimental)", &opts.low_mem, 0, 1, 1, tx_onoff,   // (OcaDim: risky)
      "EXPÉRIMENTAL, DÉSACTIVÉ PAR DÉFAUT. Garde 24 frames d'enregistrement au lieu de 48 : moins de mémoire, mais l'anneau peut "
      "revenir sur une frame encore en vol et le pilote réinitialiser le GPU (device lost). À n'activer que pour un test, et à "
@@ -2541,6 +2547,7 @@ const char* ini_key(const Row& r) {
     if (r.value == &opts.replay_seg) return "replay_seg";
     if (r.value == &opts.draw_order) return "draw_order";
     if (r.value == &opts.ccx_split) return "ccx_split";
+    if (r.value == &opts.precompile_bg) return "precompile_background";
     if (r.value == &opts.intel_compiles) return "intel_shader_compiles";   // (two rows, one key)
     if (r.value == &opts.preset) return "quality_preset";   // (two rows, one key: Affichage's Profil and OcaDim's)
     if (r.value == &opts.fps_cap) return "frame_rate_cap";   // (host/nn_vi.c reads it at the start, then HOS_OPT_FPS_CAP)
@@ -6239,6 +6246,20 @@ bool menu_ccx_split() {
         return false;
     }();
     return on;
+}
+/// (OcaDim) La précompilation en arrière-plan : 0 tout avant le titre, 15 ou 30 s puis derrière le jeu (le jeu démarre,
+/// les workers continuent). RX_VK_PRECOMPILE_BACKGROUND_S, réglé, l'emporte. Sans static : lue à chaque appel, le premier
+/// pouvant précéder la lecture du fichier d'options
+int menu_precompile_background() {
+    const int row = std::clamp(opts.precompile_bg, 0, 2);
+    static bool said = false;
+    if (!said) {
+        said = true;
+        logf("vk: Précompilation en arrière-plan : %s", row == 1 ? "15 s avant le titre, le reste derrière"
+                                                        : row == 2 ? "30 s avant le titre, le reste derrière"
+                                                                   : "désactivée (tout avant le titre)");
+    }
+    return row == 1 ? 15 : row == 2 ? 30 : 0;
 }
 /// (longshot) The Threaded rendering row, resolved once for the run (threaded_rendering.h): the row as the options file had it
 /// at the start (menu_init, asked here too: a reader can come before the device is picked), the logical processors the process
