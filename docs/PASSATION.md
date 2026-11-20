@@ -13,10 +13,13 @@ ce qui est fait, ce qui reste, et les règles du projet.
 | `D:\Emulateur\Longshot-src\longshot` | Miroir de **l'amont** (MagicBeanDev/Longshot), pour lire et porter leurs commits. |
 | `D:\Emulateur\Longshot-src\longshot-001` | Ancienne base (branche `base-44-f1`), historique seulement. |
 | `F:\test` | **Installation de test** (notre build de dev). |
-| `D:\ocarina3` | **Installation de jeu** (celle du Setup, celle qu'utilisent les joueurs de test). |
-| `F:\OcaDim-SAVE-17-11` | **Toutes les sauvegardes de build** (`build-0.0.4`, `build-0.0.3-*`, etc.) + `old-name-backups`. |
+| `F:\test-prefetch` | **Copie de test jetable** (~2,8 Go, `romfs` en jonction vers `F:\test`, profil `test`) : c'est là que se lancent les essais risqués (SSAO, SSR). Ne jamais y mettre une sauvegarde qu'on veut garder. |
+| `D:\ocarina3` | **Installation de jeu** (celle du Setup, celle qu'utilisent les joueurs de test). C'est « l'Oca » qui tourne. |
+| `F:\OcaDim-SAVE-17-11` | **Toutes les sauvegardes de build** (`build-0.0.4`, `build-0.0.3-*`, `build-0.0.4-loadstart-auto`, …) + `old-name-backups`. |
 | `C:\Users\Administrator\Desktop\Nouveau dossier (9)\OcaDim` | **Le paquet du Setup** : `OcaDimSetup.exe`, runtime .NET, `source.zip`, `tools-seed/`. C'est ce dossier qu'on zippe pour la release. |
-| `C:\Users\Administrator\AppData\Local\HookshotBuilder\versions\v2.1.0\HookshotBuilder\tools` | **Les outils de compilation** (emsdk, llvm-mingw, cpm, python, wgpu-native, third_party). Source de `tools-seed`. |
+| `C:\Users\Administrator\AppData\Local\HookshotBuilder\versions\v2.1.0\HookshotBuilder\tools` | **Les outils de compilation** (emsdk, llvm-mingw, cpm, python, wgpu-native, third_party, et **glslang** depuis le 20/11). Source de `tools-seed`. |
+
+**Les builds du 20/11, dans `F:\OcaDim-SAVE-17-11`** (du plus récent au plus ancien) : `build-0.0.4-loadstart-auto` (le déployé), `build-0.0.4-loadstart`, `build-0.0.4-onglet-rt`, `build-0.0.4-bg-titre`, `build-0.0.4-liste-20-11`, `build-0.0.4-lignes-ocadim`. Chacun contient `ocadim.exe` + `ocadim_vk.dll` (certains aussi la liste de pipelines livrée).
 
 ## 2. Construire le jeu (build de dev)
 
@@ -31,6 +34,13 @@ py -3.12 -I nx2/build.py --standalone --jobs 8
 ```
 
 Sorties : `work\sa\build\ocadim.exe` + `ocadim_vk.dll`. Copier les deux dans `F:\test` (et/ou `D:\ocarina3`).
+
+**Nouveau shader** (Ray-Tracing, SSR…) : il faut `glslang`, ajouté le 20/11 dans les outils :
+```powershell
+$g="$b\glslang\bin\glslang.exe"
+& $g -V --target-env vulkan1.2 -o s.spv gpu\vk\shaders\s.comp
+```
+puis un header `const uint32_t NOM_SPV[] = {...};` (modèle : `gpu\vk\shaders\ssao_comp_spv.h`).
 
 **Toujours** : build → démarrage (vérifier `frame N, state play/menu`) → capture si visuel → sauvegarde du build dans `F:\OcaDim-SAVE-17-11\build-...` → commit → tag.
 
