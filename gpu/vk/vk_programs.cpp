@@ -33,6 +33,8 @@
 
 namespace mkwvk {
 
+bool menu_load_start();   // (OcaDim: vk_menu.cpp, la ligne « Programmes avant le titre »)
+
 ProgramCensus census;
 thread_local UseCounters use_counters;
 bool programs_life_flag = false;
@@ -346,14 +348,20 @@ std::atomic<int> load_mode{-1};
 std::atomic<bool> struck_last_session{false};   // (load_default.h: the session before this one left a strike)
 void programs_load_decide(bool native_mesh) {
     struck_last_session = load_default::strike_take(load_fallback_path());
-    const load_default::Choice c = load_default::choose(getenv("RX_VK_LOAD"), native_mesh, load_default::marker_there(load_fallback_path()),
+    // (OcaDim) la ligne « Programmes avant le titre » force le mode « avant le titre » : sur NVIDIA, le défaut charge au
+    // chargement, et le journal du 4070 montre 7 038 chargements pour 14 s de gels en partie. RX_VK_LOAD reste prioritaire.
+    const char* mode = getenv("RX_VK_LOAD");
+    const bool by_row = !mode && menu_load_start();
+    if (by_row) mode = "start";
+    const load_default::Choice c = load_default::choose(mode, native_mesh, load_default::marker_there(load_fallback_path()),
                                                         env_on("RX_VK_PROGRAM_CACHE_ZSTD"));
-    const bool host_v14 = (!getenv("RX_VK_LOAD") && host && host->version <= 14);
+    const bool host_v14 = (!mode && host && host->version <= 14);
     const bool load_create = host_v14 ? false : c.create;
     load_mode.store(load_create ? 1 : 0, std::memory_order_release);
-    logf("vk: programs are loaded %s: %s (RX_VK_LOAD=create or start says which)",
+    logf("vk: programs are loaded %s: %s (RX_VK_LOAD=create or start says which)%s",
          load_create ? "when the game makes them (create)" : "before the title (start)",
-         host_v14 ? "executable host has version <= 14 (load-on-create requires host >= 21)" : c.why);
+         host_v14 ? "executable host has version <= 14 (load-on-create requires host >= 21)" : c.why,
+         by_row ? " ; la ligne Programmes avant le titre du F1" : "");
 }
 bool programs_load_at_create() { return load_mode.load(std::memory_order_acquire) == 1; }
 namespace {

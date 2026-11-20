@@ -64,37 +64,43 @@ py -3.12 -I scripts/longshot_ctl.py --sock "\\.\pipe\ocadim-test" quit
 
 | Fichier | Ce qu'on y a mis |
 |---|---|
-| `gpu/vk/vk_menu.cpp` | Les 14 lignes de la section **OcaDim**, Ça rame, Petit PC, garde-fou, DRS, VRS, mips, profil, précompilation, compteur FG, aide/traductions. |
+| `gpu/vk/vk_menu.cpp` | Les lignes **OcaDim** (dont les six remises : Préchargement des descripteurs, Barrières d'ordre des rendus, Correctifs au-dessus de 60 fps, Threads/Segments du replay, Affinité CPU (CCX)), Ça rame, Petit PC, garde-fou, DRS, VRS, mips, profil, précompilation (+ **en arrière-plan**), compteur FG, **onglet Ray-Tracing**, aide/traductions. |
 | `gpu/vk/vk_menu.h` | `struct Options` — **tout nouveau champ va À LA FIN**. |
 | `gpu/vk/menu_i18n.h` | Table française (et 12 autres langues). Une aide renvoie `k==0 ? texte : nullptr`. |
-| `gpu/vk/vk_draw.cpp` | `vrs_set`/`vrs_rate`, `precompile_zone`, diagnostic pipeline/frame lente, `build_graphics`, `jobs_wait`. |
+| `gpu/vk/vk_draw.cpp` | `vrs_set`/`vrs_rate`, `precompile_zone`, **`precompile_run` (budget d'arrière-plan)**, `precompile_warm` (tranche, `.done`), diagnostic pipeline/frame lente, `build_graphics`, `jobs_wait`. |
 | `gpu/vk/vk_main.cpp` | Extension et fonctionnalité VRS, chargement de `vkCmdSetFragmentShadingRateKHR`. |
-| `gpu/vk/vk_replay.cpp` | `rec_cap` (mode mémoire réduite), déclencheur de précompilation, `vrs_set` par frame. |
-| `gpu/vk/vk_fg_amd.cpp` | FG AMD, compteur `generated`, `fg_amd_generated()`. |
-| `gpu/vk/vk_texture.cpp` | `low_vram_texture_mips` (ligne mips). |
+| `gpu/vk/vk_replay.cpp` | `rec_cap` (mode mémoire réduite), déclencheur de précompilation, `vrs_set` par frame, **prefetch de descripteurs** (`fg_lost_note`, `pf_*`), **`par_threads`/`par_pin_upper_half`/`per`**, `device_lost`. |
+| `gpu/vk/vk_fg_amd.cpp` | FG AMD, compteur `generated`, `fg_amd_generated()`, **garde `opts.framegen == 0`** (le secours FG). |
+| `gpu/vk/vk_texture.cpp` | `low_vram_texture_mips` (ligne mips), **`game_order()`/`pass_start_barrier`** (barrières d'ordre des rendus). |
+| `host/oot_high_fps.c` | **`above60_fixes()`** (`rx_option(HOS_OPT_ABOVE60_FIXES)`), le solveur au-dessus de 60 fps. |
+| `gpu/vk/shaders/` | Les shaders du renderer en GLSL + leur SPIR-V (`*_spv.h`). **`ssao.comp`, `ssao_apply.comp`** (Ray-Tracing, essai). |
+| `tools\glslang` | **glslang 16.6**, ajouté le 20/11 : aucun compilateur GLSL n'existait. `bin\glslang.exe -V --target-env vulkan1.2 -o s.spv s.comp`. |
 | `gpu/vk/vk_crash_window.cpp`, `host/hos_crash_dialog.c` | Fenêtre de crash **OcaDim** + texte « poster sur le ticket ou le Discord dimiviveamd ». |
 | `host/hos_thread.c` | Ordonnanceur de vcores (mode Réactif/Ultra) + `barrier_mode`. |
 | `host/oot_barrier.c` | Barrières de jobs (`HOS_OOT_BARRIER_WAIT`). |
 | `gpu/vk/intel_compiles.h` | Compilation des shaders selon les cœurs (8+). |
-| `setup/OcaDimSetup` | Setup C#/WPF : cases NVIDIA / FSR / Compilation légère / Build optimisé, outils locaux (`tools-seed`), version. |
-| `assets/pipeline_states/` | Listes de pipelines livrées (fusionnées par `make_game.py`). |
+| `setup/OcaDimSetup` | Setup C#/WPF : cases NVIDIA / FSR / Compilation légère / Build optimisé / **Télécharger les outils en ligne**, outils locaux (`tools-seed`), version. |
+| `assets/pipeline_states/` | Listes de pipelines livrées (fusionnées par `make_game.py`) ; **`contrib/dimi42fr-tour-teleports-2026-11-20`** (1 121 pipelines). |
 
 ## 6. État publié
 
 - **Dernière release** : `v0.0.4-2` — « NVIDIA réparé (merci Qeviin) », archive `OcaDimSetup-0.0.4.zip`.
 - `v0.0.4`, `v0.0.3-2` (test), `v0.0.3` (stable, **étiquetée `0.0.3-TEST` par erreur**).
-- `main` = commit du correctif VRS (`790cbcd8`).
+- `main` = commit du correctif VRS (`790cbcd8`), **non mis à jour depuis** : `merge-amont` est en avance de 10 commits (tout le travail du 20/11), et rien n'a été poussé.
+- Installations : `D:\ocarina3` et `F:\test` = build du 20/11 20:40 (onglet Ray-Tracing, précompilation en arrière-plan sur Désactivé).
 
 ## 7. Problèmes connus, et ce qu'on sait
 
 1. **Device lost avec la frame generation** (AMD et NVIDIA). Dernier log utile : `submit 912 failed (-4)` après 120 images. Causes écartées : `low_mem`, VRS désactivé, barrières, PGO (chez Dimi c'est le build de dev).
    **Correctif immédiat appliqué** : plus d'appel VRS quand la ligne est sur Désactivé → réglé chez Qeviin (RTX 4070 SUPER).
-   **Reste** : les device lost avec la FG **active**. Piste : la swapchain dédiée (AMD) / DLSS-G (NVIDIA).
+   **Reste** : les device lost avec la FG **active**. Piste : la swapchain dédiée (AMD) / DLSS-G (NVIDIA). Le 20/11, Dimi n'a **pas reproduit** en 2x fixe — à confirmer sur une session longue.
 2. **HUD étiré avec la FG** : le HUD est encore dans l'image générée (`HUD included` dans le log). Passe à faire : picture sans HUD → génération → HUD.
 3. **Textures qui clignotent** (0,1 s, rare) : 4 pistes notées (mips, ASTC en RGBA8, éviction, upload streaming). Il manque un log par événement.
-4. **`Shaders built` monte encore** : la liste livrée couvre nos zones. Pour tout le jeu : `python -I scripts/pipeline_tour.py tour --game <copie du jeu> --out <dir> --publish` (des heures).
-5. **Précompilation incrémentale** (4 pipelines/frame) : `precompile_run` est tout-ou-rien (120 lignes avec marqueurs de reprise). Découpage non fait.
+4. **`Shaders built`** : **+1 121 pipelines** livrés le 20/11 (30 destinations enfant/adulte), 67 694 au total. Pour le reste : `python -I scripts/pipeline_tour.py tour --game <copie du jeu> --out <dir> --publish` (des heures).
+5. **Précompilation** : le découpage multi-démarrages est **abandonné** (voir 8 ter) ; remplacé par l'**arrière-plan après le titre**, Désactivé par défaut. Le tout-avant-le-titre reste le défaut.
 6. **Pas de corrections** sur : LTO (build), aliasing mémoire, constantes de spécialisation (gros).
+7. **Prefetch de descripteurs** : remis, mais **0,05 % de coups** (320 sur 622 028) — la valeur est dans les négatifs. Éteint par défaut, et il faut ≥ 2 threads du replay.
+8. **SSAO** : shaders prêts, premier branchement **retiré** (crash, voir 8 quater). Aucune option active.
 
 ## 8. Le mode de secours FG (codé)
 
@@ -116,6 +122,9 @@ Toutes dans l'onglet **OcaDim** du F1, en français, avec leur clé ini ASCII da
 | Threads du replay | `vk_replay.cpp` `par_threads()` |
 | Segments du replay | `vk_replay.cpp` `per` |
 | Affinité CPU (CCX) | `vk_replay.cpp` `par_pin_upper_half()` |
+| Programmes avant le titre | `vk_programs.cpp` `programs_load_decide` (force `start` sur `menu_load_start()`) |
+
+- **Mesure sur la 4070 du testeur (RTX 4070, pilote 621.24, 3440×1440 DLSS Quality, 20/11)** : `program loads at create` = **7 038 chargements, 14 s cumulées, pire 1 443 ms**, et **12 850 pipelines construits en jeu (7,3 s)**. Sur NVIDIA le mode par défaut est « au chargement » (mesh shaders), d'où l'écart avec nos 1 586 sur la 9070 XT. La nouvelle ligne **force le mode « avant le titre »** : mesuré ici à 45,5 s de démarrage, mais plus de chargements en partie. `RX_VK_LOAD` reste prioritaire, et le log dit quand c'est la ligne qui a décidé.
 
 - **Défauts neutres, mesurés le 20/11** : Auto = **désactivé** pour le préchargement, les threads du replay et le CCX (4 threads + le helper donnaient moins de fps, plus de régularité) ; segments Auto = **160** (comme avant la ligne) ; barrières Auto = **NVIDIA seulement** ; correctifs 60 fps **activés** (défaut d'origine).
 - **Toujours perdu** : la ligne « Batched submits » (devenue une politique, `device_policy.h`) ; le volet « eau à pas fixes » des correctifs 60 fps (l'amont a réécrit le hook en `hos_oot_solver_steps`) ; l'outillage « demande de test » (`.claude/skills`, `scripts/test_requests.py`, `docs/test-requests.md`, `tests/test_test_requests.py`).

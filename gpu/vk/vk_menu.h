@@ -160,6 +160,8 @@ struct Options {
                             // 0 Auto (from 12 logical processors), 1 on, 2 off (vk_replay.cpp par_pin_upper_half)
     int precompile_bg = 0;  // (OcaDim) the preparation before the title: 0 all of it before the title (as before), 1 fifteen
                             // seconds then behind the game, 2 thirty seconds (vk_draw.cpp precompile_run)
+    int load_start = 0;     // (OcaDim) 0: the emulator's mode (at create on NVIDIA, before the title elsewhere), 1: every
+                            // program before the title, for fewer hitches in play (vk_programs.cpp programs_load_decide)
 };
 extern Options opts;
 constexpr int kAutoPreset = 6;   // (the Quality preset Auto (this PC): menu_auto_for_gpu, auto_settings.h)
@@ -185,6 +187,9 @@ int menu_replay_workers();
 int menu_replay_seg();
 bool menu_draw_order();
 bool menu_ccx_split();
+/// (OcaDim) Charger tous les programmes avant le titre au lieu de les lire quand le jeu les demande : moins de gels en
+/// partie, un démarrage plus long et plus de mémoire (vk_programs.cpp programs_load_decide)
+bool menu_load_start();
 /// (OcaDim) La précompilation en arrière-plan, en secondes avant le titre (0 : tout avant le titre, comme avant)
 int menu_precompile_background();
 void menu_set_gpu_count(int count);
