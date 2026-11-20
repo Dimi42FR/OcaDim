@@ -104,9 +104,10 @@ enum MenuTab {
     TAB_CONTROLS = 4,
     TAB_NFC = 5,     // (longshot: the player's NFC tags, held to the game's reader: host/nn_nfp.c)
     TAB_OCADIM = 6,  // (OcaDim: only the options this fork adds, apart from the game's and the vendor's)
-    TAB_NVIDIA = 7,  // (OcaDim: the vendor's own settings in one place; a tab with no row shown here is skipped)
-    TAB_DEBUG = 8,   // (the OoT debug tools of #785, a tab of their own)
-    TAB_COUNT = 9,
+    TAB_RT = 7,      // (OcaDim: les essais de ray tracing, expérimental : rien n'y est branché pour l'instant)
+    TAB_NVIDIA = 8,  // (OcaDim: the vendor's own settings in one place; a tab with no row shown here is skipped)
+    TAB_DEBUG = 9,   // (the OoT debug tools of #785, a tab of their own)
+    TAB_COUNT = 10,
     TAB_MOTION = TAB_COUNT,   // (longshot: not a tab of the strip, the Motion page that the Controls tab's Motion row
                               // opens: one past the strip's tabs, so a tab added before TAB_COUNT moves it along)
     TAB_FPS_DEV = TAB_MOTION + 1,   // (longshot: not a tab either, the FPS counter's Dev lines page, from the Gameplay tab)
@@ -2122,6 +2123,11 @@ Row rows[] = {
     {TAB_GAMEPLAY, "Restart", nullptr, 0, 0, 0, nullptr,
      "Starts the game again. Save your progress first. Press Enter or A twice to restart. Esc or B "
      "cancels."},
+    // ---- (OcaDim) Ray-Tracing : les essais, séparés de l'onglet OcaDim. Rien n'est branché pour l'instant --------------
+    {TAB_RT, "Ray-Tracing (TEST)", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, false, true, -1, true},
+    {TAB_RT, "Aucun essai branché", nullptr, 0, 0, 0, nullptr,
+     "Onglet réservé aux essais de rendu : occlusion ambiante (SSAO), réflexions écran (SSR), puis ombres ray-tracées. "
+     "Rien n'est implémenté pour l'instant ; les lignes viendront ici, une par essai, sans toucher aux options OcaDim."},
     {TAB_GAMEPLAY, "Quit", nullptr, 0, 0, 0, nullptr,
      "Save your progress first. Press Enter or A twice to quit. Esc or B cancels."},
 };
@@ -4592,7 +4598,8 @@ const char* bug_report_hint() {
     return text.c_str();
 }
 
-const char* const tab_titles[TAB_COUNT] = {"Display", "Graphics", "Audio", "Gameplay", "Controls", "NFC", "OcaDim", "NVIDIA", "Debug"};
+const char* const tab_titles[TAB_COUNT] = {"Display", "Graphics", "Audio", "Gameplay", "Controls", "NFC", "OcaDim",
+                                           "Ray-Tracing", "NVIDIA", "Debug"};
 inline const char* tab_title(int t) { return t >= 0 && t < TAB_COUNT ? tab_titles[t] : "Settings"; }
 /// (OcaDim) The rail: one line a section, the shown one on an inset with a gold bar at its left, the others dim; the
 /// sections under another (Motion, the FPS counter's details) light their parent
@@ -6516,8 +6523,8 @@ void menu_option_set(int id, int value) {
 // its own thread: menu_mu keeps them apart from menu_tick (the present's thread) and from menu_option_set (the game's)
 bool bridge_row(int i) { return rows[i].value && !rows[i].heading && rows[i].cheat < 0 && row_shown(i); }
 void bridge_fill(int i, MkwVkSetting* out) {
-    static const char* const tabs[] = {"display", "graphics", "audio", "gameplay", "controls", "nfc", "ocadim", "nvidia",
-                                       "debug", "motion", "gameplay", "controls"};
+    static const char* const tabs[] = {"display", "graphics", "audio", "gameplay", "controls", "nfc", "ocadim", "raytracing",
+                                       "nvidia", "debug", "motion", "gameplay", "controls"};
     static_assert(sizeof tabs / sizeof tabs[0] == TAB_PAGE + 1, "a name for each MenuTab");
     const Row& r = rows[i];
     *out = MkwVkSetting{};
