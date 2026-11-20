@@ -143,15 +143,32 @@ Toutes dans l'onglet **OcaDim** du F1, en français, avec leur clé ini ASCII da
 - **Outillage shader** : `glslang 16.6` installé dans `tools\glslang` (il n'y en avait **aucun** sur la machine ; tout nouveau shader en dépend). Commande : `tools\glslang\bin\glslang.exe -V --target-env vulkan1.2 -o s.spv gpu\vk\shaders\s.comp`, puis un header `const uint32_t ...[]` (modèle : `gpu\vk\shaders\ssao_comp_spv.h`).
 - **SSAO** : `gpu\vk\shaders\ssao.comp` écrit et **compilé** (12 directions en spirale de Vogel sur la profondeur ; pas de kernel au hasard, donc pas de débruiteur). **Pas encore branché.**
 - **Où le brancher** : `end_pass()` (`vk_draw.cpp:6228`), le seul endroit qui a **la couleur et la profondeur de la scène** en même temps, avant le HUD et avant FSR 4. Sur cet install, **c'est FSR 4 qui upscale** : ni TAAU ni `temporal_stand_in` ne conviennent.
-- **Premier essai (20/11) : il crashe, et pourquoi.** Deux dispatchs (profondeur → facteur, couleur × facteur → image temporaire) puis une **copie** dans la cible du jeu. Le jeu est parti sur une cible **128×128** (une shadow map, pas la scène), puis a bloqué 16 s sur `vkDestroyImageView` et s'est fermé. La copie suppose `TRANSFER_DST` sur la cible, et la vue d'attachement n'est pas forcément échantillonnable. Le branchement a été **retiré** (`08d7e5bb`) ; le code du premier essai et les shaders restent dans l'historique.
-- **La bonne conception, pour la prochaine tentative** : écriture dans la cible **par un rendu**, pas par une copie — rouvrir une passe dynamique sur `ps.color[0]` (`vkCmdBeginRendering`, `LOAD`/`STORE`) et y dessiner un triangle plein écran qui échantillonne l'image temporaire, avec une garde `w >= 1024 && h >= 576` pour ne viser que la scène. Deux shaders de plus (vertex plein écran + fragment d'échantillonnage).
-- **Ordre prudent** : d'abord « enregistrer la profondeur en PNG » (hors rendu, zéro risque) pour confirmer quelle profondeur on lit, ensuite seulement toucher à `end_pass`.
-- **Déployé** : `D:\ocarina3` et `F:\test` (build du 20:40), sauvegarde `F:\OcaDim-SAVE-17-11\build-0.0.4-onglet-rt`.
+- **SSAO : abandonné (deux crashes).** Premier essai : une **copie** dans la cible (`vkCmdCopyImage`) — les cibles n'ont pas `TRANSFER_DST`, la carte a lâché. Deuxième essai : sortie **dessinée** dans la cible (bonne méthode), mais mes images étaient **détruites** à chaque changement de taille ; la résolution dynamique alternait 2560×1440 / 1280×720, et `vkDestroyImageView` a bloqué **24,7 s** en attendant le GPU, puis crash de la carte. Le code, les shaders et les deux crashs restent dans l'historique (`fad54e64`, `08d7e5bb`, `7b249e30`). **Ne pas refaire** : détruire une vue pendant que le GPU l'utilise.
+- **La bonne conception (apprise à la dure), pour le SSR et la suite** :
+  1. **une image par (taille, format)**, gardées jusqu'à la fin du run, jamais détruites (un petit tableau, comme `old_hist` de TAAU) ;
+  2. **sortie dessinée dans la cible** par le triangle plein écran (`ssao_blit.vert/.frag`, déjà compilés et commités), pas de copie ;
+  3. **garde de taille** : `w >= 1024 && h >= 576` seulement (la scène, jamais une shadow map) ;
+  4. **désactivé par défaut**, testé uniquement sur une **copie** de l'installation (`F:\test-prefetch`), avec `ctl shot` avant/après.
 
-## 8 quinquies. Ce qui reste, dans l'ordre
+## 8 quater. SSR (réflexions écran) — le prochain essai
 
-1. **SSAO** (les trois dispatches ci-dessus) + capture de contrôle.
-2. **A/B perf** 0.0.4 contre le build courant, même sauvegarde et même scène (ton doute « plus de fps avant »).
+- **Ce que c'est** : pour chaque pixel, le rayon réfléchi par la surface est marché **en espace écran** dans la profondeur ; à l'intersection, la couleur de la scène est prise. Seuls les reflets **visibles à l'écran** existent (l'eau, les sols, les vitres).
+- **Entrées** : couleur de la scène, profondeur (les deux déjà utilisées par le SSAO), et des normales **reconstruites** depuis la profondeur (pas de G-buffer dans ce jeu).
+- **Sortie** : couleur + reflet, dans l'image temporaire, puis le blit dans la cible (conception ci-dessus).
+- **Coût** : une passe de calcul (marche de 24 à 32 pas) + le blit, à la résolution de la scène.
+- **Où** : `end_pass()`, après la passe 3D, avant le HUD et avant FSR 4.
+- **Réglages** : une ligne **Réflexions écran (SSR)** dans l'onglet Ray-Tracing, **Désactivée** par défaut, puis un curseur d'intensité si ça tient.
+- **Pièges** : pas de réflexion hors écran (bords), pas de réflexion derrière un objet ; il faut une atténuation par la distance et un fondu aux bords, sinon ça « bave ».
+
+## 8 quinquies. Ombres ray-tracées — après le SSR
+
+- **Ce que ça demande, et pourquoi c'est un autre chantier** : une **BVH** de la scène. Le replay n'a pas de graphe de scène : il faudrait une BLAS **par maillage** (à partir des vertex/index buffers du invité, mise en cache par identité) et une TLAS **par image**, puis un rayon par pixel vers le soleil, et un **débruitage** (temporel + spatial) — sinon c'est du bruit.
+- **Premier pas concret** : vérifier qu'un maillage dessiné expose ses buffers au moment du rendu (ils sont liés), construire **une** BLAS pour un maillage, et tracer **un** rayon par pixel en vue debug. Si ce pas tient, le reste est de l'ingénierie ; sinon, on s'arrête là.
+
+## 8 sexies. Ce qui reste, dans l'ordre
+
+1. **SSR** (conception ci-dessus) + capture de contrôle.
+2. **A/B perf** 0.0.4 contre le build courant, même sauvegarde et même scène.
 3. **Session longue FG 2x** pour retrouver le device lost ; le marqueur `cache/ocadim_fg_lost.txt` le consigne.
 4. **HUD hors de la FG** (picture sans HUD → génération → HUD).
 5. **Release** : tag, push, Setup, `OcaDimSetup-0.0.4-3.zip`. Tout est local aujourd'hui.
