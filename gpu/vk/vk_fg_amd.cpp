@@ -391,6 +391,11 @@ bool create_fg(uint32_t w, uint32_t h, VkFormat fmt, bool depth_reversed, float 
 uint64_t fg_amd_generated() { return st().generated; }
 
 bool fg_amd_requested() {
+    // (OcaDim) Frame generation Off: no provider makes frames, and that is read before the switches below so the rescue
+    // after a device loss (menu_init: cache/ocadim_fg_lost.txt puts the row on Off) holds even where RX_VK_FG_AMD_FORCE or
+    // RX_VK_FG_AMD asked for it: a run that kept the switch would lose the device again. The "by" row keeps the player's
+    // choice for when the row is turned back on.
+    if (opts.framegen == 0) return false;
     bool v = false;
     // (OcaDim) RX_VK_FG_AMD_FORCE=<3|4>: AMD's generation on for this run, with that version, whatever the rows say
     if (const char* force = getenv("RX_VK_FG_AMD_FORCE")) return atoi(force) >= 3;

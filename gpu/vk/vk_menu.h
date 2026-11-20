@@ -145,6 +145,19 @@ struct Options {
     int mips = 0;         // (OcaDim) keep only the mip levels the distance needs: 0 Auto (small cards only), 1 on for all
     int low_mem = 0;      // (OcaDim) reduced memory: the recording ring keeps 24 frames instead of 48 (vk_replay.cpp rec_cap)
     int barrier_mode = 0; // (OcaDim) job barriers: 0 Auto (the game's masks), 1 off (back to the 20 us sleeps). Read at start
+    int desc_prefetch = 0; // (OcaDim) descriptor prefetch: 0 Auto (on from six logical processors, par_scale.h par::prefetch),
+                           // 1 On, 2 Off. Read once at the start (menu_desc_prefetch); RX_VK_DESC_PREFETCH, when set, is over it
+    int above60_fixes = 1;  // (OcaDim) the fixes above 60 fps (the floors that carry a character, the water's fixed steps):
+                            // 1 on, the default they shipped with; 0 the game's own behaviour before them.
+                            // host/oot_high_fps.c asks it as HOS_OPT_ABOVE60_FIXES (menu_above60_fixes)
+    int replay_workers = 0; // (OcaDim) the threads that record a command buffer's segments: 0 Auto (par_scale.h par::workers),
+                            // 1 to 4. Read once at the start (menu_replay_workers); RX_VK_PARALLEL, when set, is over it
+    int replay_seg = 0;     // (OcaDim) the draws and dispatches a replay worker takes at a time: 0 Auto (160, as before),
+                            // 1 32, 2 64, 3 160 (menu_replay_seg); RX_VK_PARALLEL_SEG, when set, is over it
+    int draw_order = 0;     // (OcaDim) draw order barriers: 0 Auto (NVIDIA only, where it was measured), 1 on, 2 off
+                            // (vk_texture.cpp game_order); RX_VK_GAME_ORDER, when set, is over it
+    int ccx_split = 0;      // (OcaDim) the replay's workers on the upper half of the logical CPUs (the second CCD on a Ryzen):
+                            // 0 Auto (from 12 logical processors), 1 on, 2 off (vk_replay.cpp par_pin_upper_half)
 };
 extern Options opts;
 constexpr int kAutoPreset = 6;   // (the Quality preset Auto (this PC): menu_auto_for_gpu, auto_settings.h)
@@ -160,6 +173,16 @@ int menu_vsync();
 /// switches: RX_VK_ASYNC and RX_VK_RECORDER, when set, are read over it by their own readers (vk_replay.cpp
 /// render_thread_mode, vk_recorder.h mode_from_env). A change of the row applies at the next start. Any thread
 bool menu_threaded_rendering();
+/// (OcaDim) The Descriptor prefetch row as this run resolved it, once, at the start: Auto is par_scale.h's rule
+/// (par::prefetch: on from six logical processors). vk_replay.cpp desc_prefetch_on asks it when RX_VK_DESC_PREFETCH is unset.
+/// A change of the row applies at the next start
+bool menu_desc_prefetch();
+/// (OcaDim) Les autres lignes OcaDim résolues une fois, au démarrage (les mêmes règles que leurs aides annoncent)
+bool menu_above60_fixes();
+int menu_replay_workers();
+int menu_replay_seg();
+bool menu_draw_order();
+bool menu_ccx_split();
 void menu_set_gpu_count(int count);
 std::string driver_text();   // (vk_main.cpp: the driver as it names itself, for the log and Save my pipeline list)
 std::string device_name_text();   // (vk_main.cpp: the GPU the game runs on, as its driver names it)

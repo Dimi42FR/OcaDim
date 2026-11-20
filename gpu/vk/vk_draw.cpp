@@ -1123,6 +1123,7 @@ std::mutex kept_ready_mu;
 std::unordered_map<uint64_t, VkPipeline> kept_ready;
 std::atomic<size_t> kept_ready_n{0};
 int64_t st_draws, st_skipped, st_dispatches, st_passes, st_mesh, st_pending_skips, st_waits;
+int64_t st_dispatch_unordered;   // (OcaDim: dispatches right after another left without a barrier, barrières d'ordre des rendus)
 // (longshot) skips by the line that made them, reported with the frame statistics (draw_skip_report)
 namespace {
 struct SkipSite { std::atomic<int> line{0}; std::atomic<int64_t> n{0}; int64_t last = 0; };
@@ -1744,6 +1745,30 @@ std::string pipe_notes_path() { return cache_path("ocadim_pipelines.bin"); }
 /// (its stamp, and how many). RX_VK_LOAD=create loads pipelines from the caches alone, and only once this says they are there.
 /// What adds notes without building them (state_list_prepare) removes it; a note play adds was built by play, into its cache
 std::string precompile_built_path() { return pipe_notes_path() + ".built"; }
+/// (OcaDim) ocadim_pipelines.bin.done: how far the precompile's slices got (RX_VK_PRECOMPILE_SLICE_S), as the number of the
+/// notes' programs built by earlier starts. Kept apart from .built on purpose: precompile_covers_notes reads the stamp alone,
+/// so a partial count written there would say every note is built and RX_VK_LOAD=create would load from caches that lack them.
+/// Its stamp is the program cache's, as the notes' own header: another program cache, and it starts again at zero.
+std::string precompile_done_path() { return pipe_notes_path() + ".done"; }
+size_t precompile_done_read() {
+    uint64_t rec[2] = {0, 0};
+    FILE* f = fopen(precompile_done_path().c_str(), "rb");
+    if (!f) return 0;
+    const bool ok = fread(rec, 8, 2, f) == 2 && rec[0] == program_cache_stamp();
+    fclose(f);
+    if (!ok) {
+        remove(precompile_done_path().c_str());
+        return 0;
+    }
+    return (size_t)rec[1];
+}
+void precompile_done_write(size_t programs) {
+    if (FILE* f = fopen(precompile_done_path().c_str(), "wb")) {
+        const uint64_t rec[2] = {program_cache_stamp(), (uint64_t)programs};
+        fwrite(rec, 8, 2, f);
+        fclose(f);
+    }
+}
 void precompile_built_write(size_t notes) {
     // (not by a --prepare-shaders run: on NVIDIA the pipeline cache that process writes does not answer the play process
     // ("kept 0 of 32"), so the first play after a preparation found none of the noted pipelines in a cache and compiled them
@@ -1754,6 +1779,7 @@ void precompile_built_write(size_t notes) {
         fwrite(rec, 8, 2, f);
         fclose(f);
     }
+    remove(precompile_done_path().c_str());   // (OcaDim: every note is built, there is no slice left to go on with)
 }
 /// The notes of this build (ocadim_pipelines.bin), each pipeline once
 /// (longshot) Targets a pipeline can be made with: at most 8 colour targets, a sample count Vulkan has, a topology it has.
@@ -5012,6 +5038,8 @@ struct Pass {
 };
 TLS_OBJECT(pass, Pass)
 thread_local bool work_since_barrier = false;   // (GPU work recorded since the last full barrier: a dispatch orders after it)
+thread_local VkCommandBuffer last_dispatch_cmd = VK_NULL_HANDLE;   // (OcaDim: the last dispatch's command buffer, and the
+thread_local uint64_t last_dispatch_epoch = 0;                     // work count right after it: game_order's back-to-back test)
 // what the command buffer has bound (draws skip what is already there): CmdBound, below, with the types it is made of
 /// The descriptors the graphics bind point has: what they were built from
 struct DescBound {
@@ -9860,7 +9888,7 @@ void prepare_progress_log(const char* what, size_t done, size_t total, std::chro
 /// again at the next one (the close puts the file back as the start found it, crash_markers.h), and after two that crashed in it
 /// (or were killed), the notes are taken as they are (what a cache then lacks is made at its first draw, as on an install that
 /// was never prepared)
-void precompile_warm(void (*progress)(size_t done, size_t total)) {
+bool precompile_warm(void (*progress)(size_t done, size_t total)) {
     const auto t0 = std::chrono::steady_clock::now();
     const std::string warming = precompile_built_path() + ".warming";
     int ended_inside = 0;
@@ -9875,7 +9903,7 @@ void precompile_warm(void (*progress)(size_t done, size_t total)) {
         precompile_built_write(refs.size());
         logf("vk: precompile: the last two starts did not get through building the noted pipelines into the cache: left as they "
              "are, a pipeline the caches lack is made when it is first drawn");
-        return;
+        return false;
     }
     crash_markers::begin(warming, ended_inside + 1, ended_inside ? ended_inside : crash_markers::none);
     // (by program, in the notes' order: a worker's borrowed program serves all its notes)
@@ -9902,16 +9930,28 @@ void precompile_warm(void (*progress)(size_t done, size_t total)) {
                            computes.end());
     }
     const size_t all_n = total + computes.size();
+    // (OcaDim) The slice: RX_VK_PRECOMPILE_SLICE_S=<seconds> of noted pipelines a start builds before the title, the rest left
+    // for the next one (ocadim_pipelines.bin.done, the programs built). 0 or unset: every one this start, as before. The
+    // program cache is written after each slice, so what a slice built is asked of the cache, not compiled again.
+    static const int slice_s = getenv("RX_VK_PRECOMPILE_SLICE_S") ? std::max(0, atoi(getenv("RX_VK_PRECOMPILE_SLICE_S"))) : 0;
+    const size_t first = slice_s ? std::min(precompile_done_read(), progs.size()) : 0;
+    if (first) logf("vk: OcaDim : précompilation par tranches : %zu des %zu programmes déjà construits par les démarrages "
+                    "précédents, on reprend là", first, progs.size());
+    const auto slice_t0 = std::chrono::steady_clock::now();
+    const auto slice_over = [&] {
+        return prepare_stopped() ||
+               (slice_s && std::chrono::steady_clock::now() - slice_t0 >= std::chrono::seconds(slice_s));
+    };
     std::atomic<size_t> done{0}, built{0}, failed{0}, no_program{0};
     const std::string notes_path = pipe_notes_path();
     auto log_at = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     const unsigned threads = std::min(usable_cpus(), 16u);
-    warm_bounded::run(progs.size(), threads, [&](size_t i) {
+    const size_t warmed_progs = warm_bounded::run(progs.size() - first, threads, [&](size_t i) {
         static thread_local bool off = (ub_thread_off(), true);   // (a background thread: see ub_thread_off)
         static thread_local FILE* in = fopen(notes_path.c_str(), "rb");
         static thread_local std::unique_ptr<PipeNote> note = std::make_unique<PipeNote>();
         (void)off;
-        const auto& list = by_prog.at(progs[i]);
+        const auto& list = by_prog.at(progs[first + i]);
         size_t found = 0;
         program_cache_borrow(progs[i], [&](Program& p) {
             ensure_layout(p);
@@ -9925,16 +9965,19 @@ void precompile_warm(void (*progress)(size_t done, size_t total)) {
         });
         no_program += list.size() - std::min(found, list.size());
         done += list.size();
-    }, [] { return prepare_stopped(); }, [&](size_t) {
-        if (progress) progress(done.load(), all_n);
-        prepare_progress_log("noted pipelines", done.load(), total, t0, log_at);
+    }, slice_over, [&](size_t) {
+        if (progress) progress(first + done.load(), all_n);
+        prepare_progress_log("noted pipelines", first + done.load(), total, t0, log_at);
     });
+    // (OcaDim) how far the notes got this start: the slice's own end, or all of them
+    const size_t warmed = first + warmed_progs;
+    const bool notes_all = warmed >= progs.size();
     // (the compute pipelines too, the plan's compute programs' (precompile_computes_which: every kept one, the listed ones on
     // Mesa's Intel driver): a first start in start mode makes them all, and a load at a create call only asks the caches, so on a new install a first dispatch found none (666 in one first session). Built
     // into the cache and let go, as the noted ones; only once those are all done)
     std::atomic<size_t> computes_done{0}, computes_built{0}, computes_failed{0};
     const auto c0 = std::chrono::steady_clock::now();
-    warm_bounded::run(done == total && !prepare_stopped() ? computes.size() : 0, threads, [&](size_t i) {
+    warm_bounded::run(notes_all && !prepare_stopped() ? computes.size() : 0, threads, [&](size_t i) {
         static thread_local bool off = (ub_thread_off(), true);
         (void)off;
         program_cache_borrow(computes[i], [&](Program& p) {
@@ -9955,8 +9998,25 @@ void precompile_warm(void (*progress)(size_t done, size_t total)) {
         if (progress) progress(total + computes_done.load(), all_n);
         prepare_progress_log("compute pipelines", computes_done.load(), computes.size(), c0, log_at);
     });
-    const bool all = done == total && computes_done == computes.size();
+    const bool all = notes_all && computes_done == computes.size();
     static const bool prepare_only = env_on("LONGSHOT_PREPARE_ONLY");   // (a --prepare-shaders run: vk_main.cpp)
+    // (OcaDim) A slice that used its seconds: the pipeline cache written (the next start asks it rather than the driver), where
+    // it got to kept, and the game goes on instead of the rest being built before the title. The crash marker ends here as a
+    // warm that got to its end ends it: two slices in a row are not two starts that crashed in it (which would give up).
+    if (!all && slice_s && !notes_all && !prepare_stopped() && warmed > first) {
+        prepare_saving_now.store(true, std::memory_order_relaxed);
+        pipeline_cache_save(true);
+        prepare_saving_now.store(false, std::memory_order_relaxed);
+        const bool kept = pcache_save_outcome.what == precompile_save::Outcome::kWritten ||
+                          pcache_save_outcome.what == precompile_save::Outcome::kSame;
+        // (only once the cache holds them: the next start skips what this one built)
+        if (kept) precompile_done_write(warmed);
+        crash_markers::end(warming);
+        logf("vk: OcaDim : précompilation par tranches : %zu programmes construits ce démarrage (%d s), %zu des %zu en tout%s ; "
+             "la suite au prochain démarrage, le jeu construit ce qu'il dessine d'ici là",
+             warmed - first, slice_s, warmed, progs.size(), kept ? "" : " (le cache n'a pas pu être écrit : la tranche sera refaite)");
+        return true;
+    }
     if (all && !prepare_stopped()) {
         // (the whole cache written, a GB and more, with every pipeline counted: the start-up screen says so, not "a few seconds
         // left", #714)
@@ -9979,6 +10039,7 @@ void precompile_warm(void (*progress)(size_t done, size_t total)) {
          !all || prepare_stopped() ? "; stopped before the end: the next start goes on"
          : prepare_only ? "; the preparation's own process: the first start of the game builds them again, from the driver's "
                           "cache, into the cache it then loads from" : "");
+    return false;
 }
 
 /// (longshot, RX_VK_LOAD=create) The start with nothing kept ready by a list: each note is only found, by its place in the file,
@@ -10195,7 +10256,12 @@ void precompile_run(void (*progress)(size_t done, size_t total)) {
         // (and where the driver's own cache lost what the marker says was built: notes_lost_by_driver)
         if (precompile_covers_notes() && !env_on("LONGSHOT_PREPARE_ONLY") && notes_lost_by_driver())
             remove(precompile_built_path().c_str());
-        if (!precompile_covers_notes()) precompile_warm(progress);
+        if (!precompile_covers_notes() && precompile_warm(progress)) {
+            // (OcaDim) the slice used its seconds: the next start goes on, and play builds what it draws until then
+            logf("vk: OcaDim : précompilation par tranches : la suite au prochain démarrage (celui-ci ne construit pas le reste "
+                 "avant le titre)");
+            return;
+        }
         if (precompile_covers_notes()) return precompile_at_create(progress);
         // (the window was closed in it; or this is the preparation's own process, which leaves no marker: its warm filled
         // the driver's cache, the first start of the game warms again and loads at create calls from then on)
@@ -11165,7 +11231,14 @@ void dispatch(VkCommandBuffer cmd, NvnState& s, uint32_t x, uint32_t y, uint32_t
     }
     // (dispatches after other work wait for it: the WebGPU renderer's dispatches were ordered the same way by
     // wgpu's own tracking, and MKW's compute chains read what the one before wrote)
-    if (work_since_barrier) full_barrier(cmd, "barrier (dispatch)");
+    // (OcaDim) a direct dispatch right after another, nothing recorded between, gets none: game_order, the F1's row
+    const bool after_dispatch = !indirect && cmd == last_dispatch_cmd &&
+                                work_epoch.load(std::memory_order_relaxed) == last_dispatch_epoch && game_order() &&
+                                !par_active.load(std::memory_order_relaxed);
+    if (work_since_barrier && !after_dispatch) full_barrier(cmd, "barrier (dispatch)");
+    else if (after_dispatch && ++st_dispatch_unordered % 50000 == 1)
+        logf("vk: %lld dispatchs juste après un autre, ordonnés par les barrières du jeu, sans la leur (barrières d'ordre des rendus)",
+             (long long)st_dispatch_unordered);
     work_since_barrier = true;
     if (!p.stages.empty() && p.stages[0].info.uses_cooperative_matrix) {   // (the game's networks, once each: what they read and write)
         static std::mutex mu;
@@ -11270,6 +11343,8 @@ void dispatch(VkCommandBuffer cmd, NvnState& s, uint32_t x, uint32_t y, uint32_t
         } else {
             vkCmdDispatch(cmd, x, y, z);
         }
+        // (OcaDim) the next dispatch right after this one, nothing recorded between, finds it here
+        last_dispatch_cmd = cmd, last_dispatch_epoch = work_epoch.load(std::memory_order_relaxed);
     }
     framegen_hud_before(cmd, picture, picture_level);   // (the game's own network drew the gameplay upscale)
     if (dump_on() && dump_ssbo_wanted(p.key)) dump_ssbos(cmd, p, "after");

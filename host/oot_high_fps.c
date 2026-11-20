@@ -4,6 +4,7 @@
    HOS_FPS_LOG (on, by the switches' rule: =0 is off): what they do, every 600 calls. */
 #include "hos.h"
 #include "oot_high_fps.h"
+#include "../gpu/vk/vk_api.h"   /* (HOS_OPT_ABOVE60_FIXES: la ligne Correctifs au-dessus de 60 fps du F1) */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <stdlib.h>
@@ -11,6 +12,17 @@
 #include "../gpu/vk/compat/longshot_env.h" /* (env_on: the switches' one rule) */
 
 extern volatile uint32_t hos_frame_seconds_bits;   /* (host/nn_vi.c: the frame's seconds, 0 at a cap of 60) */
+int rx_option(int id, int otherwise);   /* (host/rx_backend.c: les lignes du F1, le moteur répondant) */
+
+/* (OcaDim) La ligne Correctifs au-dessus de 60 fps (gpu/vk/vk_menu.cpp menu_above60_fixes, lue par HOS_OPT_ABOVE60_FIXES) :
+   activée, les correctifs ci-dessous ; désactivée, le comportement du jeu d'avant. Lue une fois (la ligne prend un
+   redémarrage), et 1 là où aucun moteur ne répond */
+static int above60_fixes(void) {
+    static int on = -1;   /* (les threads du jeu la lisent) */
+    int v = __atomic_load_n(&on, __ATOMIC_RELAXED);
+    if (v < 0) v = rx_option(HOS_OPT_ABOVE60_FIXES, 1), __atomic_store_n(&on, v, __ATOMIC_RELAXED);
+    return v;
+}
 
 static int timed(void) { return __atomic_load_n(&hos_frame_seconds_bits, __ATOMIC_RELAXED) != 0; }
 static int fps_log(void) {
@@ -84,6 +96,7 @@ uint64_t hos_oot_bgm_flags(uint64_t at, uint64_t flags) {
 /* The solver steps of f_838ceb80 / f_838cfc10: game, the game's count; scaled_bits, the float it cut; per_frame_bits, the steps
    of a 60 fps frame (a float) */
 uint32_t hos_oot_solver_steps(uint32_t game, uint32_t scaled_bits, uint32_t per_frame_bits) {
+    if (!above60_fixes()) return game;   /* (OcaDim, la ligne : le compte du jeu, comme avant les correctifs) */
     const int32_t steps = oot_solver_steps((int32_t)game, scaled_bits, per_frame_bits, timed());
     if (fps_log()) {
         static volatile LONG64 calls;

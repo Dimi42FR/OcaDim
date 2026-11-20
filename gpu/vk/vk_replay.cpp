@@ -1203,6 +1203,337 @@ int64_t dry_work = 0;
 size_t ub_first_of_recording = 0;  // (the current recording's first entry)
 uint64_t rec_value_now = 0;
 
+// (longshot, OcaDim) The descriptor prefetch: RX_VK_DESC_PREFETCH (or the Insert menu's Descriptor prefetch row, whose Auto
+// is on from six logical processors, par_scale.h). The dry pass queues its stretches of the stream (a point to the next, the
+// buffer's start to the first, the last to its stop) for one helper thread (BELOW_NORMAL, the priority pattern the parallel
+// workers proved). The helper re-walks each stretch from the point's state, mirroring the uniform buffer binds and the
+// stream's inline uniform updates, and at every draw publishes the bytes of each uniform range whose overlay the record
+// will build: the capture's pages with the updates over them, exactly as ub_overlay builds them. ub_overlay takes that copy
+// instead of reading guest memory and walking the update list, and builds locally on a miss. Its negatives say when no
+// update of the place covers the bound, which ub_overlay and ub_read take before their walks. Off by default.
+constexpr size_t kPfQueueMax = 16;         // (stretches queued ahead: a lagged helper drops new ones, the record falls back)
+constexpr uint64_t kPfMaxBytes = 16384;    // (how much of a bound range is published: the record's build asks the shader's
+                                           // used size of it, often far under the bound's; a bound over this is prefetched
+                                           // to this much and serves any ask inside; over it, the record builds)
+constexpr size_t kPfSlots = 512;           // (published entries; ~8 MiB with the 16 KiB copies)
+struct PfUb { uint64_t dst; std::vector<uint8_t> bytes; };          // (an update before the buffer: the item's own copies)
+struct PfWalked { uint64_t dst; const uint8_t* bytes; uint64_t size; };   // (an inline update: a span into the stream)
+struct PfItem {
+    ParPoint pt;                 // (the stretch's start: the dry pass's state and place there)
+    const uint8_t* end;          // (the stretch's end; null: the buffer's NOP_END, the last stretch)
+    bool closed = false;         // (the buffer's last stretch: the helper's walk state ends with it)
+    bool start = false;          // (the buffer's first stretch: it carries the updates before the buffer)
+    size_t ub0 = 0;              // (start only: how many entries the updates before the buffer were)
+    std::vector<PfUb> ubs;       // (start only: their copies; the list may prune under a lagged helper)
+};
+std::mutex pf_mu;
+std::condition_variable pf_cv;
+std::deque<PfItem> pf_queue;
+std::atomic<int64_t> pf_queued{0}, pf_drained{0}, pf_dropped{0};
+std::atomic<int64_t> st_pf_built{0}, st_pf_hit{0}, st_pf_miss{0};
+int64_t pf_st_draws, pf_st_noprog, pf_st_norange, pf_st_big, pf_st_noany;   // (the one helper thread's: why a draw published nothing)
+thread_local std::vector<uint8_t> pf_got;   // (the record's threads: a lookup's copy, sized once and kept)
+// (the asks the record made, learned for the helper: an overlay's bytes are asked again next frame at the same bound. The
+// helper publishes the largest ask each bound saw, its own bound-based guess until one is learned, so the record's asks,
+// which come from the program's tables, are served whole. A miss learns; a stale entry just misses)
+constexpr size_t kPfLearned = 2048;
+std::atomic<uint64_t> pf_learned[kPfLearned]{};   // (addr << 24 | the ask, 0: none)
+size_t pf_learn_index(uint64_t addr) {
+    uint64_t x = addr * 0x9E3779B97F4A7C15ull;
+    x ^= x >> 29, x *= 0xBF58476D1CE4E5B9ull, x ^= x >> 32;
+    return (size_t)x & (kPfLearned - 1);
+}
+void pf_learn(uint64_t addr, uint64_t n) {
+    if (!n || n > 0xFFFFFFull || addr >= (1ull << 40)) return;
+    const uint64_t pack = addr << 24 | n;
+    std::atomic<uint64_t>& s = pf_learned[pf_learn_index(addr)];
+    uint64_t cur = s.load(std::memory_order_relaxed);
+    for (;;) {
+        if (cur && (cur & 0xFFFFFFull) >= n) return;   // (the same bound's bigger ask, or another bound's: kept)
+        if (s.compare_exchange_weak(cur, pack, std::memory_order_relaxed)) return;
+    }
+}
+uint64_t pf_asked(uint64_t addr) {
+    const uint64_t cur = pf_learned[pf_learn_index(addr)].load(std::memory_order_relaxed);
+    return (cur >> 24) == addr ? cur & 0xFFFFFFull : 0;
+}
+// ---- the negatives: "no update of this place covers the bound's head", which the record's ub_overlay and ub_read both
+// decide by walking the update list for every descriptor (some 2600 of them a buffer); a negative entry lets them skip the
+// walk. Sound because the record's ask is never longer than the helper's take (the learned ask), and an update covering
+// the ask covers the take's head: the helper's no-any says the record's any is false too. A dropped stretch or an evicted
+// entry only costs the walk, as today ----
+struct PfNeg {
+    std::atomic<uint64_t> seq{0};    // (even: the entry stands; odd: it is being rewritten)
+    uint64_t addr, take, lim, view, rec;
+};
+constexpr size_t kPfNeg = 4096;
+alignas(64) PfNeg pf_negs[kPfNeg];
+size_t pf_neg_index(uint64_t addr, uint64_t lim) {
+    uint64_t x = addr * 0xD6E8FEB86659FD93ull ^ lim;
+    x ^= x >> 30, x *= 0xBF58476D1CE4E5B9ull, x ^= x >> 27, x *= 0x94D049BB133111EBull, x ^= x >> 31;
+    return (size_t)x & (kPfNeg - 1);
+}
+PfNeg* pf_neg_stored(uint64_t addr, uint64_t take, uint64_t lim, uint64_t view, uint64_t rec) {
+    const size_t i0 = pf_neg_index(addr, lim);
+    for (size_t probe = 0; probe < 4; probe++) {
+        PfNeg& s = pf_negs[(i0 + probe) & (kPfNeg - 1)];
+        for (int attempt = 0; attempt < 2; attempt++) {
+            const uint64_t v1 = s.seq.load(std::memory_order_acquire);
+            if (v1 & 1) continue;
+            if (s.addr == addr && s.take >= take && s.lim == lim && s.view == view && s.rec == rec) return &s;
+            break;
+        }
+    }
+    return nullptr;
+}
+void pf_neg_publish(uint64_t addr, uint64_t take, uint64_t lim, uint64_t view, uint64_t rec) {
+    PfNeg& s = pf_negs[pf_neg_index(addr, lim)];
+    const uint64_t v = s.seq.load(std::memory_order_relaxed);
+    s.seq.store(v + 1, std::memory_order_relaxed);
+    s.addr = addr, s.take = take, s.lim = lim, s.view = view, s.rec = rec;
+    s.seq.store(v + 2, std::memory_order_release);
+}
+bool pf_active();   // (below: the prefetch on and RX_VK_UB_CUR_ONLY off)
+bool pf_neg_lookup(uint64_t addr, uint64_t n, size_t lim) {
+    if (!pf_active()) return false;
+    const uint64_t view = memory_capture_view(), rec = rec_value_now;
+    const size_t i0 = pf_neg_index(addr, lim);
+    for (size_t probe = 0; probe < 4; probe++) {
+        PfNeg& s = pf_negs[(i0 + probe) & (kPfNeg - 1)];
+        for (int attempt = 0; attempt < 2; attempt++) {
+            const uint64_t v1 = s.seq.load(std::memory_order_acquire);
+            if (v1 & 1) continue;
+            if (s.addr == addr && s.take >= n && s.lim == (uint64_t)lim && s.view == view && s.rec == rec) {
+                if (s.seq.load(std::memory_order_relaxed) == v1) return true;
+                continue;
+            }
+            break;
+        }
+    }
+    return false;
+}
+bool desc_prefetch_on() {
+    // (OcaDim, the small-PC rule) RX_VK_DESC_PREFETCH unset: the Insert menu's Descriptor prefetch row, resolved once at the
+    // start (vk_menu.cpp menu_desc_prefetch), Auto there on from six logical processors, where the helper's own thread does
+    // not take a core the game needs; off under it. The switch still decides when it is set.
+    static const bool on = [] {
+        if (const char* e = getenv("RX_VK_DESC_PREFETCH")) return atoi(e) != 0;
+        return menu_desc_prefetch();   // (gpu/vk/par_scale.h par::prefetch, behind the row's Auto)
+    }();
+    return on;
+}
+// (the record's overlay applies this buffer's place's updates over the capture; RX_VK_UB_CUR_ONLY applies this recording's
+// only, a bound the helper cannot know, so the prefetch stands down while it is set)
+bool pf_active() {
+    static const bool cur_only = env_on("RX_VK_UB_CUR_ONLY");
+    return desc_prefetch_on() && !cur_only;
+}
+// ---- the published entries: one writer (the helper), many readers (the record's threads), a seqlock each. A reader copies
+// between two equal reads of an even sequence, a rewrite under it is seen and the lookup falls back ----
+struct PfSlot {
+    std::atomic<uint64_t> seq{0};    // (even: the entry stands; odd: it is being rewritten)
+    uint64_t addr, n, lim, view, rec;
+    uint8_t bytes[kPfMaxBytes];
+};
+alignas(64) PfSlot pf_slots[kPfSlots];
+size_t pf_slot_index(uint64_t addr, uint64_t lim) {   // (n out of the hash: the record's build may ask a shorter
+    // range of the same bound than the helper published, so the bucket must be the same one)
+    uint64_t x = addr * 0x9E3779B97F4A7C15ull ^ lim;
+    x ^= x >> 30, x *= 0xBF58476D1CE4E5B9ull, x ^= x >> 27, x *= 0x94D049BB133111EBull, x ^= x >> 31;
+    return (size_t)x & (kPfSlots - 1);
+}
+/// Whether (addr, n, lim, view, rec) stands published already: an entry of at least n bytes at addr (the record's build may
+/// ask a shorter range of the same bound: the bytes are per address, its first n serve)
+PfSlot* pf_slot_stored(uint64_t addr, uint64_t n, uint64_t lim, uint64_t view, uint64_t rec) {
+    const size_t i0 = pf_slot_index(addr, lim);
+    for (size_t probe = 0; probe < 4; probe++) {
+        PfSlot& s = pf_slots[(i0 + probe) & (kPfSlots - 1)];
+        for (int attempt = 0; attempt < 2; attempt++) {
+            const uint64_t v1 = s.seq.load(std::memory_order_acquire);
+            if (v1 & 1) continue;   // (being rewritten: once more, then the next probe)
+            if (s.addr == addr && s.n >= n && s.lim == lim && s.view == view && s.rec == rec) return &s;
+            break;
+        }
+    }
+    return nullptr;
+}
+void pf_publish(uint64_t addr, uint64_t n, uint64_t lim, uint64_t view, uint64_t rec, const uint8_t* src) {
+    PfSlot& s = pf_slots[pf_slot_index(addr, lim)];
+    const uint64_t v = s.seq.load(std::memory_order_relaxed);
+    s.seq.store(v + 1, std::memory_order_relaxed);   // (odd: the entry is being rewritten)
+    s.addr = addr, s.n = n, s.lim = lim, s.view = view, s.rec = rec;
+    std::memcpy(s.bytes, src, (size_t)std::min<uint64_t>(n, kPfMaxBytes));
+    s.seq.store(v + 2, std::memory_order_release);   // (even again: the entry stands)
+}
+/// The record's overlay copy from the published entries: the bytes as of (addr, n, lim, view, rec), or false, and the
+/// fallback builds them as today. A slot rewritten under the copy is seen (the sequence moved) and refused.
+bool pf_ub_lookup(uint64_t addr, uint64_t n, size_t lim, uint8_t* dst) {
+    if (!pf_active() || n > kPfMaxBytes) return false;
+    const uint64_t view = memory_capture_view(), rec = rec_value_now;
+    const size_t i0 = pf_slot_index(addr, lim);
+    for (size_t probe = 0; probe < 4; probe++) {
+        PfSlot& s = pf_slots[(i0 + probe) & (kPfSlots - 1)];
+        for (int attempt = 0; attempt < 2; attempt++) {
+            const uint64_t v1 = s.seq.load(std::memory_order_acquire);
+            if (v1 & 1) continue;
+            if (s.addr == addr && s.n >= n && s.lim == (uint64_t)lim && s.view == view && s.rec == rec) {
+                std::memcpy(dst, s.bytes, (size_t)n);
+                if (s.seq.load(std::memory_order_relaxed) == v1) return true;
+                continue;   // (rewritten under the copy: the new entry may be the same key again)
+            }
+            break;
+        }
+    }
+    return false;
+}
+// ---- the helper: the walk, and at each draw the uniform ranges' overlay bytes, published ----
+void pf_prefetch(const NvnState& s, size_t lim, uint64_t view, uint64_t rec, const std::vector<PfUb>& ubs,
+                 const std::vector<PfWalked>& walked) {
+    static std::vector<uint8_t> scratch;   // (the one helper thread's)
+    pf_st_draws++;
+    int64_t ranges = 0, big = 0, published_now = 0;
+    for (int st = 0; st < kNvnStages; st++)
+        for (int i = 0; i < 16; i++) {
+            const nvn_p_bind_buf& u = s.ubo[st][i];
+            if (!u.addr || !u.size) continue;
+            ranges++;
+            const uint64_t bound = std::min<uint64_t>(std::max<uint64_t>(u.size, 16), dev.props.limits.maxUniformBufferRange);
+            if (bound > kPfMaxBytes) { big++; }   // (counted: the bound is over the slots' size)
+            // (the learned ask first: the record's builds come from the program's tables, and the same bound asks the same
+            // extent every frame; the helper's guess only covers the first frames at a bound)
+            uint64_t take = std::min<uint64_t>(bound, kPfMaxBytes);
+            if (const uint64_t asked = pf_asked(u.addr)) take = std::min<uint64_t>(std::max<uint64_t>(asked, 16), kPfMaxBytes);
+            if (pf_slot_stored(u.addr, take, lim, view, rec)) continue;
+            // (the record only builds an overlay when an update of this place covers the range, the same test as
+            // ub_overlay's: a range no update touches is bound from the pools, nothing to prefetch)
+            bool any = false;
+            for (const PfUb& w : ubs)
+                if (w.dst < u.addr + take && u.addr < w.dst + w.bytes.size()) { any = true; break; }
+            if (!any)
+                for (const PfWalked& w : walked)
+                    if (w.dst < u.addr + take && u.addr < w.dst + w.size) { any = true; break; }
+            if (!any) {   // (the negative: the record's walks for this bound, this place, are done by this stamp)
+                if (!pf_neg_stored(u.addr, take, lim, view, rec)) pf_neg_publish(u.addr, take, lim, view, rec);
+                continue;
+            }
+            scratch.resize((size_t)take);
+            if (!memory_read_as_submitted(u.addr, scratch.data(), take)) std::memset(scratch.data(), 0, (size_t)take);
+            for (const PfUb& w : ubs) {
+                const uint64_t lo = std::max(u.addr, w.dst), hi = std::min(u.addr + take, w.dst + w.bytes.size());
+                if (lo < hi) std::memcpy(scratch.data() + (lo - u.addr), w.bytes.data() + (lo - w.dst), hi - lo);
+            }
+            for (const PfWalked& w : walked) {
+                const uint64_t lo = std::max(u.addr, w.dst), hi = std::min(u.addr + take, w.dst + w.size);
+                if (lo < hi) std::memcpy(scratch.data() + (lo - u.addr), w.bytes + (lo - w.dst), hi - lo);
+            }
+            pf_publish(u.addr, take, lim, view, rec, scratch.data());
+            st_pf_built.fetch_add(1, std::memory_order_relaxed);
+            published_now++;
+        }
+    if (!ranges) pf_st_norange++;
+    else if (!published_now) pf_st_noany++;
+    if (big) pf_st_big++;
+}
+void pf_helper_main() {
+    SetThreadDescription(GetCurrentThread(), L"mkw_vk desc prefetch");
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);   // (the game's threads keep their cores)
+    std::vector<PfUb> ubs;               // (this buffer's updates before it: the start item's copies, the list's own dropped)
+    std::vector<PfWalked> walked;        // (this buffer's inline updates so far, in stream order: spans into the stream)
+    NvnState s{};
+    for (;;) {
+        PfItem it;
+        {
+            std::unique_lock lk(pf_mu);
+            // (a stretch's end is known only when the next item is queued, or the buffer closed its last: an item whose
+            // end is still null is walked to the buffer's end only once the buffer is done with it)
+            pf_cv.wait(lk, [] { return !pf_queue.empty() && (pf_queue.size() >= 2 || pf_queue.front().closed); });
+            it = std::move(pf_queue.front());
+            pf_queue.pop_front();
+        }
+        pf_drained.fetch_add(1, std::memory_order_relaxed);
+        if (it.start) {
+            ubs = std::move(it.ubs);
+            walked.clear();   // (the spans were the last buffer's stream: gone with it)
+        }
+        // (the walk: from the point's state and place, the ops the record's descriptors read, the uniform buffer binds and
+        // the stream's inline updates. An op kind not mirrored (a texture bind, a state bundle) leaves the state as the
+        // point had it: the record asks for ranges the helper did not publish, and builds them itself)
+        s = it.pt.s;
+        size_t lim = it.pt.ub;   // (the updates before the stretch: the record's overlays there see exactly these)
+        const uint64_t view = memory_capture_view(), rec = rec_value_now;
+        const uint8_t* p = it.pt.p;
+        for (;;) {
+            if (it.end && p == it.end) break;
+            nvn_op_hdr h;
+            std::memcpy(&h, p, sizeof h);
+            if (h.op == NOP_END) break;
+            if (h.size < 8 || h.size > (1u << 22)) break;   // (a stream rewritten under a starved helper: stop here)
+            const uint8_t* a = p + 8;
+            const uint32_t avail = h.size - 8;
+            // (if/else, not a switch: the tests cut the replay's case labels out of this file by their text, and the
+            // walk's must not be the first ones found)
+            if (h.op == NOP_UPDATE_UB) {
+                const auto u = payload<nvn_p_update_ub>(a, avail);
+                if (u.size && u.size <= avail - sizeof u) {   // (the same test as the dry pass's append: the count matches)
+                    walked.push_back({u.dst, a + sizeof u, u.size});
+                    lim++;
+                }
+            } else if (h.op == NOP_BIND_BUFS) {
+                auto b = payload<nvn_p_bind_bufs>(a, avail);
+                for (int i = 0; i < b.n && i < 16; i++) {
+                    const int index = b.first + i;
+                    if (b.stage < 0 || b.stage >= kNvnStages || index < 0 || index >= 16) continue;
+                    nvn_p_bind_buf& u = (b.ssbo ? s.ssbo : s.ubo)[b.stage][index];
+                    u.stage = b.stage, u.index = index, u.addr = b.r[i].address, u.size = b.r[i].size;
+                }
+            } else if (h.op == NOP_BIND_UBO || h.op == NOP_BIND_SSBO) {
+                const auto b = payload<nvn_p_bind_buf>(a, avail);
+                if (b.stage >= 0 && b.stage < kNvnStages && b.index >= 0 && b.index < 16)
+                    (h.op == NOP_BIND_UBO ? s.ubo : s.ssbo)[b.stage][b.index] = b;
+            } else if (h.op == NOP_BIND_PROGRAM) {
+                const auto b = payload<nvn_p_bind_program>(a, avail);
+                if (b.prog) s.prog = *b.prog;
+                s.has_prog = b.prog != nullptr && b.prog->nstage > 0;
+            } else if (h.op == NOP_RENDER_ENABLE) {
+                s.render_enabled = payload<nvn_p_flag>(a, avail).value != 0;
+            } else if (h.op == NOP_RASTER_DISCARD) {
+                s.raster_discard = payload<nvn_p_flag>(a, avail).value != 0;
+            } else if (h.op == NOP_DRAW || h.op == NOP_DRAW_IDX || h.op == NOP_DRAW_INDIRECT || h.op == NOP_DRAW_MESH ||
+                       h.op == NOP_DISPATCH || h.op == NOP_DISPATCH_INDIRECT) {
+                // (what the record builds descriptors for: a program bound, the draw not gated off. A render condition's
+                // result is the dry pass's and is not mirrored: those draws publish for nothing)
+                const bool compute = h.op == NOP_DISPATCH || h.op == NOP_DISPATCH_INDIRECT;
+                if (s.has_prog && s.render_enabled && (compute || !s.raster_discard))
+                    pf_prefetch(s, lim, view, rec, ubs, walked);
+                else
+                    pf_st_noprog++;
+            }
+            p += h.size;
+        }
+        if (it.closed) {
+            ubs.clear();      // (the copies were this buffer's list: the next start item brings its own)
+            walked.clear();   // (the spans were this buffer's stream: gone with it)
+        }
+        static int64_t told;
+        if (++told % 240 == 0)
+            logf("vk: descriptor prefetch, the helper: %lld stretches walked (%lld queued ahead dropped), %lld draws "
+                 "in them: %lld without a program, %lld with no bound uniform range, %lld with a bound over %llu "
+                 "bytes (its head published), %lld with no update on a bound range, %lld payloads published",
+                 (long long)told, (long long)pf_dropped.load(std::memory_order_relaxed), (long long)pf_st_draws,
+                 (long long)pf_st_noprog, (long long)pf_st_norange, (long long)pf_st_big,
+                 (unsigned long long)kPfMaxBytes, (long long)pf_st_noany,
+                 (long long)st_pf_built.load(std::memory_order_relaxed));
+    }
+}
+void pf_start() {
+    static bool started = false;
+    if (started || !desc_prefetch_on()) return;
+    started = true;
+    std::thread(pf_helper_main).detach();
+    logf("vk: descriptor prefetch: the dry pass queues its stretches for a BELOW_NORMAL helper, which walks them and "
+         "publishes each draw's uniform overlay bytes; the record's overlays take them, and build locally on a miss");
+}
+
 void ub_prune(uint64_t done) {
     if (ub_updates.empty() || ub_updates.front().value > done) return;
     while (!ub_updates.empty() && ub_updates.front().value <= done) {
@@ -1314,6 +1645,25 @@ uint64_t ub_overlay(uint64_t addr, uint64_t n, uint8_t* base, uint64_t (*alloc)(
     const size_t lim = ub_limit ? std::min(ub_limit, ub_updates.size()) : 0;
     static const bool cur_only = env_on("RX_VK_UB_CUR_ONLY");   // (A/B: this submission's updates only)
     const size_t first = cur_only ? std::min(ub_first_of_recording, lim) : 0;
+    // (longshot, OcaDim) the helper's published copy first: this range's bytes as of this place, the capture's pages with
+    // the updates before it over them, as the build below would resolve them. A miss (the helper lagged, the range dropped, a
+    // rewrite under the copy) builds locally, exactly as before
+    if (!cur_only && n <= kPfMaxBytes) {
+        // (its negatives first: no update of this place covers the ask, so no overlay; the gap checks below would walk
+        // the list to say the same)
+        if (pf_neg_lookup(addr, n, lim)) return UINT64_MAX;
+        pf_got.resize((size_t)n);
+        if (pf_ub_lookup(addr, n, lim, pf_got.data())) {
+            const uint64_t at = alloc(n, align);
+            if (at == UINT64_MAX) return UINT64_MAX;
+            std::memcpy(base + at, pf_got.data(), (size_t)n);
+            st_ub_overlays++;
+            st_pf_hit.fetch_add(1, std::memory_order_relaxed);
+            ub_copy_keep(addr, n, base, first, lim, at, memory_capture_view(), ub_list_epoch.load(std::memory_order_relaxed));
+            return at;
+        }
+        st_pf_miss.fetch_add(1, std::memory_order_relaxed);
+    }
     if (ub_gap_holds(addr, n, first, lim)) return UINT64_MAX;
     const uint64_t view = memory_capture_view();
     uint64_t kept = 0;
@@ -1339,6 +1689,7 @@ uint64_t ub_overlay(uint64_t addr, uint64_t n, uint8_t* base, uint64_t (*alloc)(
         if (lo < hi) std::memcpy(p + (lo - addr), u.bytes.data() + (lo - u.dst), hi - lo);
     }
     st_ub_overlays++;
+    pf_learn(addr, n);   // (OcaDim) the ask the helper publishes to match: the same bound asks again next frame
     ub_copy_keep(addr, n, base, first, lim, at, view, epoch);
     return at;
 }
@@ -1357,9 +1708,12 @@ bool ub_read(uint64_t addr, void* dst, uint64_t n) {
     }
     const uint32_t page = n == 4 ? memory_page_stamp(addr) : 0;
     if (!memory_read_as_submitted(addr, dst, n)) return false;
+    // (longshot, OcaDim) the helper's negative: no update of this place covers the range, so the scans below would walk
+    // the list to find the same nothing
+    const bool pf_neg = n <= kPfMaxBytes && pf_neg_lookup(addr, n, lim);
     // (most words are not inside an inline update: the scan that finds that is kept for the gap, and the next words
     // in the gap do not walk the list. A word kept from that gap is the capture's own bytes)
-    if (ub_gap_holds(addr, n, 0, lim) || ub_try_gap(0, lim, addr, n)) {
+    if (pf_neg || ub_gap_holds(addr, n, 0, lim) || ub_try_gap(0, lim, addr, n)) {
         if (n == 4 && page == memory_page_stamp(addr)) {
             UbWord& w = ub_words[ub_word_index(addr)];
             uint32_t v = 0;
@@ -2020,7 +2374,24 @@ void replay(VkCommandBuffer& cmd, NvnState& s, const uint8_t* p, const uint8_t* 
             if (dry) {
                 const bool compute = h.op == NOP_DISPATCH || h.op == NOP_DISPATCH_INDIRECT;
                 if (s.render_enabled && (compute || !s.raster_discard)) dry_mark_written(s, compute, dry_work == 0);
-                if (++dry_work % 64 == 0) par_points.push_back({p + h.size, s, ub_updates.size(), par_conds.size(), dry_work});
+                if (++dry_work % 64 == 0) {
+                    par_points.push_back({p + h.size, s, ub_updates.size(), par_conds.size(), dry_work});
+                    // (OcaDim) the stretch before this point ends here, and the next one begins; an earlier one left open
+                    // by a dropped item ends here too, its draws prefetched with this stretch's
+                    if (desc_prefetch_on()) {
+                        pf_start();
+                        std::lock_guard pfl(pf_mu);
+                        if (!pf_queue.empty() && !pf_queue.back().closed && !pf_queue.back().end)
+                            pf_queue.back().end = par_points.back().p;
+                        if (pf_queue.size() < kPfQueueMax) {
+                            pf_queue.push_back({par_points.back(), nullptr, false, false, 0, {}});
+                            pf_queued.fetch_add(1, std::memory_order_relaxed);
+                            pf_cv.notify_one();
+                        } else {
+                            pf_dropped.fetch_add(1, std::memory_order_relaxed);
+                        }
+                    }
+                }
             } else if (!worker) {
                 if (rb_writers) memory_count_work();
                 maybe_split(cmd);
@@ -2159,7 +2530,13 @@ void early_split(VkCommandBuffer& cmd) {
 // that, Castle Town's market and eight other places showed no black frame on 3 to 8 threads; the Kakariko walk was not run
 // again, so it stays off. On a 9950X3D the replay's wall time in the market goes from 10.9 ms a frame to 7.75 on 3 threads.
 int par_threads() {
-    static const int n = std::clamp(getenv("RX_VK_PARALLEL") ? atoi(getenv("RX_VK_PARALLEL")) : 0, 0, 8);
+    // (OcaDim, the small-PC rule) RX_VK_PARALLEL unset: the Insert menu's Threads du replay row, resolved once at the start
+    // (vk_menu.cpp menu_replay_workers): Auto there is par_scale.h's par::workers, one worker for every four logical
+    // processors the process may run on and never more than four, none under six. RX_VK_PARALLEL still decides when it is set.
+    static const int n = [] {
+        if (const char* e = getenv("RX_VK_PARALLEL")) return std::clamp(atoi(e), 0, 8);
+        return menu_replay_workers();   // (the row, or Auto's par::workers: gpu/vk/par_scale.h)
+    }();
     return n;
 }
 struct ParPool {
@@ -2170,8 +2547,29 @@ struct ParPool {
     bool started = false;
 };
 ParPool par_pool;
+// (OcaDim) Affinité CPU (CCX), menu_ccx_split : les threads du replay sur la moitié haute des processeurs logiques du
+// processus (le second CCD sur un Ryzen 5000), pour que le thread du jeu et son cache gardent la moitié basse. Windows : un
+// masque explicite ; ailleurs, le choix du système.
+static void par_pin_upper_half() {
+#ifdef _WIN32
+    DWORD_PTR proc = 0, sys = 0;
+    if (!GetProcessAffinityMask(GetCurrentProcess(), &proc, &sys)) return;
+    int n = 0;
+    for (DWORD_PTR m = proc; m; m &= m - 1) n++;
+    if (n < 2) return;
+    DWORD_PTR upper = 0;
+    int seen = 0;
+    for (int i = 0; i < (int)(sizeof(DWORD_PTR) * 8); i++)
+        if (proc & ((DWORD_PTR)1 << i)) {
+            if (seen >= n / 2) upper |= (DWORD_PTR)1 << i;
+            seen++;
+        }
+    if (upper) SetThreadAffinityMask(GetCurrentThread(), upper);
+#endif
+}
 void par_worker_main() {
     SetThreadDescription(GetCurrentThread(), L"mkw_vk replay worker");
+    if (menu_ccx_split()) par_pin_upper_half();
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
     for (;;) {
         std::function<void()> fn;
@@ -2292,7 +2690,8 @@ const uint8_t* replay_handle(VkCommandBuffer& cmd, const uint8_t* h, bool may_st
     }
     // (segments of ~RX_VK_PARALLEL_SEG draws and dispatches (default 160), taken in order by the threads and submitted
     // as each is done with those before it: the GPU starts on the first while the rest are recorded)
-    static const int64_t per = getenv("RX_VK_PARALLEL_SEG") ? std::max(32, atoi(getenv("RX_VK_PARALLEL_SEG"))) : 160;
+    static const int64_t per = getenv("RX_VK_PARALLEL_SEG") ? std::max(32, atoi(getenv("RX_VK_PARALLEL_SEG")))
+                                                          : menu_replay_seg();   // (OcaDim: the Segments du replay row)
     // (too little work for two segments: recorded here, as with parallel replay off. The dry pass would apply the stream's
     // state for nothing, and its one segment would walk the stream again here on this thread.)
     static int64_t shorts;
@@ -2312,6 +2711,20 @@ const uint8_t* replay_handle(VkCommandBuffer& cmd, const uint8_t* h, bool may_st
     const size_t ub0 = ub_updates.size();
     par_points.clear(), par_conds.clear(), dry_work = 0;
     dry_marks_begin();
+    if (desc_prefetch_on()) {   // (OcaDim) the buffer's first stretch: from its start to the first point
+        pf_start();
+        PfItem it{{h, start, ub0, par_conds.size(), 0}, nullptr, false, true, ub0, {}};
+        // (the updates before this buffer, copied now: the list is pruned between submissions and the helper may only get
+        // here after; its overlays apply these by copy, never by the list's place)
+        for (size_t i = 0; i < ub0; i++)
+            it.ubs.push_back({ub_updates[i].dst, ub_updates[i].bytes});
+        {
+            std::lock_guard pfl(pf_mu);
+            pf_queue.push_back(std::move(it));
+            pf_queued.fetch_add(1, std::memory_order_relaxed);
+            pf_cv.notify_one();
+        }
+    }
     rmode = Mode::Dry;
     VkCommandBuffer none = cmd;
     suspend_ok = may_stop;
@@ -2319,6 +2732,14 @@ const uint8_t* replay_handle(VkCommandBuffer& cmd, const uint8_t* h, bool may_st
     suspend_ok = false;
     rmode = Mode::Serial;
     const uint8_t* const stop = suspend_at;   // (the segments end there)
+    if (desc_prefetch_on()) {   // (OcaDim) this buffer's last stretch ends here: the helper walks it to the stop (or the end)
+        std::lock_guard pfl(pf_mu);
+        if (!pf_queue.empty() && !pf_queue.back().closed) {
+            pf_queue.back().end = stop;
+            pf_queue.back().closed = true;
+            pf_cv.notify_one();
+        }
+    }
     const int64_t total = dry_work;
     static double dry_ms, seg_ms, segs_n;
     static int64_t timed;
@@ -2484,12 +2905,24 @@ const uint8_t* replay_handle(VkCommandBuffer& cmd, const uint8_t* h, bool may_st
     segs_n += (double)seg.size();
     static double wait_ms, locks_n;
     wait_ms += (par_lock_wait_ns.load() - wait0) / 1e6, locks_n += (double)(par_locks.load() - locks0);
+    // (OcaDim) the prefetch's book: the overlays the record took from the helper's published copies against the ones it
+    // built itself (a miss builds locally, exactly as before)
+    static int64_t pf_hit0, pf_miss0, pf_built0, pf_dropped0;
+    const int64_t pf_hit = st_pf_hit.load(std::memory_order_relaxed), pf_miss = st_pf_miss.load(std::memory_order_relaxed),
+                  pf_built = st_pf_built.load(std::memory_order_relaxed), pf_drop = pf_dropped.load(std::memory_order_relaxed);
     if (++timed % 240 == 0) {
         logf("vk: parallel replay, a command buffer: dry pass %.2f ms, segments %.2f ms (%.1f of them), lock taken %.0f "
-             "times, waited for %.2f ms (all threads); %lld short ones recorded here", dry_ms / 240, seg_ms / 240,
-             segs_n / 240, locks_n / 240, wait_ms / 240, (long long)shorts);
+             "times, waited for %.2f ms (all threads); %lld short ones recorded here%s", dry_ms / 240, seg_ms / 240,
+             segs_n / 240, locks_n / 240, wait_ms / 240, (long long)shorts,
+             desc_prefetch_on() ? "" : " (descriptor prefetch off: the Descriptor prefetch row, or RX_VK_DESC_PREFETCH)");
+        if (desc_prefetch_on())
+            logf("vk: descriptor prefetch: %lld overlays served, %lld built by the record (of %lld lookups a "
+                 "window); the helper published %lld, %lld stretches queued ahead were dropped",
+                 pf_hit - pf_hit0, pf_miss - pf_miss0, pf_hit + pf_miss - pf_hit0 - pf_miss0, pf_built - pf_built0,
+                 pf_drop - pf_dropped0);
         dry_ms = seg_ms = segs_n = wait_ms = locks_n = 0;
         shorts = 0;
+        pf_hit0 = pf_hit, pf_miss0 = pf_miss, pf_built0 = pf_built, pf_dropped0 = pf_drop;
     }
     // what follows, after them all (the uniform updates are written to guest memory at the submission's end)
     texture_set_segment(++seq);
@@ -4519,13 +4952,37 @@ uint64_t vk_retirement_value() {
     return timeline && signaled != UINT64_MAX ? signaled + 1 : 0;
 }
 
+/// (OcaDim) La génération d'images était active quand le GPU s'est perdu : le prochain démarrage la remet sur Désactivé
+/// (menu_init lit ce fichier et le supprime). Écrit avant le rapport : même si celui-ci n'aboutit pas, le réglage qui a
+/// planté ne revient pas au lancement suivant. Au mieux : le périphérique est perdu, rien n'est garanti.
+static void fg_lost_note(const char* why) {
+    const std::string path = cache_path("ocadim_fg_lost.txt");
+    FILE* f = fopen(path.c_str(), "w");
+    if (!f) {
+        logf("vk: OcaDim : la génération d'images était active à la perte du GPU, mais %s n'a pas pu être écrit", path.c_str());
+        return;
+    }
+    static const char* const by_name[] = {"DLSS", "intégrée", "FSR 3.1", "FSR 4"};
+    const char* by = opts.framegen_by >= 0 && opts.framegen_by < 4 ? by_name[opts.framegen_by] : "inconnue";
+    char setting[16];
+    if (opts.framegen == 1) std::snprintf(setting, sizeof setting, "Auto");
+    else std::snprintf(setting, sizeof setting, "%dx", opts.framegen);
+    std::fprintf(f, "OcaDim : perte du GPU avec la génération d'images active.\n"
+                    "Au prochain démarrage, la génération d'images sera remise sur Désactivé, puis ce fichier sera supprimé.\n"
+                    "Génération d'images : %s, par %s\n", setting, by);
+    if (why && *why) std::fprintf(f, "Cause : %s\n", why);
+    std::fclose(f);
+    logf("vk: OcaDim : perte du GPU avec la génération d'images active : le prochain démarrage la désactive (%s)", path.c_str());
+}
+
 /// A submission or a wait came back VK_ERROR_DEVICE_LOST. Nothing sent from here on runs, and the replay kept going: no
 /// submission completed again, so no capture or staging arena was let go, and system memory filled until the window was
 /// closed (issue 1275: captures kept 25 -> 6527, staging 256 -> 1408 MB). Now the report once (a thread that sees the loss
 /// too waits for it, instead of ending the process before it is written), then the process ends as replay_fatal does
 [[noreturn]] void device_lost(const char* why) {
     static std::once_flag once;
-    std::call_once(once, [] {
+    std::call_once(once, [why] {
+        if (opts.framegen >= 1) fg_lost_note(why);   // (OcaDim: the next start turns it off)
         perf_report_final(perf_report::kDeviceLost);   // (the performance summary's last, once, before the process ends)
         checkpoints_report();
     });
@@ -7421,6 +7878,7 @@ void fill_replay_table(MkwVkRenderer& t) {
         if (id == HOS_OPT_CHEAT_FLIGHT) return menu_player_flight();
         if (id == HOS_OPT_CHEAT_ACTION) return menu_take_cheat_action();
         if (id == HOS_OPT_CHEAT_CAMERA) return menu_free_camera();
+        if (id == HOS_OPT_ABOVE60_FIXES) return menu_above60_fixes() ? 1 : 0;   // (OcaDim: host/oot_high_fps.c, la ligne du F1)
         if (id == HOS_OPT_CHEAT_SPEED) return menu_link_speed();
         if (id == HOS_OPT_HDR_NATIVE) return dev.hdr && opts.hdr == 2;
         if (id == HOS_OPT_HDR_TONEMAP) return scene_tonemap_on();

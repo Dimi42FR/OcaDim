@@ -85,9 +85,9 @@ au-dessus de 60 fps (et huit optimisations portées), Longshot pour le profil PG
 | Ajout | D'où ça vient | Où le voir |
 |---|---|---|
 | **La frame generation d'AMD (FSR)** : branchée dans le jeu, en **FSR 4** sur RDNA 4 | **écrit ici** — `gpu/vk/vk_fg_amd.cpp` n'existe pas chez l'amont ; la FG est une fonction du SDK d'AMD, pas une invention de notre part | Graphics → *Frame generation by* |
-| **Le prefetch des descripteurs** (seqlock, cache négatif, *asks* apprises) | **écrit ici** — zéro occurrence de `prefetch` dans le replay de l'amont | Graphics → *Descriptor prefetch* |
-| **Batched submits, Draw order barriers, CPU affinity (CCX)**, et l'auto-échelle petite config | **écrits ici** — absents de son menu, et `gpu/vk/par_scale.h` n'existe pas chez lui | Graphics |
-| **Deux réparations au-dessus de 60 fps** (sols porteurs, eau à pas fixes) | **portées** de NX2navi (domaine public / MIT) | Graphics → *Above-60 fixes* |
+| **Le prefetch des descripteurs** (seqlock, cache négatif, *asks* apprises) | **écrit ici** — zéro occurrence de `prefetch` dans le replay de l'amont | OcaDim → *Préchargement des descripteurs* |
+| **Batched submits, Draw order barriers, CPU affinity (CCX)**, et l'auto-échelle petite config | **écrits ici** — absents de son menu, et `gpu/vk/par_scale.h` n'existe pas chez lui | OcaDim → *Barrières d'ordre des rendus*, *Affinité CPU (CCX)* ; batched submits est une politique (`device_policy.h`) |
+| **Deux réparations au-dessus de 60 fps** (sols porteurs, eau à pas fixes) | **portées** de NX2navi (domaine public / MIT) | OcaDim → *Correctifs au-dessus de 60 fps* |
 | **Le Setup, l'identité, le confort** | assemblés ici | `OcaDimSetup.exe`, le menu |
 
 ### 1. La base elle-même, poussée à fond — avant d'ajouter
@@ -203,7 +203,7 @@ frames »). OcaDim ajoute **deux mécanismes de plus** :
 
 **Ces deux correctifs ne sont pas de nous** : ce sont ceux de **NX2navi** (`recomp/patches-v111.txt`, les jeux `ofollow`
 et `owater` : domaine public / MIT, repris dans Triforce). Nous les avons **portés ici**, comme hooks dans le C lifté
-(`nx2/oot_patches.py`, `host/oot_high_fps.*`), et exposés par la ligne **Above-60 fixes** du menu, qui les coupe pour
+(`nx2/oot_patches.py`, `host/oot_high_fps.*`), et exposés par la ligne **Correctifs au-dessus de 60 fps** du menu, qui les coupe pour
 retrouver exactement le comportement d'avant. Le troisième de leurs correctifs (`orecord`, l'horloge de l'ocarina) est
 déjà couvert dans cet arbre par `patch_whole_frames`.
 
@@ -264,7 +264,7 @@ chaque licence, est dans [CREDITS.md](CREDITS.md).
    chargée. Le compteur doit afficher `Base xx, AMD FSR FG`. Si ça refuse sur ta carte AMD, le log dit pourquoi : envoie-le,
    c'est exactement ce qu'on veut savoir.
 2. **Le test qui se voit à l'œil nu : une plateforme qui te porte.** Mets le *Game frame rate cap* à 144, tiens-toi sur une
-   plateforme mobile (un ascenseur, un radeau), puis compare *Above-60 fixes* **Off** et **On**. Off : le personnage
+   plateforme mobile (un ascenseur, un radeau), puis compare *Correctifs au-dessus de 60 fps* **Désactivé** et **Activé**. Off : le personnage
    **glisse**. On : il **reste dessus**. C'est le symptôme de l'issue 1798 ; il faut dépasser 100 fps pour le voir, ce que le
    jeu d'origine n'avait jamais prévu.
 3. **Un petit PC ?** Preset Minimum (4GB), et donne-nous tes **4 chiffres** : fps, frame time, 1 % low, et ce que le
@@ -799,11 +799,11 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | Anisotropic filtering | Game's, 2x, 4x, 8x, 16x | 16x |
 | | GPU device | Auto, or each graphics card by name (after a restart) | Auto |
 | | Threaded rendering | Auto, On, Off (after a restart). Auto is On with 12 or more processor threads for the game | Auto |
-| | Replay workers | Auto, 1, 2, 3, 4 (the replay's threads; Auto is one for every four the game may use, at most four, none under six) | Auto |
-| | Descriptor prefetch | Auto, On, Off (descriptors read ahead on a helper thread; Auto is on where the processor has threads to spare) | Auto |
-| | Replay segments | 32, 64, 160 (the draws and dispatches a replay worker takes at a time) | 32 |
+| | Replay workers | Auto, 1, 2, 3, 4 (the replay's threads; Auto is none, the behaviour before the row: the parallel replay takes cores from the game) | Auto (none) |
+| | Descriptor prefetch | Auto, On, Off (descriptors read ahead on a helper thread; Auto is off, the behaviour before the row) | Auto (off) |
+| | Replay segments | Auto (160), 32, 64, 160 (the draws and dispatches a replay worker takes at a time; Auto keeps 160) | Auto (160) |
 | | Above-60 fixes | Off, On (the floors that carry a character and the height-field surfaces' fixed steps, mended above 60 fps) | On |
-| | CPU affinity (CCX) | Auto, On, Off (the replay's workers on the upper half of the logical CPUs, so the game's own thread keeps its cache; Auto from 12) | Auto |
+| | CPU affinity (CCX) | Auto, On, Off (the replay's workers on the upper half of the logical CPUs, so the game's own thread keeps its cache; Auto is off, and it only matters with Replay workers above 0) | Auto (off) |
 | | Draw order barriers | Auto, On, Off (a draw pass after another waits in its fragment stages only; Auto on NVIDIA, where it was measured) | Auto |
 | | Batched submits | Auto, On, Off (a frame's submissions sent as one; Auto on Mesa's RADV, where it was measured) | Auto |
 | Audio | Volume | 0 to 100%, in steps of 5 | 100% |

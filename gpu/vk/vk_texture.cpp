@@ -2618,10 +2618,15 @@ void note_pass_end(VkCommandBuffer cmd) {
     last_pass_end_cmd = cmd, last_pass_end_epoch = work_epoch.load(std::memory_order_relaxed);
 }
 int64_t pass_barriers_relaxed() { return st_pass_relaxed.load(std::memory_order_relaxed); }
+/// (OcaDim) Les barrières d'ordre des rendus, la ligne du F1 (RX_VK_GAME_ORDER, réglé, l'emporte : menu_draw_order)
+bool game_order() {
+    static const bool on = menu_draw_order();
+    return on;
+}
 void pass_start_barrier(VkCommandBuffer cmd) {
     static const bool game = [] {
         const char* e = getenv("RX_VK_PASS_BARRIER");
-        const bool on = e && !strcmp(e, "game");
+        const bool on = e ? !strcmp(e, "game") : game_order();
         if (on) logf("vk: RX_VK_PASS_BARRIER=game: a draw pass right after another, no barrier of the game's between, waits in its fragment stages only");
         return on;
     }();

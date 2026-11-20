@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "vk_paths.h"
+#include "par_scale.h"   // (OcaDim: the Descriptor prefetch row's Auto, the small-PC rule the replay applies)
 #include "vk_menu.h"
 #include "intel_compiles.h"
 #include "vk_menu_hit.h"
@@ -1354,6 +1355,50 @@ const char* hn_threaded(int v, int variant) {
     }
     return variant <= 0 ? t[std::clamp(v, 0, 2)] : nullptr;
 }
+/// (les textes des lignes OcaDim ajoutées : en français, comme le reste de l'onglet)
+const char* tx_auto_fr(int v) { static const char* const t[] = {"Auto", "Activé", "Désactivé"}; return t[std::clamp(v, 0, 2)]; }
+const char* tx_onoff_fr(int v) { return v ? "Activé" : "Désactivé"; }
+const char* tx_workers_fr(int v) { static const char* const t[] = {"Auto", "1", "2", "3", "4"}; return t[std::clamp(v, 0, 4)]; }
+const char* tx_seg_fr(int v) { static const char* const t[] = {"Auto (160)", "32", "64", "160"}; return t[std::clamp(v, 0, 3)]; }
+/// (l'interrupteur d'environnement de ce lancement, par-dessus la ligne : ici RX_VK_DESC_PREFETCH)
+const char* prefetch_env() { return getenv("RX_VK_DESC_PREFETCH") ? "RX_VK_DESC_PREFETCH" : nullptr; }
+const char* hn_desc_prefetch(int v, int variant) {
+    static const char* const t[] = {
+        "Auto : désactivé, le comportement d'avant (le helper prend un cœur pour un gain faible chez nous).",
+        "Un thread d'aide parcourt l'image à l'avance et publie les overlays ; le moteur les prend au lieu de les "
+        "construire un par un.",
+        "Le moteur construit lui-même chaque overlay, comme avant."};
+    if (variant == 1 || (variant < 0 && prefetch_env())) {
+        static char b[96];
+        snprintf(b, sizeof b, "%s est réglé : il choisit pour ce lancement.", prefetch_env() ? prefetch_env() : "RX_VK_DESC_PREFETCH");
+        return b;
+    }
+    return variant <= 0 ? t[std::clamp(v, 0, 2)] : nullptr;
+}
+const char* hn_draw_order(int v, int variant) {
+    if (variant == 1 || (variant < 0 && getenv("RX_VK_GAME_ORDER")))
+        return "RX_VK_GAME_ORDER est réglé : il choisit pour ce lancement.";
+    static const char* const t[] = {
+        "Auto : NVIDIA seulement, là où c'est mesuré.",
+        "Un rendu juste après un autre n'attend que dans ses étages fragment ; un dispatch juste après un autre n'a pas de "
+        "barrière à lui.",
+        "Chaque rendu et chaque dispatch attend tout ce qui précède, comme avant."};
+    return variant <= 0 ? t[std::clamp(v, 0, 2)] : nullptr;
+}
+const char* hn_ccx(int v, int variant) {
+    if (variant == 1 || (variant < 0 && getenv("RX_VK_CCX_SPLIT")))
+        return "RX_VK_CCX_SPLIT est réglé : il choisit pour ce lancement.";
+    static const char* const t[] = {
+        "Auto : désactivée, le comportement d'avant (elle ne sert qu'avec des threads du replay).",
+        "Les threads du replay restent sur la moitié haute des processeurs logiques (le second CCD sur un Ryzen 5000) : le "
+        "thread du jeu garde son cache.",
+        "Les threads du replay tournent où le système veut."};
+    return variant <= 0 ? t[std::clamp(v, 0, 2)] : nullptr;
+}
+const char* hn_workers(int v, int variant) {
+    if (variant > 0) return nullptr;
+    return v == 0 ? "Auto : aucun thread de plus, le comportement d'avant (le parallèle prend des cœurs au jeu)." : nullptr;
+}
 /// The Output resolution: the game's own reduced size, the player's own, or one of the screen's sizes as it compares with the
 /// screen (its own, larger, smaller; nothing where the screen's size is not known)
 const char* hn_output_res(int v, int variant) {
@@ -1965,6 +2010,14 @@ Row rows[] = {
     {TAB_OCADIM, "Descriptor reuse", &opts.descriptor_reuse, 0, 1, 1, tx_onoff,
      "A draw keeps its descriptors while the texture slots it samples are unchanged, so streaming elsewhere in the game no longer "
      "rebuilds every set each frame. Changes at once.", nullptr, false, true},
+    {TAB_OCADIM, "Préchargement des descripteurs", &opts.desc_prefetch, 0, 2, 1, tx_auto_fr,   // (OcaDim: the prefetch)
+     "Un thread d'aide parcourt l'image à l'avance et publie les descripteurs uniformes déjà résolus : le moteur les prend au "
+     "lieu de parcourir la liste des mises à jour à chaque descripteur. Auto : désactivé, le comportement d'avant (le helper "
+     "prend un cœur pour un gain faible) ; Activé pour l'essayer. Prend effet après un redémarrage.", hn_desc_prefetch, true, true},
+    {TAB_OCADIM, "Barrières d'ordre des rendus", &opts.draw_order, 0, 2, 1, tx_auto_fr,   // (OcaDim: draw order barriers)
+     "Un rendu juste après un autre n'attend que dans ses étages fragment, et un dispatch juste après un autre n'a pas de "
+     "barrière à lui : le GPU enchaîne plus vite. Auto : NVIDIA seulement, là où c'est mesuré. Prend effet après un "
+     "redémarrage.", hn_draw_order, true, true},
     {TAB_OCADIM, "Sampler cache", &opts.sampler_cache, 0, 1, 1, tx_onoff,
      "What a sampler holds is kept beside it on the replay thread, so resolving a sampler that was not registered anew takes no "
      "lock. Helps while the game streams textures. Changes at once.", nullptr, false, true},
@@ -2011,6 +2064,22 @@ Row rows[] = {
     {TAB_OCADIM, "Barrières de jobs", &opts.barrier_mode, 0, 1, 1, tx_onoff,   // (OcaDim: the jobs' masks instead of 20 us sleeps)
      "Les barrières de jobs du jeu attendent leur masque au lieu de dormir 20 µs : moins de CPU perdu, un peu plus de mémoire. "
      "Désactivé : les sommeils d'origine. Prend effet après un redémarrage.", nullptr, false, true},
+    {TAB_OCADIM, "Threads du replay", &opts.replay_workers, 0, 4, 1, tx_workers_fr,   // (OcaDim: the replay's workers)
+     "Le nombre de threads qui découpent et enregistrent les command buffers de l'image, celui du replay compris : plus ils "
+     "sont, plus les segments partent ensemble. Auto : aucun de plus, le comportement d'avant ; le parallèle rend les images "
+     "plus régulières mais prend des cœurs au jeu. Prend effet après un redémarrage.", hn_workers, true, true},
+    {TAB_OCADIM, "Segments du replay", &opts.replay_seg, 0, 3, 1, tx_seg_fr,   // (OcaDim: the draws a segment takes)
+     "Combien de rendus et de dispatchs un thread du replay prend à la fois. 32 convient aux command buffers de ce jeu ; 64 "
+     "et 160 sont pour les plus longs. Auto garde 160, le réglage actuel. Prend effet après un redémarrage.",
+     nullptr, true, true},
+    {TAB_OCADIM, "Affinité CPU (CCX)", &opts.ccx_split, 0, 2, 1, tx_auto_fr,   // (OcaDim: the workers on the upper half)
+     "Garde les threads du replay sur la moitié haute des processeurs logiques (le second CCD sur un Ryzen 5000) : le thread "
+     "du jeu et son cache gardent la moitié basse. Auto : désactivée ; elle ne sert qu'avec des threads du replay. Prend "
+     "effet après un redémarrage.", hn_ccx, true, true},
+    {TAB_OCADIM, "Correctifs au-dessus de 60 fps", &opts.above60_fixes, 0, 1, 1, tx_onoff_fr,   // (OcaDim: NX2navi's fixes)
+     "Les pas du solveur physique au-dessus de 60 fps, arrondis au lieu d'être tronqués : les sols qui portent un personnage "
+     "ne glissent plus sous les pieds. Désactivé : le compte du jeu, comme avant les correctifs.",
+     nullptr, false, true},
     {TAB_OCADIM, "Profil de performance", &opts.preset, 0, 5, 1, tx_profile_fr,   // (OcaDim: the assistant's profiles)
      "Le profil que l'assistant proposerait : Minimum (4 Go), Faible (6 Go), Équilibré (8 Go), Qualité (12 Go), Ultra "
      "(16 Go et plus). Il règle la résolution, l'upscaler, la netteté et les ombres d'un coup, comme la ligne Profil "
@@ -2466,6 +2535,12 @@ const char* ini_key(const Row& r) {
     if (r.value == &opts.mips) return "mips";
     if (r.value == &opts.low_mem) return "low_mem";
     if (r.value == &opts.barrier_mode) return "barrier_mode";
+    if (r.value == &opts.desc_prefetch) return "descriptor_prefetch";   // (OcaDim: les clés ASCII des lignes françaises)
+    if (r.value == &opts.above60_fixes) return "above60_fixes";
+    if (r.value == &opts.replay_workers) return "replay_workers";
+    if (r.value == &opts.replay_seg) return "replay_seg";
+    if (r.value == &opts.draw_order) return "draw_order";
+    if (r.value == &opts.ccx_split) return "ccx_split";
     if (r.value == &opts.intel_compiles) return "intel_shader_compiles";   // (two rows, one key)
     if (r.value == &opts.preset) return "quality_preset";   // (two rows, one key: Affichage's Profil and OcaDim's)
     if (r.value == &opts.fps_cap) return "frame_rate_cap";   // (host/nn_vi.c reads it at the start, then HOS_OPT_FPS_CAP)
@@ -5999,6 +6074,19 @@ void menu_init() {
         player_custom_output = custom_output;   // (parse_output replaces the player's own size with the environment's)
         env_override(&opts.output_res, parse_output(e));
     }
+    // (OcaDim) La génération d'images a perdu le GPU au dernier lancement (device_lost a écrit cache/ocadim_fg_lost.txt) :
+    // elle revient sur Désactivé au lieu de replanter. Le joueur peut la rallumer (Graphismes). Après les réglages de
+    // l'environnement, pour que la désactivation gagne, et avant restart_init, pour qu'elle soit le réglage du départ
+    // (aucun « redémarrage nécessaire » affiché).
+    const std::string fg_lost_path = cache_path("ocadim_fg_lost.txt");
+    if (FILE* f = fopen(fg_lost_path.c_str(), "r")) {
+        std::fclose(f);
+        env_release(&opts.framegen);
+        opts.framegen = 0;
+        std::remove(fg_lost_path.c_str());
+        logf("menu: OcaDim : perte du GPU avec la génération d'images au dernier lancement : elle est sur Désactivé "
+             "(rallumable dans Graphismes ; %s supprimé)", fg_lost_path.c_str());
+    }
     outputs_sync();   // (the Aspect ratio follows the size read)
     restart_init();   // (what this run started with: the rows that take a restart differ from it once changed)
 }
@@ -6056,6 +6144,102 @@ void menu_auto_for_gpu(const VkPhysicalDeviceProperties& props, ::auto_settings:
 
 // (the switches read once, at the first present: they are for the whole run, and each present asked twice)
 int menu_vsync() { static const int run = env_on("RX_VK_FIFO") ? 1 : env_on("RX_VK_IMMEDIATE") ? 2 : 0; return run ? run : opts.vsync; }
+/// (OcaDim) The Descriptor prefetch row, resolved once for the run: Auto is par_scale.h's rule (on from six logical
+/// processors, where the helper's own thread does not take a core the game needs). vk_replay.cpp desc_prefetch_on asks it
+/// when RX_VK_DESC_PREFETCH is unset. A change of the row applies at the next start
+bool menu_desc_prefetch() {
+    static const bool on = [] {
+        menu_init();
+        const int row = std::clamp(opts.desc_prefetch, 0, 2);
+        if (row == 1) {
+            logf("vk: Préchargement des descripteurs : activé (la ligne du F1)");
+            return true;
+        }
+        // (OcaDim) Auto et Désactivé : le comportement d'avant, mesuré comme le plus rapide en moyenne sur nos cartes ; le
+        // helper prend un cœur, et le taux de service reste faible. Activé pour l'essayer, une ligne à la fois
+        logf("vk: Préchargement des descripteurs : %s", row == 2 ? "désactivé (la ligne du F1)" : "Auto : désactivé (le comportement d'avant)");
+        return false;
+    }();
+    return on;
+}
+/// (OcaDim) Les correctifs au-dessus de 60 fps, résolus une fois : host/oot_high_fps.c les demande par HOS_OPT_ABOVE60_FIXES
+bool menu_above60_fixes() {
+    static const bool on = [] {
+        menu_init();
+        logf("vk: Correctifs au-dessus de 60 fps : %s", opts.above60_fixes ? "activés" : "désactivés (le jeu d'origine)");
+        return opts.above60_fixes != 0;
+    }();
+    return on;
+}
+/// (OcaDim) Les threads du replay, résolus une fois : Auto suit par_scale.h par::workers. RX_VK_PARALLEL, réglé, l'emporte
+int menu_replay_workers() {
+    static const int n = [] {
+        menu_init();
+        const int row = std::clamp(opts.replay_workers, 0, 4);
+        if (row) {
+            logf("vk: Threads du replay : %d (la ligne du F1)", row);
+            return row;
+        }
+        // (OcaDim) Auto : aucun thread de plus, le comportement d'avant la ligne. Le parallèle rend les images plus
+        // régulières mais prend des cœurs au jeu : mesuré plus lent en moyenne chez Dimi, 20/11
+        logf("vk: Threads du replay : Auto : aucun de plus (le comportement d'avant)");
+        return 0;
+    }();
+    return n;
+}
+/// (OcaDim) Ce qu'un thread du replay prend à la fois : Auto garde 160, le réglage d'avant la ligne
+int menu_replay_seg() {
+    static const int n = [] {
+        menu_init();
+        const int row = std::clamp(opts.replay_seg, 0, 3);
+        const int seg = row == 1 ? 32 : row == 2 ? 64 : 160;
+        logf("vk: Segments du replay : %d rendus et dispatchs%s", seg, row ? "" : " (Auto)");
+        return seg;
+    }();
+    return n;
+}
+/// (OcaDim) Les barrières d'ordre des rendus : Auto, NVIDIA seulement, là où c'est mesuré. RX_VK_GAME_ORDER l'emporte
+bool menu_draw_order() {
+    static const bool on = [] {
+        menu_init();
+        if (const char* e = getenv("RX_VK_GAME_ORDER")) {
+            const bool v = !env_value_off(e);
+            logf("vk: barrières d'ordre des rendus : %s (RX_VK_GAME_ORDER réglé)", v ? "activées" : "désactivées");
+            return v;
+        }
+        const int row = std::clamp(opts.draw_order, 0, 2);
+        if (row) {
+            logf("vk: barrières d'ordre des rendus : %s (la ligne du F1)", row == 1 ? "activées" : "désactivées");
+            return row == 1;
+        }
+        const bool v = dev.props.vendorID == 0x10de;   // (NVIDIA, où c'est mesuré)
+        logf("vk: barrières d'ordre des rendus : Auto : %s (NVIDIA seulement)", v ? "activées" : "désactivées");
+        return v;
+    }();
+    return on;
+}
+/// (OcaDim) L'affinité CPU (CCX) : Auto à partir de 12 processeurs logiques. RX_VK_CCX_SPLIT l'emporte
+bool menu_ccx_split() {
+    static const bool on = [] {
+        menu_init();
+        const unsigned cpus = usable_cpus();
+        if (const char* e = getenv("RX_VK_CCX_SPLIT")) {
+            const bool v = atoi(e) != 0;
+            logf("vk: Affinité CPU (CCX) : %s (RX_VK_CCX_SPLIT réglé)", v ? "activée" : "désactivée");
+            return v;
+        }
+        const int row = std::clamp(opts.ccx_split, 0, 2);
+        if (row) {
+            logf("vk: Affinité CPU (CCX) : %s (la ligne du F1)", row == 1 ? "activée" : "désactivée");
+            return row == 1;
+        }
+        // (OcaDim) Auto : désactivée, le comportement d'avant. Elle ne sert qu'avec des threads du replay (la ligne au-dessus)
+        (void)cpus;
+        logf("vk: Affinité CPU (CCX) : Auto : désactivée (le comportement d'avant)");
+        return false;
+    }();
+    return on;
+}
 /// (longshot) The Threaded rendering row, resolved once for the run (threaded_rendering.h): the row as the options file had it
 /// at the start (menu_init, asked here too: a reader can come before the device is picked), the logical processors the process
 /// may run on (usable_cpus: its affinity mask) and, for Auto, whether the mode is safe on this run. Known at the start and

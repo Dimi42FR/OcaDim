@@ -96,11 +96,30 @@ py -3.12 -I scripts/longshot_ctl.py --sock "\\.\pipe\ocadim-test" quit
 5. **Précompilation incrémentale** (4 pipelines/frame) : `precompile_run` est tout-ou-rien (120 lignes avec marqueurs de reprise). Découpage non fait.
 6. **Pas de corrections** sur : LTO (build), aliasing mémoire, constantes de spécialisation (gros).
 
-## 8. Le mode de secours FG (à finir)
+## 8. Le mode de secours FG (codé)
 
-- Fait : décidé et documenté, **pas codé**.
-- Manque : localiser `void device_lost()` (`Select-String -Pattern "void device_lost" gpu\vk\*.cpp`) pour y écrire `cache/ocadim_fg_lost.txt` quand `opts.framegen >= 1`.
-- Puis dans `menu_init()` (ligne ~5848 de `vk_menu.cpp`) : si le fichier existe → `opts.framegen = 0`, log clair, supprimer le fichier.
+- **`device_lost()`** (`gpu/vk/vk_replay.cpp`, ~4522) : si `opts.framegen >= 1`, `fg_lost_note()` écrit `cache/ocadim_fg_lost.txt` **avant** `perf_report_final` (le réglage qui a planté survit à un rapport qui n'aboutit pas) : réglage (`Auto` ou `Nx`), procédé (DLSS / intégrée / FSR 3.1 / FSR 4), cause. Une ligne de log.
+- **`menu_init()`** (`gpu/vk/vk_menu.cpp`, ~6002) : le fichier existe → `env_release(&opts.framegen)`, `opts.framegen = 0`, suppression du fichier, log. Placé après les réglages d'environnement (la désactivation gagne sur `RX_VK_FG_AMD_FORCE` / `RX_VK_FRAMEGEN_MULT`) et avant `restart_init()` (pas de faux « redémarrage nécessaire »).
+- **Trouvé par le test** : `fg_amd_requested()` (`gpu/vk/vk_fg_amd.cpp`) ne regardait que `framegen_by` → sur AMD, la ligne Frame generation sur **Désactivé** laissait FSR 3.1/4 FG demander son contexte (confirmé : contexte créé, log `AMD FG: create_fg`). Ajout de `if (opts.framegen == 0) return false;` **avant** les interrupteurs, pour que le secours gagne aussi sur `RX_VK_FG_AMD_FORCE` et `RX_VK_FG_AMD`. La ligne « par » garde le choix du joueur pour quand il rallume.
+- Testé : marqueur posé à la main + `frame_generation=2` → log `menu: OcaDim : perte du GPU…`, `option get frame_generation` = `0 Off`, marqueur supprimé, et **aucune ligne `AMD FG`** dans le log (le contexte n'est plus créé).
+- Reste : un device lost réel avec la FG active (le marqueur doit apparaître au moment du crash).
+
+## 8 bis. Les lignes OcaDim remises (20/11)
+
+Toutes dans l'onglet **OcaDim** du F1, en français, avec leur clé ini ASCII dans `ini_key` :
+
+| Ligne | Moteur |
+|---|---|
+| Préchargement des descripteurs | `vk_replay.cpp` (helper, file, négatifs, seqlock) + `vk_menu.cpp` |
+| Barrières d'ordre des rendus | `vk_texture.cpp` `game_order()`/`pass_start_barrier`, `vk_draw.cpp` (dispatch sans barrière) |
+| Correctifs au-dessus de 60 fps | `host/oot_high_fps.c` (`above60_fixes()`, `rx_option(HOS_OPT_ABOVE60_FIXES)`), servi par `vk_replay.cpp` |
+| Threads du replay | `vk_replay.cpp` `par_threads()` |
+| Segments du replay | `vk_replay.cpp` `per` |
+| Affinité CPU (CCX) | `vk_replay.cpp` `par_pin_upper_half()` |
+
+- **Défauts neutres, mesurés le 20/11** : Auto = **désactivé** pour le préchargement, les threads du replay et le CCX (4 threads + le helper donnaient moins de fps, plus de régularité) ; segments Auto = **160** (comme avant la ligne) ; barrières Auto = **NVIDIA seulement** ; correctifs 60 fps **activés** (défaut d'origine).
+- **Toujours perdu** : la ligne « Batched submits » (devenue une politique, `device_policy.h`) ; le volet « eau à pas fixes » des correctifs 60 fps (l'amont a réécrit le hook en `hos_oot_solver_steps`) ; l'outillage « demande de test » (`.claude/skills`, `scripts/test_requests.py`, `docs/test-requests.md`, `tests/test_test_requests.py`).
+- **Pour rouvrir** : `git show mine-a-before-upstream:gpu/vk/...` ; le prefetch et les lignes ci-dessus ont été reportés depuis `dfd1bdeb^1`.
 
 ## 9. Les règles du projet
 

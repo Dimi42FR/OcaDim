@@ -242,6 +242,9 @@ void note_pass_end(VkCommandBuffer cmd);
 void pass_start_barrier(VkCommandBuffer cmd);
 /// Pass starts with the fragment-stage barrier, since the start
 int64_t pass_barriers_relaxed();
+/// (OcaDim) Les barrières d'ordre des rendus, la ligne du F1 (menu_draw_order) : les rendus qui se suivent n'attendent que
+/// dans leurs étages fragment, et un dispatch juste après un autre n'a pas de barrière à lui
+bool game_order();
 void texture_stats(int64_t* uploads, int64_t* astc_gpu, int64_t* bytes_uploaded);
 /// (longshot) whether texture_read_texels' walk of r at that row stride (0: the region's own) and its own image stride
 /// stays within avail bytes of the data it is given (overflow-checked: the stride is the game's)
