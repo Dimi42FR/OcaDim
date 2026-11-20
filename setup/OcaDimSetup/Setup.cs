@@ -29,6 +29,9 @@ sealed class Setup
     /// <summary>(OcaDim) "Compilation légère": one compiler at a time (Setup.cs JobsForPc). Slower, but a small PC with little
     /// RAM never runs out while it builds.</summary>
     public static bool Light;
+    /// <summary>(OcaDim) "Télécharger les outils en ligne": skip the tools shipped with the Setup and fetch each one from
+    /// tools.lock, as before. A way out when the local tools do not work on this PC.</summary>
+    public static bool DownloadTools;
     /// (OcaDim) The hottest game functions compiled at -O2 with their callees inlined (nx2/make_game.py's hot list, from
     /// assets/profiles/), and the renderer built with its play profile: the CPU is this game's frame's wall. Off only if a
     /// build or the game misbehaves (the whole lifted code at -O1, as before). Added by Dimi42FR.

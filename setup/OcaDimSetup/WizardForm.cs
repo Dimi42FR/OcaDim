@@ -251,6 +251,10 @@ sealed class WizardForm : Form
         var lightBox = Check("Compilation légère (petit PC : beaucoup plus lente, mais ne sature pas la mémoire)", Setup.Light);
         lightBox.CheckedChanged += (_, _) => Setup.Light = lightBox.Checked;
         Add(lightBox);
+        // (OcaDim) the way out when the tools shipped with the Setup fail on this PC: fetch them with tools.lock instead
+        var onlineBox = Check("Télécharger les outils en ligne (seulement si les outils fournis ne fonctionnent pas)", Setup.DownloadTools);
+        onlineBox.CheckedChanged += (_, _) => Setup.DownloadTools = onlineBox.Checked;
+        Add(onlineBox);
         var credit = Paragraph("Fonctions les plus chaudes compilées à -O2 et le renderer avec son profil de jeu : c'est le CPU " +
                                "qui limite ce jeu. Plus long à compiler, aucune contrepartie en jeu.  Ajouté par Dimi42FR.");
         credit.ForeColor = Muted;
@@ -365,9 +369,12 @@ sealed class WizardForm : Form
             guard = BuildLock.Take(setup.ToolsDir);
             var tools = setup.Tools(source, Line);
             if (setup.ToolsFrom != null) tools.Seed(setup.ToolsFrom);
-            // (OcaDim) outils livrés avec le Setup : <dossier du Setup>\tools-seed, copiés au lieu d'être téléchargés
-            var bundled = Path.Combine(AppContext.BaseDirectory, "tools-seed");
-            if (Directory.Exists(bundled)) tools.Seed(bundled);
+            // (OcaDim) outils livrés avec le Setup : <dossier du Setup>\tools-seed, copiés au lieu d'être téléchargés.
+            // La case « Télécharger les outils en ligne » les ignore : on repart des URL de tools.lock
+            if (!Setup.DownloadTools) {
+                var bundled = Path.Combine(AppContext.BaseDirectory, "tools-seed");
+                if (Directory.Exists(bundled)) tools.Seed(bundled);
+            }
             Stage("Outils de compilation", 0.02);
             await tools.InstallAsync((fraction, text) =>
             {
