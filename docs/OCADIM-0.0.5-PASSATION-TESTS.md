@@ -159,6 +159,21 @@ Puis joindre le `source.zip` et le Setup à la release 0.0.5.
 7. LTO / PGO / -O3 sur fonctions chaudes.
 8. CCX split : inutile sur Ryzen 7 5800X (un seul CCD).
 
+## Tests complémentaires (22/11, Kokiri Forest)
+
+| Configuration | fps | submit | descripteurs |
+|---|---|---|---|
+| workers=4, seg=160 | 60,2-61,5 | 11,3-11,9 ms | 5,58 ms |
+| **workers=4, seg=32** | **63,9-66,0** | **10,6-10,7 ms** | 5,58 ms |
+| workers=4, seg=32 + prefetch=1 | 58,8-62,4 | 11,7-12,4 ms | 6,0-6,45 ms |
+| workers=6, seg=32 | 63,1-64,7 | 9,9 ms | 6,9 ms |
+
+Décisions :
+- **seg=32 accepté** : +3 à +4 fps, submit en baisse. Défaut passé à `replay_seg=1` (32).
+- **prefetch avec workers rejeté** : descripteurs +8 à +15 %, fps en baisse.
+- **workers=6 rejeté** : même fps, consomme des cœurs au jeu, ressenti moins bon. Défaut reste 4.
+- La ligne « Threads du replay » accepte désormais 1 à 8 (limite du moteur) mais le défaut est 4.
+
 ## Règles à conserver
 
 - Toujours mesurer **même zone, même caméra, même draw count** ; noter fps, GPU, submit, draw, descripteurs.
