@@ -18,7 +18,7 @@ struct Options {
     int pace = 0;         // frames shown on an even line (vk_framegen.cpp)
     int vsync = 0;        // (longshot) V-Sync, the swapchain's present mode (vk_main.cpp create_swapchain, made again at once): 0 Auto
                           // (mailbox where the driver has it), 1 On (FIFO), 2 Off (immediate). RX_VK_FIFO / RX_VK_IMMEDIATE over it
-    int threaded_rendering = 0;   // (longshot) Threaded rendering (threaded_rendering.h): 0 Auto (by the CPU; off everywhere were
+    int threaded_rendering = 1;   // (longshot) Threaded rendering (threaded_rendering.h): 0 Auto (by the CPU; off everywhere were
                           // threaded::kAutoEnabled off), 1 On (the render thread and the recorder thread), 2 Off. Read once, at the
                           // start (menu_threaded_rendering); RX_VK_ASYNC and RX_VK_RECORDER, when set, over it
     int hdr = 0;          // (longshot) HDR10 out (vk_framegen.cpp framegen_hdr): 0 off, 1 the SDR picture expanded, 2 the game's own (native) HDR; when the display has it (the swapchain made again at once)
@@ -27,17 +27,17 @@ struct Options {
     int hdr_contrast = 100;   // HDR contrast in percent around mid grey, as RenoDX grades it; 100 none (vk_framegen.cpp framegen_hdr)
     int hdr_tonemap = 0;  // (longshot) the scene's tone mapper with Native HDR: 0 the game's (Vanilla), 1 PsychoV35, as RenoDX's zelda-oot-oz
                           // (ir_opt/scene_tonemap_pass.h; vk_shader.cpp scene_tonemap_for)
-    int fps_cap = 0;      // (longshot) Frame rate cap: 0 60 (the console's), 90, 120, 144, 165, 240, 6 Uncapped (host/nn_vi.c: frame_rate_cap= at the start, then HOS_OPT_FPS_CAP in play)
-    int resolution = 0;   // the 3D's (Render resolution): 0 Auto (the game's dynamic resolution), else a share of the output,
-                          // 1..6 = 100%, 75%, 67%, 50%, 58%, 33% (upscaler_rows.h; nx2/oot_patches.py)
+    int fps_cap = 3;      // (longshot) Frame rate cap: 0 60 (the console's), 90, 120, 144, 165, 240, 6 Uncapped (host/nn_vi.c: frame_rate_cap= at the start, then HOS_OPT_FPS_CAP in play). OcaDim: 144 by default
+    int resolution = 9;   // the 3D's (Render resolution): 0 Auto (the game's dynamic resolution), else a share of the output,
+                          // 1..6 = 100%, 75%, 67%, 50%, 58%, 33% (upscaler_rows.h; nx2/oot_patches.py). OcaDim: 92% by default
     int output_res = 0;   // the game's whole frame, docked: 0 its 2048x1152, then the sizes the screen offers (vk_menu.cpp outputs,
                           // display_modes.h), then the player's own (custom_output); saved as the size (output_res=3840x2160) and read
                           // once, at the start (host/nn_applet.c)
-    int upscale = 0;      // to the window (Window scaling filter, saved as upscaling): 0 off (the plain copy), 1 Catmull-Rom, 2 Lanczos
+    int upscale = 2;      // to the window (Window scaling filter, saved as upscaling): 0 off (the plain copy), 1 Catmull-Rom, 2 Lanczos. OcaDim: Lanczos by default
     int crt_filter = 0;   // finished SDR picture: 0 Off, 1 Lottes aperture grille, 2 Lottes consumer TV, 3 Hyllian Fast, 4 zfast CRT
     int crt_lines = 0;    // virtual raster: 0 240, 1 480, 2 720 lines; at most half the destination height, at least one line
     int reflex = 0;       // NVIDIA Reflex: 0 off, 1 on, 2 on + boost (vk_reflex.cpp; NVIDIA GPUs with VK_NV_low_latency2)
-    int antilag = 0;      // AMD Anti-Lag 2: 0 off, 1 on (vk_antilag.cpp; AMD GPUs with VK_AMD_anti_lag)
+    int antilag = 1;      // AMD Anti-Lag 2: 0 off, 1 on (vk_antilag.cpp; AMD GPUs with VK_AMD_anti_lag). OcaDim: on by default
     int dlss = 0;         // the Upscaler (its name from before FSR: options files and the tests' stand-ins keep it): 0 the game's
                           // own network, 1 NVIDIA DLSS, 2 NVIDIA DLAA (a build with NVIDIA's SDK only), 3 AMD FSR 3.1 (vk_fsr3.cpp),
                           // 4 AMD FSR 4, 5 its native AA (a build with FSR 4 only). upscaler_rows.h; vk_temporal.cpp. Saved as dlss
@@ -108,7 +108,7 @@ struct Options {
     int prompts = 0;      // the button icons: 0 Auto (the controller), 1 Switch, 2 Xbox, 3 PS4, 4 PS5, 5 Steam Deck (host/prompts.c)
     int robust = 0;       // bounds-checked buffer access: 0 Auto (on), 1 Off, 2 On (gpu/vk/vk_main.cpp; RX_VK_ROBUST)
     int descriptor_reuse = 1;  // (on by default since options_version 4) a draw keeps its descriptors through other slots' registrations (gpu/vk/vk_draw.cpp; RX_VK_DESC_REUSE)
-    int sampler_cache = 0;     // sampler ids answer their parameters without the registrations' lock (gpu/vk/vk_draw.cpp; RX_VK_SAMPLER_CACHE)
+    int sampler_cache = 1;     // sampler ids answer their parameters without the registrations' lock (gpu/vk/vk_draw.cpp; RX_VK_SAMPLER_CACHE)
     int astc_rgba8 = 0;   // (longshot) big ASTC textures kept as decoded RGBA8, not re-encoded to BC3 (gpu/vk/vk_texture.cpp bc_ready;
                           // RX_VK_ASTC_RGBA8 over it): the AMD texture workaround. Read once, at the start
     int intel_compiles = 0;   // (longshot) Intel's shader compiler on Windows: 0 Auto (side by side where it was measured,
@@ -152,9 +152,9 @@ struct Options {
                             // host/oot_high_fps.c asks it as HOS_OPT_ABOVE60_FIXES (menu_above60_fixes)
     int replay_workers = 0; // (OcaDim) the threads that record a command buffer's segments: 0 Auto (par_scale.h par::workers),
                             // 1 to 4. Read once at the start (menu_replay_workers); RX_VK_PARALLEL, when set, is over it
-    int replay_seg = 0;     // (OcaDim) the draws and dispatches a replay worker takes at a time: 0 Auto (160, as before),
+    int replay_seg = 3;     // (OcaDim) the draws and dispatches a replay worker takes at a time: 0 Auto (160, as before),
                             // 1 32, 2 64, 3 160 (menu_replay_seg); RX_VK_PARALLEL_SEG, when set, is over it
-    int draw_order = 0;     // (OcaDim) draw order barriers: 0 Auto (NVIDIA only, where it was measured), 1 on, 2 off
+    int draw_order = 1;     // (OcaDim) draw order barriers: 0 Auto (NVIDIA only, where it was measured), 1 on, 2 off
                             // (vk_texture.cpp game_order); RX_VK_GAME_ORDER, when set, is over it
     int ccx_split = 0;      // (OcaDim) the replay's workers on the upper half of the logical CPUs (the second CCD on a Ryzen):
                             // 0 Auto (from 12 logical processors), 1 on, 2 off (vk_replay.cpp par_pin_upper_half)

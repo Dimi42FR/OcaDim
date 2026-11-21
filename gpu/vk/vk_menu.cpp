@@ -6397,9 +6397,10 @@ int menu_memory_tier() {
 /// Auto the one for the card's memory tier, the preset's (opts.budget) or else Auto's own for this PC (auto_choice): the
 /// game's on Minimum and Low (4 and 6 GB, where 113 MB is a lot), 2200 on Balanced (8 GB), 3072 from High (12 GB) up
 int menu_shadow_res() {
+    // (OcaDim) Auto is the game's own 1600 a side: the upstream's tier-based Auto (3072 on 12 GB or more) cost Castle Town
+    // 6-7 fps. 1 the game's, 2 2200, 3 3072 stay the player's explicit choices.
     if (opts.shadow_res > 0) return std::min(opts.shadow_res, 3) - 1;
-    const int tier = opts.budget > 0 ? opts.budget : auto_choice.tier;
-    return tier == 1 || tier == 2 ? 0 : tier >= 4 ? 2 : 1;   // (an unknown tier: 2200, the middle)
+    return 0;
 }
 int menu_transition_autosave() { return transition_autosave_enabled.load(std::memory_order_relaxed); }
 int menu_damage_taken() { return cheats_on() ? opts.damage_taken : 1; }   // (Normal while the tools are off; the choice is kept)

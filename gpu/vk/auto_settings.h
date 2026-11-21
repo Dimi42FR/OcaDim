@@ -45,7 +45,7 @@ struct Choice {
 };
 
 // (upscaler_rows.h's, kept here so the rules compile on their own; the test checks they agree)
-enum { GAME = 0, DLSS = 1, FSR4 = 4 };
+enum { GAME = 0, DLSS = 1, FSR4 = 4, FSR4_AA = 5 };
 enum { RES_QUALITY = 3, RES_PERFORMANCE = 4, RES_BALANCED = 5, RES_ULTRA_PERFORMANCE = 6 };
 
 // The Render resolution each preset sets (vk_menu.cpp apply_preset; tests/test_auto_settings.py checks they agree): the tier's
@@ -93,9 +93,10 @@ inline Choice choose(const Hardware& h) {
         c.resolution = c.tier == 2 ? RES_PERFORMANCE : c.tier == 3 ? RES_BALANCED : RES_QUALITY;
         add(c, c.tier == 2 ? "NVIDIA RTX: DLSS Performance" : c.tier == 3 ? "NVIDIA RTX: DLSS Balanced" : "NVIDIA RTX: DLSS Quality");
     } else if (c.tier >= 2 && h.rdna4 && h.fsr4_built) {
-        c.upscaler = FSR4;
-        c.resolution = c.tier == 2 ? RES_PERFORMANCE : c.tier == 3 ? RES_BALANCED : RES_QUALITY;
-        add(c, c.tier == 2 ? "AMD RDNA 4: FSR 4 Performance" : c.tier == 3 ? "AMD RDNA 4: FSR 4 Balanced" : "AMD RDNA 4: FSR 4 Quality");
+        // (OcaDim: FSR 4 Native AA at full scale by default, the config measured with the fork, rather than Quality at 67%)
+        c.upscaler = FSR4_AA;
+        c.resolution = 9;   // (92% kept as the saved slider; Native AA draws at full scale)
+        add(c, "AMD RDNA 4: FSR 4 Native AA");
     } else {
         // (Intel XeSS is never chosen here: it runs only with Intel's own DLL beside the game, whose version the player picked,
         // it has not been measured against the game's own network on Intel's GPUs, and the network was what the presets were
