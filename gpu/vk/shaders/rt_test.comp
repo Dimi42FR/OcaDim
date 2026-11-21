@@ -1,20 +1,31 @@
 ﻿#version 460
-// (OcaDim, Ray-Tracing TEST) Le premier rayon : une acceleration structure (TLAS) avec un triangle, et un rayon fixe
-// parti de l'origine vers +Z. Rouge : le rayon touche le triangle ; vert : il le manque. Sert a valider la chaine
-// BLAS -> TLAS -> ray_query avant de capturer un vrai maillage du jeu.
+// (OcaDim, Ray-Tracing TEST) Un rayon par pixel a travers la boite englobante du maillage capture : la silhouette du
+// maillage apparait en rouge sur fond vert. Valide la BLAS d'un vrai maillage du jeu (avant la camera et la matrice de
+// modele). La boite vient en push constants ; les rayons vont vers +Z depuis devant la boite.
 #extension GL_EXT_ray_query : require
 layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(binding = 0) uniform accelerationStructureEXT tlas;
 layout(binding = 1, rgba16f) uniform writeonly image2D out_img;
 
+layout(push_constant) uniform P {
+    vec3 bb_min;
+    float tmax;
+    vec3 bb_max;
+    float pad;
+} pc;
+
 void main() {
     const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
     const ivec2 size = imageSize(out_img);
     if (px.x >= size.x || px.y >= size.y) return;
+    const vec2 uv = (vec2(px) + 0.5) / vec2(size);
+    const float dz = max(pc.bb_max.z - pc.bb_min.z, 0.01);
+    const vec3 origin = vec3(mix(pc.bb_min.x, pc.bb_max.x, uv.x), mix(pc.bb_min.y, pc.bb_max.y, uv.y),
+                             pc.bb_min.z - dz - 1.0);
     rayQueryEXT q;
     rayQueryInitializeEXT(q, tlas, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT, 0xFF,
-                          vec3(0.0, 0.0, 0.0), 0.001, vec3(0.0, 0.0, 1.0), 10.0);
+                          origin, 0.001, vec3(0.0, 0.0, 1.0), pc.tmax);
     while (rayQueryProceedEXT(q)) {}
     const bool hit = rayQueryGetIntersectionTypeEXT(q, true) != gl_RayQueryCommittedIntersectionNoneEXT;
     imageStore(out_img, px, hit ? vec4(1.0, 0.0, 0.0, 1.0) : vec4(0.0, 1.0, 0.0, 1.0));

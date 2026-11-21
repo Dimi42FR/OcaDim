@@ -6467,6 +6467,91 @@ struct RtTest {
     bool built = false, failed = false, told = false;
 };
 RtTest g_rt;
+struct RtPush {   // (doit suivre rt_test.comp : 32 octets)
+    float bb_min[3];
+    float tmax;
+    float bb_max[3];
+    float pad;
+};
+// (le maillage capture : positions float3 et indices, tels que lus dans le draw ; pas encore de matrice de modele)
+std::vector<float> g_rt_pos;
+std::vector<uint32_t> g_rt_idx;
+float g_rt_min[3] = {0, 0, 0}, g_rt_max[3] = {0, 0, 0};
+bool g_rt_mesh = false, g_rt_tried = false;
+
+/// (le premier draw indexe de triangles avec une position float : ses buffers sont lus une fois et le maillage est garde)
+void rt_capture_mesh(const NvnState& s, const DrawArgs& d) {
+    if (g_rt_mesh || g_rt_tried) return;
+    // (diagnostic : les premiers draws de la scene, mesh compris, pour voir ce que le jeu envoie)
+    static int seen;
+    if (seen < 80 && (d.mesh || d.count > 60)) {
+        seen++;
+        const nvn_va_st a0 = s.nvattr > 0 ? *reinterpret_cast<const nvn_va_st*>(&s.vattr[0]) : nvn_va_st{};
+        const uint32_t st = a0.stream & 15;
+        logf("vk: OcaDim : RT draw key %016llx mesh %d idx %d prim %d count %d groups %d %d %d vattr0 fmt %#x stream %u stride %u off %u",
+             (unsigned long long)s.prog.sd[0].data, (int)d.mesh, (int)d.indexed, d.prim, d.count, d.groups[0], d.groups[1],
+             d.groups[2], a0.fmt, st, s.vstream[st].stride, a0.offset);
+    }
+    if (!d.indexed || d.prim != NVN_DRAW_PRIMITIVE_TRIANGLES || d.count < 300 || d.count > 60000 || s.nvattr < 1) return;
+    const nvn_va_st a = *reinterpret_cast<const nvn_va_st*>(&s.vattr[0]);
+    const uint32_t stream = a.stream & 15;
+    const NVNbufferRange& vb = s.vbuf[stream];
+    const uint32_t stride = s.vstream[stream].stride;
+    if (!vb.address || !stride) return;
+    int comps = 0, esz = 0;
+    switch (a.fmt) {
+    case NVN_FORMAT_RGB32F: comps = 3, esz = 4; break;
+    case NVN_FORMAT_RGBA32F: comps = 4, esz = 4; break;
+    case NVN_FORMAT_RGB16F: comps = 3, esz = 2; break;
+    case NVN_FORMAT_RGBA16F: comps = 4, esz = 2; break;
+    default: return;
+    }
+    g_rt_tried = true;   // (un vrai candidat : on ne reessaie pas a chaque draw)
+    const int isz = d.itype == 0 ? 1 : d.itype == 1 ? 2 : 4;
+    std::vector<uint8_t> ib((size_t)d.count * isz);
+    if (!host->gpu_read(d.ibuf + (uint64_t)d.first * isz, ib.data(), ib.size())) return;
+    uint64_t max_i = 0;
+    for (int i = 0; i < d.count; i++) {
+        const uint32_t ix = isz == 1 ? ib[i] : isz == 2 ? ((const uint16_t*)ib.data())[i] : ((const uint32_t*)ib.data())[i];
+        if (ix == 0xFFFFu || ix == 0xFFFFFFFFu) return;   // (un restart : pas un triangle simple)
+        max_i = std::max<uint64_t>(max_i, (uint64_t)d.base_vertex + ix);
+    }
+    const uint64_t vbytes = (max_i + 1) * stride;
+    if (vbytes > (64ull << 20) || (vb.size && vbytes > vb.size)) return;
+    std::vector<uint8_t> vbuf(vbytes);
+    if (!host->gpu_read(vb.address, vbuf.data(), vbytes)) return;
+    g_rt_pos.resize((size_t)d.count * 3);
+    g_rt_idx.resize(d.count);
+    g_rt_min[0] = g_rt_min[1] = g_rt_min[2] = 1e30f;
+    g_rt_max[0] = g_rt_max[1] = g_rt_max[2] = -1e30f;
+    for (int i = 0; i < d.count; i++) {
+        const uint32_t ix = isz == 1 ? ib[i] : isz == 2 ? ((const uint16_t*)ib.data())[i] : ((const uint32_t*)ib.data())[i];
+        const uint64_t at = ((uint64_t)d.base_vertex + ix) * stride + a.offset;
+        if (at + (uint64_t)comps * esz > vbuf.size()) return;
+        const uint8_t* p = vbuf.data() + at;
+        float v[3] = {0, 0, 0};
+        for (int c = 0; c < 3; c++) {
+            if (esz == 4) v[c] = ((const float*)p)[c];
+            else {
+                const uint16_t h = ((const uint16_t*)p)[c];
+                const uint32_t s_ = (h & 0x8000u) << 16, e = (h >> 10) & 0x1F, m = h & 0x3FF;
+                uint32_t bits;
+                if (e == 0) bits = s_;
+                else if (e == 31) bits = s_ | 0x7F800000u | (m << 13);
+                else bits = s_ | ((e - 15 + 127) << 23) | (m << 13);
+                float f;
+                std::memcpy(&f, &bits, 4);
+                v[c] = f;
+            }
+        }
+        g_rt_pos[(size_t)i * 3 + 0] = v[0], g_rt_pos[(size_t)i * 3 + 1] = v[1], g_rt_pos[(size_t)i * 3 + 2] = v[2];
+        g_rt_idx[i] = (uint32_t)i;
+        for (int c = 0; c < 3; c++) g_rt_min[c] = std::min(g_rt_min[c], v[c]), g_rt_max[c] = std::max(g_rt_max[c], v[c]);
+    }
+    g_rt_mesh = true;
+    logf("vk: OcaDim : test BVH : maillage capture, %d sommets, %d indices, boite %.2f..%.2f %.2f..%.2f %.2f..%.2f",
+         d.count, d.count, g_rt_min[0], g_rt_max[0], g_rt_min[1], g_rt_max[1], g_rt_min[2], g_rt_max[2]);
+}
 constexpr VkBufferUsageFlags kAsInput = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
                                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
 constexpr VkBufferUsageFlags kAsStore = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
@@ -6487,27 +6572,32 @@ bool rt_build(VkCommandBuffer cmd) {
         logf("vk: OcaDim : test BVH : la carte n'a pas VK_KHR_acceleration_structure + VK_KHR_ray_query");
         return false;
     }
-    const float verts[9] = {-0.5f, -0.5f, 1.0f, 0.5f, -0.5f, 1.0f, 0.0f, 0.5f, 1.0f};
-    const uint32_t inds[3] = {0, 1, 2};
+    const float fallback_v[9] = {-0.5f, -0.5f, 1.0f, 0.5f, -0.5f, 1.0f, 0.0f, 0.5f, 1.0f};
+    const uint32_t fallback_i[3] = {0, 1, 2};
+    const float* verts = g_rt_mesh ? g_rt_pos.data() : fallback_v;
+    const uint32_t* inds = g_rt_mesh ? g_rt_idx.data() : fallback_i;
+    const size_t vcount = g_rt_mesh ? g_rt_pos.size() / 3 : 3;
+    const size_t icount = g_rt_mesh ? g_rt_idx.size() : 3;
+    const size_t vbytes = vcount * 3 * sizeof(float), ibytes = icount * sizeof(uint32_t);
     void* vm = nullptr;
     void* im = nullptr;
-    if (!create_buffer_cached(sizeof verts, kAsInput, r.vert, r.vert_mem, &vm) ||
-        !create_buffer_cached(sizeof inds, kAsInput, r.idx, r.idx_mem, &im)) {
+    if (!create_buffer_cached(vbytes, kAsInput, r.vert, r.vert_mem, &vm) ||
+        !create_buffer_cached(ibytes, kAsInput, r.idx, r.idx_mem, &im)) {
         r.failed = true;
         logf("vk: OcaDim : test BVH : ses buffers d'entree n'ont pas pu etre faits");
         return false;
     }
-    std::memcpy(vm, verts, sizeof verts);
-    std::memcpy(im, inds, sizeof inds);
-    flush_mapped(r.vert_mem, sizeof verts);
-    flush_mapped(r.idx_mem, sizeof inds);
+    std::memcpy(vm, verts, vbytes);
+    std::memcpy(im, inds, ibytes);
+    flush_mapped(r.vert_mem, vbytes);
+    flush_mapped(r.idx_mem, ibytes);
     const uint64_t va = buffer_addr(r.vert), ia = buffer_addr(r.idx);
 
     VkAccelerationStructureGeometryTrianglesDataKHR tri{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR};
     tri.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
     tri.vertexData.deviceAddress = va;
     tri.vertexStride = 12;
-    tri.maxVertex = 2;
+    tri.maxVertex = (uint32_t)(vcount - 1);
     tri.indexType = VK_INDEX_TYPE_UINT32;
     tri.indexData.deviceAddress = ia;
     VkAccelerationStructureGeometryKHR geo{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
@@ -6520,7 +6610,7 @@ bool rt_build(VkCommandBuffer cmd) {
     bgi.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
     bgi.geometryCount = 1;
     bgi.pGeometries = &geo;
-    uint32_t prim = 1;
+    uint32_t prim = (uint32_t)(icount / 3);
     VkAccelerationStructureBuildSizesInfoKHR sizes{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
     vkGetAccelerationStructureBuildSizesKHR(dev.device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &bgi, &prim, &sizes);
     if (!create_device_buffer(sizes.accelerationStructureSize, kAsStore, r.blas_buf, r.blas_mem) ||
@@ -6615,6 +6705,8 @@ bool rt_build(VkCommandBuffer cmd) {
     }
     VkPipelineLayoutCreateInfo pi{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     pi.setLayoutCount = 1, pi.pSetLayouts = &r.set;
+    VkPushConstantRange pr{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(RtPush)};
+    pi.pushConstantRangeCount = 1, pi.pPushConstantRanges = &pr;
     if (vkCreatePipelineLayout(dev.device, &pi, nullptr, &r.lay) != VK_SUCCESS) {
         r.failed = true;
         logf("vk: OcaDim : test BVH : sa disposition n'a pas pu etre faite");
@@ -6658,7 +6750,8 @@ bool rt_build(VkCommandBuffer cmd) {
     r.built = true;
     if (!r.told) {
         r.told = true;
-        logf("vk: OcaDim : test BVH : BLAS + TLAS d'un triangle, rayon vers +Z (rouge = touche, vert = manque)");
+        logf("vk: OcaDim : test BVH : BLAS + TLAS %s (%s = touche, vert = manque)", g_rt_mesh ? "du maillage capture" : "d'un triangle",
+             "rouge");
     }
     return true;
 }
@@ -6812,6 +6905,16 @@ void rt_test_after_pass(VkCommandBuffer cmd, const Pass& ps) {
     vkUpdateDescriptorSets(dev.device, 2, wds, 0, nullptr);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g_rt.pipe);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g_rt.lay, 0, 1, &g_rt.ds, 0, nullptr);
+    RtPush rp{};
+    if (g_rt_mesh) {
+        for (int i = 0; i < 3; i++) rp.bb_min[i] = g_rt_min[i], rp.bb_max[i] = g_rt_max[i];
+        rp.tmax = (g_rt_max[2] - g_rt_min[2]) + 2.0f;
+    } else {
+        rp.bb_min[0] = -0.5f, rp.bb_min[1] = -0.5f, rp.bb_min[2] = 1.0f;
+        rp.bb_max[0] = 0.5f, rp.bb_max[1] = 0.5f, rp.bb_max[2] = 1.0f;
+        rp.tmax = 10.0f;
+    }
+    vkCmdPushConstants(cmd, g_rt.lay, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof rp, &rp);
     vkCmdDispatch(cmd, (w + 7) / 8, (h + 7) / 8, 1);
     full_barrier(cmd, "barrier (apres le test BVH)");
     VkRenderingAttachmentInfo ca{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
@@ -8500,6 +8603,7 @@ static bool fallback_list_held(uint64_t list) {
 }
 
 void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
+    if (opts.rt_test && !par_active.load(std::memory_order_relaxed)) rt_capture_mesh(s, d);   // (OcaDim: le test BVH)
     Pass& ps = pass();   // (once: the accessor is a call and a thread-local read at each use. The same object for the thread's life: draw_begin_recording resets it in place)
     CmdBound& cb = bound();   // (once, as the pass: what the command buffer has bound)
     PROF_HOT(PROF_DRAW);
@@ -12098,6 +12202,7 @@ const std::vector<uint64_t>& record_progs() {
     return v;
 }
 void record_draw(const NvnState& s, const Program& p, const DrawArgs& d, const Targets& at) {
+    if (opts.rt_test) rt_capture_mesh(s, d);   // (OcaDim: le premier maillage du test BVH, lu une fois)
     char line[1024];
     int n = snprintf(line, sizeof line, "prog %016llx count %d first %d inst %d bv %d bi %d idx %d ibuf %#llx ind %#llx/%#llx",
                      (unsigned long long)p.key, d.count, d.first, d.instances, d.base_vertex, d.base_instance,
