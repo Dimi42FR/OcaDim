@@ -6468,9 +6468,9 @@ struct RtTest {
 };
 RtTest g_rt;
 struct RtPush {   // (doit suivre rt_test.comp : 32 octets)
-    float bb_min[3];
+    float origin[3];
     float tmax;
-    float bb_max[3];
+    float dir[3];
     float pad;
 };
 // (le maillage capture : positions float3 et indices, tels que lus dans le draw ; pas encore de matrice de modele)
@@ -6879,6 +6879,7 @@ void ssr_after_pass(VkCommandBuffer cmd, const Pass& ps) {
 // (le test BVH : il ecrase la cible avec le rouge/vert du rayon, apres le SSR s'il tourne)
 void rt_test_after_pass(VkCommandBuffer cmd, const Pass& ps) {
     if (!opts.rt_test || !dev.accel_struct || !dev.ray_query) return;
+    if (!g_rt_mesh) return;   // (la BLAS doit etre construite depuis le maillage capture, pas le triangle de secours)
     if (ps.n < 1 || !ps.color[0] || ps.samples != VK_SAMPLE_COUNT_1_BIT || ps.has_block_images) return;
     const uint32_t w = ps.width, h = ps.height;
     if (w < 1024 || h < 576) return;
@@ -6906,13 +6907,55 @@ void rt_test_after_pass(VkCommandBuffer cmd, const Pass& ps) {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g_rt.pipe);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g_rt.lay, 0, 1, &g_rt.ds, 0, nullptr);
     RtPush rp{};
-    if (g_rt_mesh) {
-        for (int i = 0; i < 3; i++) rp.bb_min[i] = g_rt_min[i], rp.bb_max[i] = g_rt_max[i];
-        rp.tmax = (g_rt_max[2] - g_rt_min[2]) + 2.0f;
+    if (g_rt_mesh && g_rt_pos.size() >= 9) {
+        // (le plus grand triangle du maillage : le rayon part devant lui, dans l'axe de sa normale)
+        const float* P = g_rt_pos.data();
+        const float dx = g_rt_max[0] - g_rt_min[0], dy = g_rt_max[1] - g_rt_min[1], dz = g_rt_max[2] - g_rt_min[2];
+        const float diag = std::sqrt(dx * dx + dy * dy + dz * dz);
+        size_t best = (size_t)-1;
+        float best_len = 0.0f, bn[3] = {0, 0, 1}, ba[3] = {0, 0, 0}, bb[3] = {0, 0, 0}, bc[3] = {0, 0, 0};
+        for (size_t t = 0; t + 3 <= g_rt_pos.size() / 3; t += 3) {
+            const float* a = P + t * 3, *b = P + (t + 1) * 3, *c = P + (t + 2) * 3;
+            const float e1[3] = {b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+            const float e2[3] = {c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+            const float n[3] = {e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]};
+            const float len = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+            if (len > best_len) {
+                best_len = len, best = t;
+                bn[0] = n[0] / len, bn[1] = n[1] / len, bn[2] = n[2] / len;
+                std::memcpy(ba, a, 12), std::memcpy(bb, b, 12), std::memcpy(bc, c, 12);
+            }
+        }
+        if (best != (size_t)-1) {
+            for (int k = 0; k < 3; k++) {
+                const float mid = (ba[k] + bb[k] + bc[k]) / 3.0f;
+                rp.origin[k] = mid + bn[k] * (diag * 0.5f + 1.0f);
+                rp.dir[k] = -bn[k];
+            }
+            rp.tmax = diag + 2.0f;
+            // (le meme rayon sur le CPU : si le CPU touche et le GPU non, c'est la BLAS)
+            const float e1[3] = {bb[0] - ba[0], bb[1] - ba[1], bb[2] - ba[2]};
+            const float e2[3] = {bc[0] - ba[0], bc[1] - ba[1], bc[2] - ba[2]};
+            const float pv[3] = {rp.dir[1] * e2[2] - rp.dir[2] * e2[1], rp.dir[2] * e2[0] - rp.dir[0] * e2[2],
+                                 rp.dir[0] * e2[1] - rp.dir[1] * e2[0]};
+            const float det = e1[0] * pv[0] + e1[1] * pv[1] + e1[2] * pv[2];
+            int cpu = 0;
+            if (std::fabs(det) > 1e-8f) {
+                const float inv = 1.0f / det;
+                const float tv[3] = {rp.origin[0] - ba[0], rp.origin[1] - ba[1], rp.origin[2] - ba[2]};
+                const float u = (tv[0] * pv[0] + tv[1] * pv[1] + tv[2] * pv[2]) * inv;
+                const float qv[3] = {tv[1] * e1[2] - tv[2] * e1[1], tv[2] * e1[0] - tv[0] * e1[2], tv[0] * e1[1] - tv[1] * e1[0]};
+                const float v = (rp.dir[0] * qv[0] + rp.dir[1] * qv[1] + rp.dir[2] * qv[2]) * inv;
+                const float tt = (e2[0] * qv[0] + e2[1] * qv[1] + e2[2] * qv[2]) * inv;
+                cpu = u >= 0 && u <= 1 && v >= 0 && u + v <= 1 && tt > 0;
+            }
+            logf("vk: OcaDim : test BVH : triangle %zu aire %.4f, orig %.2f %.2f %.2f dir %.2f %.2f %.2f, CPU %d",
+                 best, best_len, rp.origin[0], rp.origin[1], rp.origin[2], rp.dir[0], rp.dir[1], rp.dir[2], cpu);
+        } else {
+            logf("vk: OcaDim : test BVH : aucun triangle non degenere dans le maillage");
+        }
     } else {
-        rp.bb_min[0] = -0.5f, rp.bb_min[1] = -0.5f, rp.bb_min[2] = 1.0f;
-        rp.bb_max[0] = 0.5f, rp.bb_max[1] = 0.5f, rp.bb_max[2] = 1.0f;
-        rp.tmax = 10.0f;
+        rp.dir[2] = 1.0f, rp.tmax = 10.0f;
     }
     vkCmdPushConstants(cmd, g_rt.lay, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof rp, &rp);
     vkCmdDispatch(cmd, (w + 7) / 8, (h + 7) / 8, 1);
