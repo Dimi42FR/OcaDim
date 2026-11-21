@@ -149,7 +149,7 @@ struct Options {
     int above60_fixes = 1;  // (OcaDim) the fixes above 60 fps (the floors that carry a character, the water's fixed steps):
                             // 1 on, the default they shipped with; 0 the game's own behaviour before them.
                             // host/oot_high_fps.c asks it as HOS_OPT_ABOVE60_FIXES (menu_above60_fixes)
-    int replay_workers = 0; // (OcaDim) the threads that record a command buffer's segments: 0 Auto (par_scale.h par::workers),
+    int replay_workers = 4; // (OcaDim) the threads that record a command buffer's segments: 0 Auto (par_scale.h par::workers),
                             // 1 to 4. Read once at the start (menu_replay_workers); RX_VK_PARALLEL, when set, is over it
     int replay_seg = 3;     // (OcaDim) the draws and dispatches a replay worker takes at a time: 0 Auto (160, as before),
                             // 1 32, 2 64, 3 160 (menu_replay_seg); RX_VK_PARALLEL_SEG, when set, is over it
