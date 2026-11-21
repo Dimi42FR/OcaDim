@@ -129,8 +129,8 @@ struct Options {
     int mute_background = 0;   // (longshot) no sound while another window has the focus (host/nn_audio.c: HOS_OPT_MUTE_BACKGROUND, 28)
     int skip_opening = 0;   // (longshot) skip the new-game opening (host/hos_main.c hos_oot_opening: HOS_OPT_SKIP_OPENING, 52). Off
     int game_lang = 0;    // the game's language (vk_menu_i18n.h game_lang_code): language.txt's, not kept in the options file
-    int menu_lang = 0;    // this menu's language: 0 Auto (the game's own, language.txt), else menu_i18n::kLangs[menu_lang - 1]
-                          // (vk_menu_i18n.cpp). Saved as menu_language
+    int menu_lang = 5;    // this menu's language: 0 Auto (the game's own, language.txt), else menu_i18n::kLangs[menu_lang - 1]
+                          // (vk_menu_i18n.cpp). Saved as menu_language. (OcaDim: French by default, 5 = kLangs[4])
     int mic = 1;          // (longshot) the ocarina's microphone: 0 Off, 1 the system's default, 2.. a device as host->mic_name lists it (host/nn_audio_in.c)
     int microphone_gain = 100; // software capture gain, 0..400%; leaves the system's input volume alone
     int skip_title = 0;   // (longshot) start with the most recent save, pressing through the title and its file list (host/oot_autoload.c); read at the start
