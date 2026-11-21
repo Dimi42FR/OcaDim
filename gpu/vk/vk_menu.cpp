@@ -1365,7 +1365,7 @@ const char* tx_ssr_fr(int v) {   // (OcaDim: les réflexions écran, Désactivé
     snprintf(b, sizeof b, "%d%%", v);
     return b;
 }
-const char* tx_workers_fr(int v) { static const char* const t[] = {"Auto", "1", "2", "3", "4"}; return t[std::clamp(v, 0, 4)]; }
+const char* tx_workers_fr(int v) { static const char* const t[] = {"Auto", "1", "2", "3", "4", "5", "6", "7", "8"}; return t[std::clamp(v, 0, 8)]; }
 const char* tx_seg_fr(int v) { static const char* const t[] = {"Auto (160)", "32", "64", "160"}; return t[std::clamp(v, 0, 3)]; }
 const char* tx_bg_fr(int v) { static const char* const t[] = {"Désactivé", "15 s", "30 s"}; return t[std::clamp(v, 0, 2)]; }
 /// (l'interrupteur d'environnement de ce lancement, par-dessus la ligne : ici RX_VK_DESC_PREFETCH)
@@ -2077,7 +2077,7 @@ Row rows[] = {
     {TAB_OCADIM, "Barrières de jobs", &opts.barrier_mode, 0, 1, 1, tx_onoff,   // (OcaDim: the jobs' masks instead of 20 us sleeps)
      "Les barrières de jobs du jeu attendent leur masque au lieu de dormir 20 µs : moins de CPU perdu, un peu plus de mémoire. "
      "Désactivé : les sommeils d'origine. Prend effet après un redémarrage.", nullptr, false, true},
-    {TAB_OCADIM, "Threads du replay", &opts.replay_workers, 0, 4, 1, tx_workers_fr,   // (OcaDim: the replay's workers)
+    {TAB_OCADIM, "Threads du replay", &opts.replay_workers, 0, 8, 1, tx_workers_fr,   // (OcaDim: the replay's workers)
      "Le nombre de threads qui découpent et enregistrent les command buffers de l'image, celui du replay compris : plus ils "
      "sont, plus les segments partent ensemble. Auto : aucun de plus, le comportement d'avant ; le parallèle rend les images "
      "plus régulières mais prend des cœurs au jeu. Prend effet après un redémarrage.", hn_workers, true, true},
@@ -6228,7 +6228,7 @@ bool menu_above60_fixes() {
 int menu_replay_workers() {
     static const int n = [] {
         menu_init();
-        const int row = std::clamp(opts.replay_workers, 0, 4);
+        const int row = std::clamp(opts.replay_workers, 0, 8);
         if (row) {
             logf("vk: Threads du replay : %d (la ligne du F1)", row);
             return row;

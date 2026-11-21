@@ -151,7 +151,7 @@ struct Options {
                             // host/oot_high_fps.c asks it as HOS_OPT_ABOVE60_FIXES (menu_above60_fixes)
     int replay_workers = 4; // (OcaDim) the threads that record a command buffer's segments: 0 Auto (par_scale.h par::workers),
                             // 1 to 4. Read once at the start (menu_replay_workers); RX_VK_PARALLEL, when set, is over it
-    int replay_seg = 3;     // (OcaDim) the draws and dispatches a replay worker takes at a time: 0 Auto (160, as before),
+    int replay_seg = 1;     // (OcaDim) the draws and dispatches a replay worker takes at a time: 0 Auto (160, as before),
                             // 1 32, 2 64, 3 160 (menu_replay_seg); RX_VK_PARALLEL_SEG, when set, is over it
     int draw_order = 1;     // (OcaDim) draw order barriers: 0 Auto (NVIDIA only, where it was measured), 1 on, 2 off
                             // (vk_texture.cpp game_order); RX_VK_GAME_ORDER, when set, is over it
