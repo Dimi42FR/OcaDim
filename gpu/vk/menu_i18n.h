@@ -1815,6 +1815,22 @@ inline constexpr Entry kes[] = {
     {"your home folder", "tu carpeta personal"},
 };
 inline constexpr Entry kfr[] = {
+    {"Loading pipelines", "Chargement des pipelines"},
+    {"Preparing shaders", "Préparation des shaders"},
+    {"Building pipelines", "Construction des pipelines"},
+    {"Loading the shader cache", "Chargement du cache de shaders"},
+    {"Reading the game's shaders", "Lecture des shaders du jeu"},
+    {"Reading the pipeline notes", "Lecture des notes de pipelines"},
+    {"Getting the game ready", "Préparation du jeu"},
+    {"Starting the game", "Lancement du jeu"},
+    {"Saving the pipeline cache", "Sauvegarde du cache de pipelines"},
+    {"Ready", "Prêt"},
+    {"Closing", "Fermeture"},
+    {"Keeping what is prepared for the next start", "Conservation de ce qui est préparé pour le prochain démarrage"},
+    {"This happens once after an update. Closing the window keeps what is done.", "Cela n'arrive qu'une fois après une mise à jour. Fermer la fenêtre conserve ce qui est fait."},
+    {"Step 1 of 2", "Étape 1 sur 2"},
+    {"Step 2 of 2", "Étape 2 sur 2"},
+
     {" (Default fallback)", " (microphone par défaut utilisé)"},
     {" (native)", " (native)"},
     {" (not connected)", " (non connecté)"},

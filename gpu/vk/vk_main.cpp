@@ -1561,6 +1561,13 @@ void prepare_with_screen() {
         ProgressClock eta;   // (over the whole bar: its units, PrepareBar)
         PrepareBar bar;
         double next_log = 10;
+        // (OcaDim: the branded screen stays this long once the work is done, even when there was nothing to prepare; 0: as
+        // before, it ends with the work. RX_VK_STARTUP_MIN_S=<s> overrides it, a test's)
+        const double min_show = [] {
+            const char* e = getenv("RX_VK_STARTUP_MIN_S");
+            const double v = e ? atof(e) : 2.5;
+            return v > 0.0 ? v : 0.0;
+        }();
         bool prepared = false;   // (this start prepares the programs: a first start after an update, two steps)
         uint32_t last_w = dev.swap_extent.width, last_h = dev.swap_extent.height;
         for (;;) {
@@ -1598,7 +1605,7 @@ void prepare_with_screen() {
                 last_w = w, last_h = h;
             }
             if (w && h) present_image(nullptr, dev.swap_extent.width, dev.swap_extent.height, nullptr);
-            if (finished || paint_stop.load()) break;
+            if ((finished && secs >= min_show) || paint_stop.load()) break;
             Sleep(33);
         }
         // (the end: a fade to black over 0.4 s, so the game's first frame comes out of black, not cut in over the screen; none

@@ -217,7 +217,12 @@ inline StartupView startup_view(const StartupState& s) {
         return v;
     }
     if (s.finished) {
-        if (s.secs >= 1.0) v.title = "Starting the game";
+        if (s.secs >= 1.0) {
+            v.title = "Starting the game";
+            v.fraction = 1;          // (OcaDim: the bar is full while the branded screen holds before the first frame)
+            v.pct = "100%";
+            v.left = "Ready";
+        }
         return v;
     }
     if (s.secs < 1.0) return v;
