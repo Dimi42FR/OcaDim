@@ -5882,7 +5882,16 @@ void draw_startup(ui::Ctx& c) {
     if (logo) c.d->AddImage(logo->GetTexRef(), ImVec2(cx - lh * aspect * 0.5f, top), ImVec2(cx + lh * aspect * 0.5f, top + lh));
     float y = top + lh + 16 * s;
     ui::spaced(c, c.f.heading, 42 * k, ImVec2(cx, y), ui::rgba(246, 232, 204), "OCADIM", 6 * k);
-    ui::flourish(c, cx - 190 * k, cx + 190 * k, y + 66 * k, ui::kAccent);
+    // (OcaDim: our own divider under the wordmark: two gold lines fading out, a diamond at their centre, no Longshot ornament)
+    {
+        const float dy = y + 66 * k, half = 16 * k, span = 210 * k;
+        c.d->AddRectFilledMultiColor(ImVec2(cx - span, dy), ImVec2(cx - half, dy + std::max(1.0f, 2.0f * k)),
+                                     ui::alpha(ui::kAccent, 0), ui::kGoldHi, ui::kGoldHi, ui::alpha(ui::kAccent, 0));
+        c.d->AddRectFilledMultiColor(ImVec2(cx + half, dy), ImVec2(cx + span, dy + std::max(1.0f, 2.0f * k)),
+                                     ui::kGoldHi, ui::alpha(ui::kAccent, 0), ui::alpha(ui::kAccent, 0), ui::kGoldHi);
+        ui::diamond(c, ImVec2(cx, dy + 1.0f * k), 8.0f * k, ui::kGoldHi);
+        ui::diamond(c, ImVec2(cx, dy + 1.0f * k), 4.4f * k, ui::rgba(16, 32, 50));
+    }
     ui::text_centre(c, c.f.body, 14.5f * k, ImVec2(cx, y + 78 * k), ui::kDim, v.version.c_str());
     if (!v.title.empty()) {
         y += 120 * k;
