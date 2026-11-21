@@ -68,6 +68,9 @@ struct Device {
          view_2d_of_3d = false, // (VK_EXT_image_2d_view_of_3d: a 3D texture a 2D sample instruction reads)
          memory_priority = false, // (VK_EXT_memory_priority with its feature, asked for by RX_VK_MEMORY_PRIORITY: vk_vma.cpp)
          coop_matrix = false,   // (VK_KHR_cooperative_matrix with its feature)
+         accel_struct = false,  // (OcaDim, Ray-Tracing: VK_KHR_acceleration_structure + its feature, for the BVH)
+         ray_query = false,     // (OcaDim, Ray-Tracing: VK_KHR_ray_query, the ray in the compute shader)
+         deferred_host = false, // (VK_KHR_deferred_host_operations, AS builds off the calling thread)
          native_mma = false;    // (HMMA on it: the cooperative matrix test passed, vk_coopmat.cpp)
     bool float_atomic_add = false;   // (longshot) VK_EXT_shader_atomic_float's shaderBufferFloat32AtomicAdd: the translator's float adds
     bool eds3_polygon = false, eds3_clamp = false, eds3_blend = false, eds3_a2c = false;

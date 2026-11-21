@@ -462,6 +462,11 @@ bool create_device() {
         optional(VK_AMD_BUFFER_MARKER_EXTENSION_NAME, dev.buffer_marker);
     optional(VK_EXT_DEVICE_FAULT_EXTENSION_NAME, dev.device_fault);
     optional(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME, dev.coop_matrix);
+    // (OcaDim, Ray-Tracing: the BVH's extensions. Deferred host operations is the one the other two need)
+    optional(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME, dev.deferred_host);
+    optional(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, dev.accel_struct);
+    optional(VK_KHR_RAY_QUERY_EXTENSION_NAME, dev.ray_query);
+    if (!dev.deferred_host) dev.accel_struct = dev.ray_query = false;
     // (longshot) the GPU's own float add on storage buffers: the game's RED/ATOM.ADD.F32 become one OpAtomicFAddEXT instead
     // of a compare-exchange loop, which gives up after CAS_LOOP_MAX_TRIES attempts and loses that add (eden
     // spirv_emit_context.cpp DefineStorageBuffers). By default with NVIDIA's driver, and Intel's Windows driver on the
@@ -619,6 +624,11 @@ bool create_device() {
     if (dev.memory_priority) *tail = &mem_priority, tail = &mem_priority.pNext;
     VkPhysicalDeviceCooperativeMatrixFeaturesKHR coop{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
     if (dev.coop_matrix) *tail = &coop, tail = &coop.pNext;
+    // (OcaDim, Ray-Tracing: the BVH's features, asked here and turned on only if the device has them)
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR as_feat{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
+    VkPhysicalDeviceRayQueryFeaturesKHR rq_feat{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
+    if (dev.accel_struct) *tail = &as_feat, tail = &as_feat.pNext;
+    if (dev.ray_query) *tail = &rq_feat, tail = &rq_feat.pNext;
     // (OcaDim) VRS: the dynamic per-draw rate (vkCmdSetFragmentShadingRateKHR) needs this feature, enabled here with the
     // extension; nothing else of the extension's is turned on
     VkPhysicalDeviceFragmentShadingRateFeaturesKHR vsr_feat{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR};
@@ -639,6 +649,15 @@ bool create_device() {
     }
     antilag_device_features(tail);   // (AMD Anti-Lag 2's, when its extension is there)
     vkGetPhysicalDeviceFeatures2(dev.physical, &f);
+    // (OcaDim, Ray-Tracing: the BVH needs the AS feature and buffer device addresses; ray query on top of it)
+    dev.accel_struct = dev.accel_struct && as_feat.accelerationStructure && f12.bufferDeviceAddress;
+    dev.ray_query = dev.ray_query && dev.accel_struct && rq_feat.rayQuery;
+    as_feat.accelerationStructure = dev.accel_struct ? VK_TRUE : VK_FALSE;
+    rq_feat.rayQuery = dev.ray_query ? VK_TRUE : VK_FALSE;
+    if (dev.accel_struct)
+        logf("vk: Ray-Tracing : VK_KHR_acceleration_structure%s", dev.ray_query ? " et VK_KHR_ray_query" : " (sans ray query)");
+    else
+        logf("vk: Ray-Tracing : pas de VK_KHR_acceleration_structure (ou pas d'adresses de buffers) sur cette carte/pilote");
     if (module_id && module_idf.shaderModuleIdentifier) module_ids_on();
     descriptor_buffer.descriptorBufferCaptureReplay = VK_FALSE;
     dev.view_2d_of_3d = dev.view_2d_of_3d && v2d3d.sampler2DViewOf3D;
