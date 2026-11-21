@@ -82,6 +82,7 @@
 #include "shaders/taau_upscale_comp_spv.h"
 #include "shaders/taau_upscale_rgba_comp_spv.h"
 #include "shaders/ssr_comp_spv.h"
+#include "shaders/rt_test_comp_spv.h"
 #include "shaders/ssao_blit_vert_spv.h"
 #include "shaders/ssao_blit_frag_spv.h"
 #include "shaders/shadow_stab_comp_spv.h"
@@ -6444,6 +6445,225 @@ bool ssr_make_pipelines() {
     return true;
 }
 
+// ---- (OcaDim) Ray-Tracing TEST : une BLAS d'un triangle, une TLAS, et un rayon ray_query ---------------------------
+// Le premier jalon de la passation : la chaine BLAS -> TLAS -> rayon fonctionne-t-elle sur cette carte ? Le rayon part de
+// l'origine vers +Z et doit toucher le triangle (ecran rouge) ; sinon vert. Aucun maillage du jeu n'est encore capture.
+namespace {
+struct RtTest {
+    VkBuffer vert = VK_NULL_HANDLE, idx = VK_NULL_HANDLE, inst = VK_NULL_HANDLE;
+    VmaAllocation vert_mem = nullptr, idx_mem = nullptr, inst_mem = nullptr;
+    VkBuffer blas_buf = VK_NULL_HANDLE, blas_scratch = VK_NULL_HANDLE;
+    VmaAllocation blas_mem = nullptr, blas_scratch_mem = nullptr;
+    VkAccelerationStructureKHR blas = VK_NULL_HANDLE;
+    VkBuffer tlas_buf = VK_NULL_HANDLE, tlas_scratch = VK_NULL_HANDLE;
+    VmaAllocation tlas_mem = nullptr, tlas_scratch_mem = nullptr;
+    VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
+    uint64_t tlas_addr = 0;
+    VkDescriptorSetLayout set = VK_NULL_HANDLE;
+    VkPipelineLayout lay = VK_NULL_HANDLE;
+    VkDescriptorPool pool = VK_NULL_HANDLE;
+    VkDescriptorSet ds = VK_NULL_HANDLE;
+    VkPipeline pipe = VK_NULL_HANDLE;
+    bool built = false, failed = false, told = false;
+};
+RtTest g_rt;
+constexpr VkBufferUsageFlags kAsInput = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+constexpr VkBufferUsageFlags kAsStore = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+                                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+constexpr VkBufferUsageFlags kScratch = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+
+uint64_t buffer_addr(VkBuffer b) {
+    VkBufferDeviceAddressInfo i{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
+    i.buffer = b;
+    return vkGetBufferDeviceAddress(dev.device, &i);
+}
+bool rt_build(VkCommandBuffer cmd) {
+    RtTest& r = g_rt;
+    if (r.built) return true;
+    if (r.failed) return false;
+    if (!dev.accel_struct || !dev.ray_query) {
+        r.failed = true;
+        logf("vk: OcaDim : test BVH : la carte n'a pas VK_KHR_acceleration_structure + VK_KHR_ray_query");
+        return false;
+    }
+    const float verts[9] = {-0.5f, -0.5f, 1.0f, 0.5f, -0.5f, 1.0f, 0.0f, 0.5f, 1.0f};
+    const uint32_t inds[3] = {0, 1, 2};
+    void* vm = nullptr;
+    void* im = nullptr;
+    if (!create_buffer_cached(sizeof verts, kAsInput, r.vert, r.vert_mem, &vm) ||
+        !create_buffer_cached(sizeof inds, kAsInput, r.idx, r.idx_mem, &im)) {
+        r.failed = true;
+        logf("vk: OcaDim : test BVH : ses buffers d'entree n'ont pas pu etre faits");
+        return false;
+    }
+    std::memcpy(vm, verts, sizeof verts);
+    std::memcpy(im, inds, sizeof inds);
+    flush_mapped(r.vert_mem, sizeof verts);
+    flush_mapped(r.idx_mem, sizeof inds);
+    const uint64_t va = buffer_addr(r.vert), ia = buffer_addr(r.idx);
+
+    VkAccelerationStructureGeometryTrianglesDataKHR tri{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR};
+    tri.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+    tri.vertexData.deviceAddress = va;
+    tri.vertexStride = 12;
+    tri.maxVertex = 2;
+    tri.indexType = VK_INDEX_TYPE_UINT32;
+    tri.indexData.deviceAddress = ia;
+    VkAccelerationStructureGeometryKHR geo{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+    geo.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+    geo.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+    geo.geometry.triangles = tri;
+    VkAccelerationStructureBuildGeometryInfoKHR bgi{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+    bgi.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+    bgi.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+    bgi.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+    bgi.geometryCount = 1;
+    bgi.pGeometries = &geo;
+    uint32_t prim = 1;
+    VkAccelerationStructureBuildSizesInfoKHR sizes{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
+    vkGetAccelerationStructureBuildSizesKHR(dev.device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &bgi, &prim, &sizes);
+    if (!create_device_buffer(sizes.accelerationStructureSize, kAsStore, r.blas_buf, r.blas_mem) ||
+        !create_device_buffer(sizes.buildScratchSize, kScratch, r.blas_scratch, r.blas_scratch_mem)) {
+        r.failed = true;
+        logf("vk: OcaDim : test BVH : ses buffers BLAS n'ont pas pu etre faits");
+        return false;
+    }
+    VkAccelerationStructureCreateInfoKHR aci{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
+    aci.buffer = r.blas_buf, aci.size = sizes.accelerationStructureSize, aci.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+    if (vkCreateAccelerationStructureKHR(dev.device, &aci, nullptr, &r.blas) != VK_SUCCESS) {
+        r.failed = true;
+        logf("vk: OcaDim : test BVH : sa BLAS n'a pas pu etre creee");
+        return false;
+    }
+    // (les ecritures du CPU dans les buffers d'entree, visibles avant la construction)
+    VkMemoryBarrier2 hb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+    hb.srcStageMask = VK_PIPELINE_STAGE_2_HOST_BIT, hb.srcAccessMask = VK_ACCESS_2_HOST_WRITE_BIT;
+    hb.dstStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+    hb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    di.memoryBarrierCount = 1, di.pMemoryBarriers = &hb;
+    vkCmdPipelineBarrier2(cmd, &di);
+    bgi.dstAccelerationStructure = r.blas;
+    bgi.scratchData.deviceAddress = buffer_addr(r.blas_scratch);
+    VkAccelerationStructureBuildRangeInfoKHR range{1, 0, 0, 0};
+    const VkAccelerationStructureBuildRangeInfoKHR* prange = &range;
+    vkCmdBuildAccelerationStructuresKHR(cmd, 1, &bgi, &prange);
+    VkAccelerationStructureDeviceAddressInfoKHR bai{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
+    bai.accelerationStructure = r.blas;
+    const uint64_t blas_addr = vkGetAccelerationStructureDeviceAddressKHR(dev.device, &bai);
+
+    VkAccelerationStructureInstanceKHR inst{};
+    inst.transform.matrix[0][0] = 1.0f, inst.transform.matrix[1][1] = 1.0f, inst.transform.matrix[2][2] = 1.0f;
+    inst.instanceCustomIndex = 0, inst.mask = 0xFF, inst.instanceShaderBindingTableRecordOffset = 0;
+    inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+    inst.accelerationStructureReference = blas_addr;
+    void* imap = nullptr;
+    if (!create_buffer_cached(sizeof inst, kAsInput, r.inst, r.inst_mem, &imap)) {
+        r.failed = true;
+        logf("vk: OcaDim : test BVH : son instance n'a pas pu etre faite");
+        return false;
+    }
+    std::memcpy(imap, &inst, sizeof inst);
+    flush_mapped(r.inst_mem, sizeof inst);
+    VkAccelerationStructureGeometryInstancesDataKHR ins{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR};
+    ins.arrayOfPointers = VK_FALSE;
+    ins.data.deviceAddress = buffer_addr(r.inst);
+    VkAccelerationStructureGeometryKHR tgeo{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+    tgeo.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+    tgeo.geometry.instances = ins;
+    VkAccelerationStructureBuildGeometryInfoKHR tbgi{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+    tbgi.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+    tbgi.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+    tbgi.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+    tbgi.geometryCount = 1;
+    tbgi.pGeometries = &tgeo;
+    uint32_t max_inst = 1;
+    VkAccelerationStructureBuildSizesInfoKHR tsizes{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
+    vkGetAccelerationStructureBuildSizesKHR(dev.device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &tbgi, &max_inst, &tsizes);
+    if (!create_device_buffer(tsizes.accelerationStructureSize, kAsStore, r.tlas_buf, r.tlas_mem) ||
+        !create_device_buffer(tsizes.buildScratchSize, kScratch, r.tlas_scratch, r.tlas_scratch_mem)) {
+        r.failed = true;
+        logf("vk: OcaDim : test BVH : ses buffers TLAS n'ont pas pu etre faits");
+        return false;
+    }
+    VkAccelerationStructureCreateInfoKHR tci{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
+    tci.buffer = r.tlas_buf, tci.size = tsizes.accelerationStructureSize, tci.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+    if (vkCreateAccelerationStructureKHR(dev.device, &tci, nullptr, &r.tlas) != VK_SUCCESS) {
+        r.failed = true;
+        logf("vk: OcaDim : test BVH : sa TLAS n'a pas pu etre creee");
+        return false;
+    }
+    tbgi.dstAccelerationStructure = r.tlas;
+    tbgi.scratchData.deviceAddress = buffer_addr(r.tlas_scratch);
+    VkAccelerationStructureBuildRangeInfoKHR trange{1, 0, 0, 0};
+    const VkAccelerationStructureBuildRangeInfoKHR* tprange = &trange;
+    vkCmdBuildAccelerationStructuresKHR(cmd, 1, &tbgi, &tprange);
+    VkAccelerationStructureDeviceAddressInfoKHR tai{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
+    tai.accelerationStructure = r.tlas;
+    r.tlas_addr = vkGetAccelerationStructureDeviceAddressKHR(dev.device, &tai);
+
+    VkDescriptorSetLayoutBinding b[2]{};
+    b[0] = {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    b[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    li.bindingCount = 2, li.pBindings = b;
+    if (vkCreateDescriptorSetLayout(dev.device, &li, nullptr, &r.set) != VK_SUCCESS) {
+        r.failed = true;
+        logf("vk: OcaDim : test BVH : son jeu de descripteurs n'a pas pu etre fait");
+        return false;
+    }
+    VkPipelineLayoutCreateInfo pi{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    pi.setLayoutCount = 1, pi.pSetLayouts = &r.set;
+    if (vkCreatePipelineLayout(dev.device, &pi, nullptr, &r.lay) != VK_SUCCESS) {
+        r.failed = true;
+        logf("vk: OcaDim : test BVH : sa disposition n'a pas pu etre faite");
+        return false;
+    }
+    VkDescriptorPoolSize ps[2] = {{VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1}};
+    VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    pci.maxSets = 1, pci.poolSizeCount = 2, pci.pPoolSizes = ps;
+    if (vkCreateDescriptorPool(dev.device, &pci, nullptr, &r.pool) != VK_SUCCESS) {
+        r.failed = true;
+        logf("vk: OcaDim : test BVH : son pool de descripteurs n'a pas pu etre fait");
+        return false;
+    }
+    VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    ai.descriptorPool = r.pool, ai.descriptorSetCount = 1, ai.pSetLayouts = &r.set;
+    if (vkAllocateDescriptorSets(dev.device, &ai, &r.ds) != VK_SUCCESS) {
+        r.failed = true;
+        logf("vk: OcaDim : test BVH : son jeu de descripteurs n'a pas pu etre alloue");
+        return false;
+    }
+    IntelDriverGate gate;
+    const auto spv = BUILTIN_SPV(RT_TEST_COMP_SPV);
+    VkShaderModule m = VK_NULL_HANDLE;
+    VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+    mi.codeSize = spv.size, mi.pCode = spv.code;
+    if (guarded_shader_module(&mi, &m) != VK_SUCCESS) {
+        r.failed = true;
+        logf("vk: OcaDim : test BVH : son module n'a pas pu etre fait");
+        return false;
+    }
+    VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+    ci.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_COMPUTE_BIT, m, "main", nullptr};
+    ci.layout = r.lay;
+    const bool ok = guarded_compute(VK_NULL_HANDLE, &ci, &r.pipe) == VK_SUCCESS && r.pipe;
+    vkDestroyShaderModule(dev.device, m, nullptr);
+    if (!ok) {
+        r.failed = true;
+        logf("vk: OcaDim : test BVH : son pipeline n'a pas pu etre fait");
+        return false;
+    }
+    r.built = true;
+    if (!r.told) {
+        r.told = true;
+        logf("vk: OcaDim : test BVH : BLAS + TLAS d'un triangle, rayon vers +Z (rouge = touche, vert = manque)");
+    }
+    return true;
+}
+}  // namespace
+
 /// (apres la passe de scene : la couleur et la profondeur sont encore celles du jeu, avant le HUD et avant l'upscaler)
 void ssr_after_pass(VkCommandBuffer cmd, const Pass& ps) {
     if (opts.ssr <= 0 || g_ssr.failed || par_active.load(std::memory_order_relaxed)) return;
@@ -6562,6 +6782,58 @@ void ssr_after_pass(VkCommandBuffer cmd, const Pass& ps) {
     bound().reset();   // (le blit a lie son pipeline et son etat : les draws suivants les remettent)
     full_barrier(cmd, "barrier (apres le SSR)");
 }
+
+// (le test BVH : il ecrase la cible avec le rouge/vert du rayon, apres le SSR s'il tourne)
+void rt_test_after_pass(VkCommandBuffer cmd, const Pass& ps) {
+    if (!opts.rt_test || !dev.accel_struct || !dev.ray_query) return;
+    if (ps.n < 1 || !ps.color[0] || ps.samples != VK_SAMPLE_COUNT_1_BIT || ps.has_block_images) return;
+    const uint32_t w = ps.width, h = ps.height;
+    if (w < 1024 || h < 576) return;
+    const VkFormat fmt = ps.format0;
+    if (fmt != VK_FORMAT_R16G16B16A16_SFLOAT && fmt != VK_FORMAT_B10G11R11_UFLOAT_PACK32) return;
+    if (!dev.push_descriptor && !g_rt.ds) return;
+    SsrImage* im = ssr_image(w, h, cmd);
+    if (!im) return;
+    if (!ssr_make_pipelines()) return;   // (la disposition du blit ; le calcul SSR n'est pas utilise)
+    VkPipeline blit = ssr_blit_pipeline(fmt, ps.samples);
+    if (!blit) return;
+    if (!rt_build(cmd)) return;
+    full_barrier(cmd, "barrier (avant le test BVH)");
+    VkWriteDescriptorSetAccelerationStructureKHR asw{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
+    asw.accelerationStructureCount = 1, asw.pAccelerationStructures = &g_rt.tlas;
+    VkDescriptorImageInfo oi{VK_NULL_HANDLE, im->view, VK_IMAGE_LAYOUT_GENERAL};
+    VkWriteDescriptorSet wds[2]{};
+    wds[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    wds[0].pNext = &asw, wds[0].dstSet = g_rt.ds, wds[0].dstBinding = 0, wds[0].descriptorCount = 1;
+    wds[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    wds[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    wds[1].dstSet = g_rt.ds, wds[1].dstBinding = 1, wds[1].descriptorCount = 1;
+    wds[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, wds[1].pImageInfo = &oi;
+    vkUpdateDescriptorSets(dev.device, 2, wds, 0, nullptr);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g_rt.pipe);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g_rt.lay, 0, 1, &g_rt.ds, 0, nullptr);
+    vkCmdDispatch(cmd, (w + 7) / 8, (h + 7) / 8, 1);
+    full_barrier(cmd, "barrier (apres le test BVH)");
+    VkRenderingAttachmentInfo ca{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    ca.imageView = ps.color[0], ca.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    ca.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD, ca.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+    ri.renderArea = {{0, 0}, {w, h}}, ri.layerCount = 1, ri.colorAttachmentCount = 1, ri.pColorAttachments = &ca;
+    vkCmdBeginRendering(cmd, &ri);
+    const VkViewport vp{0.0f, 0.0f, (float)w, (float)h, 0.0f, 1.0f};
+    const VkRect2D sc{{0, 0}, {w, h}};
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    vkCmdSetScissor(cmd, 0, 1, &sc);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, blit);
+    VkDescriptorImageInfo bi{g_ssr.color_sampler, im->view, VK_IMAGE_LAYOUT_GENERAL};
+    VkWriteDescriptorSet wb{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 0, 0, 1,
+                            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &bi, nullptr, nullptr};
+    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_ssr.lay_blit, 0, 1, &wb);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRendering(cmd);
+    bound().reset();
+    full_barrier(cmd, "barrier (apres le test BVH, blit)");
+}
 }  // namespace
 void end_pass(VkCommandBuffer cmd) {
     Pass& ps = pass();   // (once: the accessor is a call and a thread-local read at each use. The same object for the thread's life: draw_begin_recording resets it in place)
@@ -6570,6 +6842,7 @@ void end_pass(VkCommandBuffer cmd) {
     ps.open = false;
     note_pass_end(cmd);   // (before the dumps and probes below: they record work, and the next pass's barrier is then a full one)
     ssr_after_pass(cmd, ps);   // (OcaDim: l'onglet Ray-Tracing, rien quand la ligne est sur Désactivé)
+    rt_test_after_pass(cmd, ps);   // (OcaDim: le test BVH, apres le SSR : il ecrase la cible)
     if (ps.has_block_images) {
         full_barrier(cmd, "barrier (before BC slice stores)");
         for (int i = 0; i < ps.n; i++)

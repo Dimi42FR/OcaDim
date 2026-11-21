@@ -2141,6 +2141,10 @@ Row rows[] = {
      "du reflet mélangée à la couleur (100 % : miroir) ; plus haut, plus visible, sans changer le coût. Expérimentale : "
      "à tester sur une copie de l'installation, une passe de calcul par image (sans effet avec les threads du replay).",
      nullptr, false, true},
+    {TAB_RT, "Test BVH (ray_query)", &opts.rt_test, 0, 1, 1, tx_onoff_fr,   // (OcaDim: le premier rayon, debug)
+     "Le premier rayon du vrai ray tracing : une accélération structure (TLAS) avec un triangle, et un rayon fixe. "
+     "Écran rouge : le rayon touche le triangle ; vert : il le manque. Sert à valider BLAS/TLAS/ray_query avant de "
+     "capturer un maillage du jeu. Désactivé par défaut, expérimental.", nullptr, false, true},
     {TAB_GAMEPLAY, "Quit", nullptr, 0, 0, 0, nullptr,
      "Save your progress first. Press Enter or A twice to quit. Esc or B cancels."},
 };
@@ -2569,6 +2573,7 @@ const char* ini_key(const Row& r) {
     if (r.value == &opts.precompile_bg) return "precompile_background";
     if (r.value == &opts.load_start) return "load_start";
     if (r.value == &opts.ssr) return "ssr";   // (OcaDim: les réflexions écran, onglet Ray-Tracing)
+    if (r.value == &opts.rt_test) return "rt_test";   // (OcaDim: le test BVH, onglet Ray-Tracing)
     if (r.value == &opts.intel_compiles) return "intel_shader_compiles";   // (two rows, one key)
     if (r.value == &opts.preset) return "quality_preset";   // (two rows, one key: Affichage's Profil and OcaDim's)
     if (r.value == &opts.fps_cap) return "frame_rate_cap";   // (host/nn_vi.c reads it at the start, then HOS_OPT_FPS_CAP)

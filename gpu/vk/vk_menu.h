@@ -164,6 +164,8 @@ struct Options {
                             // (le mode de l'émulateur : au chargement sur NVIDIA) — vk_programs.cpp programs_load_decide
     int ssr = 0;            // (OcaDim) réflexions écran (SSR), onglet Ray-Tracing : 0 Désactivée, sinon l'intensité en pour
                             // cent (5 à 100), mélangée à la couleur (vk_draw.cpp ssr_after_pass). Expérimental
+    int rt_test = 0;        // (OcaDim) test BVH : 0 off, 1 le rayon ray_query contre une TLAS d'un triangle (debug)
+                            // (vk_draw.cpp rt_test_after_pass). Expérimental
 };
 extern Options opts;
 constexpr int kAutoPreset = 6;   // (the Quality preset Auto (this PC): menu_auto_for_gpu, auto_settings.h)
