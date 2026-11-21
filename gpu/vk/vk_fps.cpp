@@ -40,12 +40,17 @@ std::atomic<int64_t> other_wait[2];   // (the fence waits of the game's other th
 std::atomic<int64_t> rt_wait[fs::kRtParts];   // (the render thread's waits by kind)
 std::atomic<bool> rt_running{false};
 thread_local bool on_render_thread = false;
+std::atomic<int64_t> startup_pipes_pending{0};   // (OcaDim: pipelines built by the start-up preparation, counted once)
 
 std::mutex ring_mu;
 fs::Ring<fs::kRing> ring;
 fs::Frame last_frame;   // (the frame trace's: fps_last_frame, on the presenting thread)
 
 }   // namespace
+
+void fps_note_startup_pipelines(int64_t n) {
+    if (n > 0) startup_pipes_pending.fetch_add(n, std::memory_order_relaxed);
+}
 
 int64_t fps_clock() { return prof_now(); }
 
@@ -142,6 +147,9 @@ void fps_presented() {
                 f.rt[fs::kRtWork] = (float)std::max(0.0, ms - waits * scale);
             }
             f.pipelines = (uint16_t)std::clamp<int64_t>(pipes - last_pipes, 0, 65535);
+            // (OcaDim: what the start-up preparation built before this counter existed, counted once into the first frame)
+            const int64_t startup_pipes = startup_pipes_pending.exchange(0, std::memory_order_relaxed);
+            if (startup_pipes > 0) f.pipelines = (uint16_t)std::min<int64_t>(65535, f.pipelines + startup_pipes);
             f.left_out = (uint16_t)std::clamp<int64_t>(left - last_left, 0, 65535);
         }
         if (perf && f.ms > 0) perf_frame(f, wait_ms, waits);   // (two presents in the same clock tick: not a frame)

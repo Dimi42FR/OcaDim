@@ -1815,6 +1815,11 @@ inline constexpr Entry kes[] = {
     {"your home folder", "tu carpeta personal"},
 };
 inline constexpr Entry kfr[] = {
+    {"Saves the pipelines your play built (shader hashes and draw state, no game data) with a filled-in report, as a zip in Downloads. Nothing is opened and nothing is uploaded: the zip stays on your PC.", "Enregistre les pipelines construits pendant votre partie (hashs de shaders et état de rendu, aucune donnée du jeu) avec un rapport rempli, sous forme de zip dans Téléchargements. Rien n'est ouvert ni envoyé : le zip reste sur votre PC."},
+    {"The zip stays on your PC: nothing is opened or uploaded.", "Le zip reste sur votre PC : rien n'est ouvert ni envoyé."},
+    {"Copying the report...", "Copie du rapport..."},
+    {"The report is copied. ", "Le rapport est copié. "},
+    {"The report is in the zip. ", "Le rapport est dans le zip. "},
     {"Loading pipelines", "Chargement des pipelines"},
     {"Preparing shaders", "Préparation des shaders"},
     {"Building pipelines", "Construction des pipelines"},

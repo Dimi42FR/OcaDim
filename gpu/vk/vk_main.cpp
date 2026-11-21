@@ -1522,6 +1522,8 @@ void window_size(uint32_t* w, uint32_t* h) {
 void prepare_with_screen() {
     prep_ended = CreateEventA(nullptr, TRUE, FALSE, nullptr);
     prep_running.store(true);
+    int64_t pipes_before = 0;
+    { int64_t a = 0, b = 0, c = 0; draw_stats(&a, &b, &c, &pipes_before); }
     std::thread worker([] {
         const bool update = prepare_is_update();   // (an update, RX_VK_PREPARE_BACKGROUND=1: what the notes name now, the rest in play)
         {
@@ -1645,6 +1647,11 @@ void prepare_with_screen() {
         painter.detach();
     }
     startup_screen(nullptr);
+    {   // (OcaDim: the pipelines the preparation built, into the FPS counter's first frame, so its Dev graph shows them)
+        int64_t a = 0, b = 0, c = 0, pipes_after = 0;
+        draw_stats(&a, &b, &c, &pipes_after);
+        if (pipes_after > pipes_before) fps_note_startup_pipelines(pipes_after - pipes_before);
+    }
     prep_running.store(false);
     logf("vk: start-up: the shaders took %.1f s", std::chrono::duration<double>(clock::now() - t0).count());
 }

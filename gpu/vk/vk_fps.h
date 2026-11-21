@@ -37,6 +37,9 @@ int64_t fps_clock();   // (ns, the clock the frames are stamped with)
 void fps_presented();
 /// (longshot) The frame fps_presented measured last, its parts (the frame trace, vk_replay.cpp status_tick, at the same present)
 fps_stats::Frame fps_last_frame();
+/// (OcaDim) Pipelines built during the start-up preparation (before the FPS counter exists): counted into the counter's first
+/// frame, so "Shaders built (4 s)" and the graph's red marks show them once play begins
+void fps_note_startup_pipelines(int64_t n);
 /// A wait on this thread (fps_stats::kGpuWait, kPace, kWaitRender or kWaitGpu), ns: subtracted from the renderer's time it is
 /// inside. (longshot) The game's fence waits (kWaitRender, kWaitGpu) on a thread other than the presenting one are summed for the
 /// frame instead, and taken out of the game's part (fps_stats::split)

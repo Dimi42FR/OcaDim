@@ -2002,9 +2002,8 @@ Row rows[] = {
     {TAB_DEBUG, "Developer", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, false, true, -1, true},
     // (longshot, first under the heading: debug_rows lists only those) the zip for the "Submit your pipelines" issue: share_pipeline_list, pipeline_share.h
     {TAB_DEBUG, "Save my pipeline list", nullptr, 0, 0, 0, nullptr,
-     "Helps remove first-load stutter for everyone: saves the pipelines your play built (shader hashes and draw state, no game "
-     "data) with a filled-in report as a zip in Downloads, copies the report and opens the \"Submit your pipelines\" issue. "
-     "Attach the zip there and paste the report. Nothing is uploaded for you."},
+     "Saves the pipelines your play built (shader hashes and draw state, no game data) with a filled-in report, as a zip in "
+     "Downloads. Nothing is opened and nothing is uploaded: the zip stays on your PC."},
     // (longshot) for testing, not a player's choice: when each made frame is shown (vk_framegen.cpp)
     {TAB_DEBUG, "Frame pacing", &opts.pace, 0, 1, 1, tx_onoff, "When each frame is shown.", hn_pace},
     // (longshot, threaded_rendering.h: the render thread and the recorder thread together, one row. Auto, On, Off as V-Sync's,
@@ -2131,17 +2130,17 @@ Row rows[] = {
      "Starts the game again. Save your progress first. Press Enter or A twice to restart. Esc or B "
      "cancels."},
     // ---- (OcaDim) Ray-Tracing : les essais, séparés de l'onglet OcaDim. Le SSR y est branché ; le SSAO a été retiré ----
-    {TAB_RT, "Ray-Tracing (TEST)", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, false, true, -1, true},
+    {TAB_RT, "Ray-Tracing — EXPÉRIMENTAL, NE FONCTIONNE PAS", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, false, true, -1, true},
     {TAB_RT, "Réflexions écran (SSR)", &opts.ssr, 0, 100, 5, tx_ssr_fr,   // (OcaDim: les reflets dans la profondeur)
-     "Les reflets sur l'eau, les sols et les vitres, calculés à partir de la couleur et de la profondeur de la scène : "
-     "seuls les reflets visibles à l'écran existent, et les bords s'effacent. Désactivée par défaut. Au-dessus, la part "
-     "du reflet mélangée à la couleur (100 % : miroir) ; plus haut, plus visible, sans changer le coût. Expérimentale : "
-     "à tester sur une copie de l'installation, une passe de calcul par image (sans effet avec les threads du replay).",
+     "EXPÉRIMENTAL — NE FONCTIONNE PAS DE FAÇON FIABLE. Les reflets sur l'eau, les sols et les vitres, calculés à partir de "
+     "la couleur et de la profondeur de la scène : seuls les reflets visibles à l'écran existent, et les bords s'effacent. "
+     "Désactivée par défaut. Au-dessus, la part du reflet mélangée à la couleur (100 % : miroir). À réserver aux tests, sur "
+     "une copie de l'installation.",
      nullptr, false, true},
     {TAB_RT, "Test BVH (ray_query)", &opts.rt_test, 0, 1, 1, tx_onoff_fr,   // (OcaDim: le premier rayon, debug)
-     "Le premier rayon du vrai ray tracing : une accélération structure (TLAS) avec un triangle, et un rayon fixe. "
-     "Écran rouge : le rayon touche le triangle ; vert : il le manque. Sert à valider BLAS/TLAS/ray_query avant de "
-     "capturer un maillage du jeu. Désactivé par défaut, expérimental.", nullptr, false, true},
+     "DEBUG — NE PRODUIT PAS UNE IMAGE CORRECTE. Le premier rayon du vrai ray tracing : une structure d'accélération (TLAS) "
+     "avec un triangle, et un rayon fixe. Écran rouge : le rayon touche le triangle ; vert : il le manque. Sert seulement à "
+     "valider BLAS/TLAS/ray_query. Désactivé par défaut.", nullptr, false, true},
     {TAB_GAMEPLAY, "Quit", nullptr, 0, 0, 0, nullptr,
      "Save your progress first. Press Enter or A twice to quit. Esc or B cancels."},
 };
@@ -2946,8 +2945,7 @@ namespace ps = pipeline_share;
 std::string share_said;    // (the help box's line after a save: where the zip went and what to do, or why there is none)
 std::string share_value;   // (the row's value after a save: Saved, or Not saved)
 constexpr const char* kShareSaidLongest = "Saved ocadim-pipelines-2026-12-31.zip (123456 pipelines) in Downloads. The report "
-    "is in the zip. Open github.com/Dimi42FR/OcaDim/issues and attach the zip to a comment, then paste the report and say "
-    "where you played.";   // (measure_help: the help box's room)
+    "is copied. The zip stays on your PC: nothing is opened or uploaded.";   // (measure_help: the help box's room)
 std::string share_saved;   // (the first sentence: the zip's name, its pipelines and its folder)
 std::atomic<bool> share_busy{false};   // (the worker is copying and opening: presses wait for it)
 std::atomic<int> share_result{-1};     // (the worker's answer: 1 copied, 2 the issue opened; -1 none waiting)
@@ -2967,8 +2965,7 @@ std::string share_saved_line(const std::string& name, long long n, const std::st
 /// The rest of it, once the worker has answered (share_result: 1 copied, 2 the issue opened)
 std::string share_done_line(int r) {
     return std::string(i18n::tr((r & 1) ? "The report is copied. " : "The report is in the zip. ")) +
-           i18n::tr((r & 2) ? "The OcaDim issue page is open in your browser: attach" : "Open github.com/Dimi42FR/OcaDim/issues and attach") +
-           i18n::tr(" the zip to a comment, then paste the report and say where you played.");
+           i18n::tr("The zip stays on your PC: nothing is opened or uploaded.");
 }
 /// The help box's line when the zip could not be written in that folder (share_folder_name)
 std::string share_not_written_line(const std::string& folder) { return i18n::tr("The zip could not be written in ") + folder + "."; }
@@ -3328,32 +3325,24 @@ void share_pipeline_list() {
         share_finish();
         return;
     }
-    // (the clipboard, the folder and the browser on a worker of their own: ShellExecuteW and xdg-open can take hundreds of ms, and
-    // this is the present thread. Presses are ignored until it is done: share_busy)
+    // (the report on the clipboard on a worker of their own: it can take hundreds of ms, and this is the present thread. Nothing
+    // is opened: no browser, no folder, no issue page. Presses are ignored until it is done: share_busy)
     share_busy.store(true);
-    share_said = share_saved + i18n::tr("Opening the issue...");
+    share_said = share_saved + i18n::tr("Copying the report...");
     try {
-        std::thread([lines, path, dir] {
+        std::thread([lines] {
 #ifdef _WIN32
             using CoInitFn = HRESULT(WINAPI*)(void*, DWORD);
             using CoUninitFn = void(WINAPI*)();
             static const auto co_init = (CoInitFn)(void*)share_proc(L"ole32.dll", "CoInitializeEx");
             static const auto co_uninit = (CoUninitFn)(void*)share_proc(L"ole32.dll", "CoUninitialize");
-            // (ShellExecute wants COM on its thread: apartment-threaded, no OLE1 DDE)
-            const bool com = co_init && co_uninit && SUCCEEDED(co_init(nullptr, 0x2 /*COINIT_APARTMENTTHREADED*/ | 0x4 /*COINIT_DISABLE_OLE1DDE*/));
+            const bool com = co_init && co_uninit && SUCCEEDED(co_init(nullptr, 0x2 | 0x4));
 #endif
             const bool copied = share_clipboard(lines);
 #ifdef _WIN32
-            share_open(path, true);
-#else
-            (void)path;
-            share_open(dir);
-#endif
-            const bool opened = share_open(ps::kIssueUrl);
-#ifdef _WIN32
             if (com) co_uninit();
 #endif
-            share_result.store((copied ? 1 : 0) | (opened ? 2 : 0));
+            share_result.store(copied ? 1 : 0);   // (no bit 2: nothing is opened)
         }).detach();
     } catch (const std::system_error&) {   // (no thread to be had: the zip is saved; say so, and the next press works)
         share_result.store(0);
