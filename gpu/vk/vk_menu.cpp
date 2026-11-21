@@ -1969,9 +1969,6 @@ Row rows[] = {
     {TAB_OCADIM, "Write back diff", &opts.wb_diff, 0, 1, 1, tx_onoff,   // (OcaDim)
      "Compares only the pages a submission wrote back instead of copying whole pools: the fastest, and on by default. Off "
      "returns the whole copies.", nullptr, false, true},
-    {TAB_OCADIM, "Upscaler notes cache", &opts.notes_keep, 0, 1, 1, tx_onoff,   // (OcaDim)
-     "Reuses the upscaler's scene note while the target and the camera stay the same: fewer locks a frame.",
-     nullptr, false, true},
     {TAB_DEBUG, "Heart protection", nullptr, 0, 0, 0, nullptr,
      "Protects Link's hearts. Hits can still knock him back.", nullptr, false, true, 0},
     {TAB_DEBUG, "Autosave:", &opts.transition_autosave, 0, 1, 1, tx_onoff,
@@ -6403,7 +6400,6 @@ void menu_set_gpu_count(int count) {
 bool menu_is_open() { return open_now.load(std::memory_order_relaxed); }
 double menu_target_ms() { return fps_target_ms(); }   // (the performance summary's: perf_report.cpp)
 int menu_wb_diff() { return opts.wb_diff; }        // (OcaDim: vk_memory.cpp wb_diff_on)
-int menu_notes_keep() { return opts.notes_keep; }  // (OcaDim: the upscaler note, while target and camera stay)
 int menu_fps_cap() { return fps_cap_now(); }          // (likewise: its fps_cap label)
 bool scene_tonemap_on() { return dev.hdr && opts.hdr == 2 && opts.hdr_tonemap == 1; }
 // (the tools off on the Debug tab: flight, the free camera and heart protection put away; -1, heart protection never set, is the

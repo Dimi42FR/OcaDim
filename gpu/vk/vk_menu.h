@@ -80,7 +80,6 @@ struct Options {
     int mouse_invert_x = 0; // the mouse's left and right swapped (HOS_OPT_MOUSE_INVERT_X, 61)
     int run_mode = 0;    // (OcaDim) the Run key's Hold/Toggle, the Walk key's mirror (host/nn_hid.c run_held)
     int wb_diff = 1;     // (OcaDim) Debug: the write-back diff, on by default (vk_memory.cpp wb_diff_on)
-    int notes_keep = 1;  // (OcaDim) Debug: the upscaler's scene note reused while the target and the camera stay
     int walk_mode = 0;    // (longshot) the Walk key (the Controls page): 0 Link walks while it is held, 1 one press walks and the next
                           // runs again (host/nn_hid.c walk_held: HOS_OPT_WALK_MODE, 49)
     int walk_speed = 45;  // (longshot) how far the movement keys tilt the left stick while Link walks, percent, 15 to 90
@@ -218,7 +217,6 @@ int menu_transition_autosave();
 /// tier for this PC; 0 before the card is known
 int menu_memory_tier();
 int menu_wb_diff();      // (OcaDim) the write-back diff row
-int menu_notes_keep();   // (OcaDim) the upscaler notes cache row
 int menu_shadow_res();   // (Shadow resolution, HOS_OPT_SHADOW_RES: the size drawn, Auto resolved)
 int menu_damage_taken();   // (Damage taken, HOS_OPT_DAMAGE_TAKEN: 1, Normal, while the tools are off)
 int menu_take_cheat_action();
