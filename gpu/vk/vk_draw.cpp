@@ -6248,8 +6248,9 @@ struct SsrPush {   // (doit suivre ssr.comp : 64 octets)
     float view_up[3];   // (la verticale du monde en espace vue : un sol reste un sol quand la camera monte ou descend)
     float pad3;
 };
-struct SsrImage {   // (une image temporaire par taille : gardee jusqu'a la fin du run)
+struct SsrImage {   // (une image temporaire par taille et format : gardee jusqu'a la fin du run)
     uint32_t w = 0, h = 0;
+    VkFormat format = VK_FORMAT_UNDEFINED;
     VkImage image = VK_NULL_HANDLE;
     VmaAllocation mem = nullptr;
     VkImageView view = VK_NULL_HANDLE;
@@ -6279,18 +6280,18 @@ struct SsrState {
 };
 SsrState g_ssr;
 
-SsrImage* ssr_image(uint32_t w, uint32_t h, VkCommandBuffer cmd) {
+SsrImage* ssr_image(uint32_t w, uint32_t h, VkFormat format, VkCommandBuffer cmd) {
     SsrState& s = g_ssr;
     for (SsrImage& im : s.images)
-        if (im.w == w && im.h == h) return &im;
+        if (im.w == w && im.h == h && im.format == format) return &im;
     if (s.images.size() >= 8) return nullptr;   // (un petit tableau : les quelques tailles de la resolution dynamique)
     SsrImage im;
-    im.w = w, im.h = h;
+    im.w = w, im.h = h, im.format = format;
     VkImageCreateInfo ic{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-    ic.imageType = VK_IMAGE_TYPE_2D, ic.format = VK_FORMAT_R16G16B16A16_SFLOAT, ic.extent = {w, h, 1};
+    ic.imageType = VK_IMAGE_TYPE_2D, ic.format = format, ic.extent = {w, h, 1};
     ic.mipLevels = 1, ic.arrayLayers = 1, ic.samples = VK_SAMPLE_COUNT_1_BIT;
     ic.tiling = VK_IMAGE_TILING_OPTIMAL;
-    ic.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    ic.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     if (!create_image(ic, im.image, im.mem)) return nullptr;
     VkImageViewCreateInfo vc{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     vc.image = im.image, vc.viewType = VK_IMAGE_VIEW_TYPE_2D, vc.format = ic.format;
@@ -6309,7 +6310,7 @@ SsrImage* ssr_image(uint32_t w, uint32_t h, VkCommandBuffer cmd) {
     di.imageMemoryBarrierCount = 1, di.pImageMemoryBarriers = &b;
     vkCmdPipelineBarrier2(cmd, &di);
     s.images.push_back(im);
-    logf("vk: OcaDim : SSR : image temporaire %ux%u RGBA16F", w, h);
+    logf("vk: OcaDim : SSR : image temporaire %ux%u format %d", w, h, (int)format);
     return &s.images.back();
 }
 
@@ -6798,7 +6799,7 @@ void ssr_after_pass(VkCommandBuffer cmd, const Pass& ps) {
     const uint64_t fno = texture_frame_no();
     uint64_t was = applied.load(std::memory_order_relaxed);
     if (was == fno || !applied.compare_exchange_strong(was, fno, std::memory_order_relaxed)) return;
-    SsrImage* im = ssr_image(w, h, cmd);
+    SsrImage* im = ssr_image(w, h, VK_FORMAT_R16G16B16A16_SFLOAT, cmd);
     if (!im) {
         g_ssr.failed = true;
         logf("vk: OcaDim : SSR : son image temporaire n'a pas pu etre faite : la ligne est sans effet");
@@ -6933,8 +6934,7 @@ void shine_apply(VkCommandBuffer cmd, Texture* color, Texture* depth, uint32_t w
     if (opts.ssr <= 0 || g_ssr.failed || !color || !depth) return why("reglage ou image");
     if (w < 1024 || h < 576) return why("taille");
     // (OcaDim 0.0.6) l'image finale du jeu est en B10G11R11 (HDR) ; le blit convertit depuis l'image temporaire RGBA16F
-    if (color->format != VK_FORMAT_R16G16B16A16_SFLOAT && color->format != VK_FORMAT_B10G11R11_UFLOAT_PACK32)
-        return why("format de la couleur");
+    if (color->format != VK_FORMAT_B10G11R11_UFLOAT_PACK32) return why("format de la couleur");
     if (color->type != VK_IMAGE_TYPE_2D || depth->type != VK_IMAGE_TYPE_2D) return why("type");
     if (!(color->usage & VK_IMAGE_USAGE_SAMPLED_BIT) || !(depth->usage & VK_IMAGE_USAGE_SAMPLED_BIT)) return why("usage sampler");
     if (!(color->usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT)) return why("usage transfert");
@@ -6947,7 +6947,7 @@ void shine_apply(VkCommandBuffer cmd, Texture* color, Texture* depth, uint32_t w
     // (OcaDim 0.0.6) l'effet est une information BASSE FREQUENCE : calcule au quart de la resolution, le bruit de la
     // profondeur s'y integre au lieu de faire des plaques, et le cout tombe d'un facteur 16. Le blit l'agrandit en douceur
     const uint32_t ew = w, eh = h;   // (OcaDim 0.0.6 : pleine resolution - l'agrandissement depuis le quart de resolution faisait un bruit de couleur)
-    SsrImage* im = ssr_image(ew, eh, cmd);
+    SsrImage* im = ssr_image(ew, eh, color->format, cmd);   // (le format de la cible : la copie n'aura rien a convertir)
     if (!im) {
         g_ssr.failed = true;
         logf("vk: OcaDim : Shine : son image temporaire n'a pas pu etre faite : la ligne est sans effet");
@@ -6998,36 +6998,13 @@ void shine_apply(VkCommandBuffer cmd, Texture* color, Texture* depth, uint32_t w
     vkCmdPushConstants(cmd, g_ssr.lay_compute, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof pc, &pc);
     vkCmdDispatch(cmd, (ew + 7) / 8, (eh + 7) / 8, 1);
     full_barrier(cmd, "barrier (Shine, avant la copie)");
-    // (OcaDim 0.0.6) l'ecriture : une PASSE DE RENDU, pas un blit. Le blit RGBA16F -> B10G11R11 corrompait l'image sur ce
-    // pilote ; ici le materiel convertit en ecrivant l'attachement, ce qui est garanti
-    const VkImageView av = attachment_view(color);
-    const VkPipeline blit = ssr_blit_pipeline(color->format, VK_SAMPLE_COUNT_1_BIT);
-    if (!av || !blit) {
-        full_barrier(cmd, "barrier (apres le Shine)");
-        bound().reset();
-        return;
-    }
-    VkRenderingAttachmentInfo ca{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-    ca.imageView = av;
-    ca.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    ca.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    ca.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
-    ri.renderArea = {{0, 0}, {w, h}};
-    ri.layerCount = 1;
-    ri.colorAttachmentCount = 1, ri.pColorAttachments = &ca;
-    vkCmdBeginRendering(cmd, &ri);
-    const VkViewport vp{0.0f, 0.0f, (float)w, (float)h, 0.0f, 1.0f};
-    const VkRect2D sc{{0, 0}, {w, h}};
-    vkCmdSetViewport(cmd, 0, 1, &vp);
-    vkCmdSetScissor(cmd, 0, 1, &sc);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, blit);
-    VkDescriptorImageInfo bi{g_ssr.color_sampler, im->view, VK_IMAGE_LAYOUT_GENERAL};
-    VkWriteDescriptorSet wb{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 0, 0, 1,
-                            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &bi, nullptr, nullptr};
-    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_ssr.lay_blit, 0, 1, &wb);
-    vkCmdDraw(cmd, 3, 1, 0, 0);
-    vkCmdEndRendering(cmd);
+    // (OcaDim 0.0.6) l'ecriture : une COPIE. L'image temporaire a le format de la cible, donc rien n'est converti : un
+    // blit de conversion corrompait l'image, une passe de rendu l'assombrissait
+    VkImageCopy region{};
+    region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.extent = {ew, eh, 1};
+    vkCmdCopyImage(cmd, im->image, VK_IMAGE_LAYOUT_GENERAL, color->image, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
     full_barrier(cmd, "barrier (apres le Shine)");
     bound().reset();   // (le compute a lie son pipeline : les draws suivants remettent le leur)
 }
@@ -7042,7 +7019,7 @@ void rt_test_after_pass(VkCommandBuffer cmd, const Pass& ps) {
     const VkFormat fmt = ps.format0;
     if (fmt != VK_FORMAT_R16G16B16A16_SFLOAT && fmt != VK_FORMAT_B10G11R11_UFLOAT_PACK32) return;
     if (!dev.push_descriptor && !g_rt.ds) return;
-    SsrImage* im = ssr_image(w, h, cmd);
+    SsrImage* im = ssr_image(w, h, VK_FORMAT_R16G16B16A16_SFLOAT, cmd);
     if (!im) return;
     if (!ssr_make_pipelines()) return;   // (la disposition du blit ; le calcul SSR n'est pas utilise)
     VkPipeline blit = ssr_blit_pipeline(fmt, ps.samples);
