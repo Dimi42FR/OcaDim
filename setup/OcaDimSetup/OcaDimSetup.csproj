@@ -15,7 +15,7 @@
     <ApplicationIcon>..\..\assets\branding\ocadim.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Product>OcaDim Setup</Product>
-    <Version>0.0.5.0</Version>
+    <Version>0.0.5.2</Version>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>
 

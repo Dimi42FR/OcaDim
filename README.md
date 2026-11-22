@@ -8,6 +8,14 @@
 
 <h4 align="center">La récompilation native d'<b>Ocarina of Time</b> sur PC, depuis <b>ta propre copie du jeu</b> — par <b>Dimi42FR</b></h4>
 
+## Nouveautés de la 0.0.5-2 — la mémoire
+
+Le cache de programmes traduits (7,2 Go chez nous, 47 798 programmes) était chargé **en entier en
+RAM** au démarrage : **18,7 Go** pour le jeu, sur une machine de 32 Go. Depuis cette version, Auto
+s'arrête à un budget : au-delà de 2 Go de cache, les programmes se lisent à leur première
+utilisation, sans retraduction. Mesuré en jeu : **8,6 Go au lieu de 18,7**, mêmes fps, aucun
+programme recréé. La ligne **« Activé »** du F1 force toujours l'ancien comportement.
+
 ## Nouveautés de la 0.0.5 — le replay en parallèle
 
 C'est d'abord une version de **performance**. Le *replay* — ce que le CPU doit faire pour transformer les
@@ -90,7 +98,7 @@ ton `.nup`.
 **27 heures.** C'est le temps qu'il a fallu pour sortir cette première version : du premier commit (14 novembre, 23:53)
 à la version livrée (16 novembre, 03:19). La frame generation d'AMD y est entrée dans la dernière nuit.
 
-**Télécharger :** [OcaDim 0.0.5 — le Setup Windows x64](https://github.com/Dimi42FR/OcaDim/releases/latest). Il compile le
+**Télécharger :** [OcaDim 0.0.5-2 — le Setup Windows x64](https://github.com/Dimi42FR/OcaDim/releases/latest). Il compile le
 jeu chez toi, à partir de ton `.nup`.
 
 **Tu viens tester ?** Il y a trois choses à essayer ce soir et quatre façons d'aider sans coder, plus bas, dans
@@ -315,7 +323,7 @@ Ce qui nous aide le plus, ce n'est pas « c'est bien » : c'est **où ça casse*
 ### Avec le Setup (recommandé)
 
 Le paquet est dans les **[releases](https://github.com/Dimi42FR/OcaDim/releases/latest)** :
-`OcaDimSetup-0.0.5.zip` (501 Mo, SHA-256 `c713c87a…37bd91`). Dézippe-le, lance **`OcaDimSetup.exe`**, choisis ton
+`OcaDimSetup-0.0.5-2.zip` (≈ 500 Mo). Dézippe-le, lance **`OcaDimSetup.exe`**, choisis ton
 `.nup`, attends. Aux lancements suivants, le même exe propose **Jouer / Mettre à jour / Désinstaller**.
 
 ### À la main, depuis les sources

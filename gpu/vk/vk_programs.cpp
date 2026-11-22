@@ -22,6 +22,7 @@
 #endif
 
 #include "vk_internal.h"
+#include "vk_paths.h"
 #include "vk_draw.h"
 #include "vk_shader.h"
 #include "vk_progcache.h"
@@ -34,6 +35,27 @@
 namespace mkwvk {
 
 bool menu_load_start();   // (OcaDim: vk_menu.cpp, la ligne « Programmes avant le titre »)
+
+namespace {
+/// (OcaDim 0.0.5-2) Un cache de programmes de cette taille, chargé avant le titre, met des dizaines de Go en RAM (mesuré :
+/// 7,2 Go de cache, 12,6 Go résidents, 18,7 Go pour le jeu). Auto laisse alors les chargements aux premières utilisations,
+/// comme RX_VK_LOAD=create. La ligne « Activé » force toujours le chargement avant le titre.
+constexpr uint64_t kLoadAtStartCacheMax = 2ull << 30;
+uint64_t cache_file_bytes() {
+    // (the path asked of vk_paths.h, not of program_cache_path(): that one runs the cache's own init, which has not run yet
+    // when this decides, and answered nothing)
+    uint64_t best = 0;
+    for (const char* name : {"ocadim_programs.bin", "ocadim_programs.zst.bin"}) {
+        FILE* f = fopen(cache_path(name).c_str(), "rb");
+        if (!f) continue;
+        _fseeki64(f, 0, SEEK_END);
+        const int64_t n = _ftelli64(f);
+        fclose(f);
+        if (n > 0) best = std::max<uint64_t>(best, (uint64_t)n);
+    }
+    return best;
+}
+}   // namespace
 
 ProgramCensus census;
 thread_local UseCounters use_counters;
@@ -353,6 +375,16 @@ void programs_load_decide(bool native_mesh) {
     const char* mode = getenv("RX_VK_LOAD");
     const bool by_row = !mode && menu_load_start();
     if (by_row) mode = "start";
+    // (OcaDim 0.0.5-2) la règle d'Auto s'arrête à la taille du cache : au-delà du budget, les programmes ne sont plus
+    // chargés avant le titre, sinon le cache entier passe en RAM (12,6 Go mesurés). « Activé » et RX_VK_LOAD=start forcent.
+    if (by_row) {
+        const uint64_t bytes = cache_file_bytes();
+        if (bytes > kLoadAtStartCacheMax) {
+            mode = "create";
+            logf("vk: program cache %.0f MB: the programs are loaded at their first use, not before the title "
+                 "(RX_VK_LOAD=start loads them all, and the RAM with them)", (double)bytes / (1 << 20));
+        }
+    }
     const load_default::Choice c = load_default::choose(mode, native_mesh, load_default::marker_there(load_fallback_path()),
                                                         env_on("RX_VK_PROGRAM_CACHE_ZSTD"));
     const bool host_v14 = (!mode && host && host->version <= 14);
