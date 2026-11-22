@@ -75,21 +75,24 @@ void main() {
         imageStore(out_img, px, base);
         return;
     }
-    // (la normale, des differences de profondeur ; un voisin trop loin est une silhouette : on ne touche a rien)
+    // (la normale, des differences de profondeur. OcaDim 0.0.6, passe de qualite : le voisinage d'UN pixel donnait une
+    // normale bruitee (la profondeur du jeu l'est) et la brillance se rallumait par plaques. Trois pixels : la normale est
+    // lissee, et la pente qui en sort donne une CONFIANCE - un bord de silhouette la met a zero au lieu de baver)
     const vec2 tx = pc.inv_size;
-    const float dl = textureLod(depth_tex, uv - vec2(tx.x, 0.0), 0.0).r;
-    const float dr = textureLod(depth_tex, uv + vec2(tx.x, 0.0), 0.0).r;
-    const float du = textureLod(depth_tex, uv - vec2(0.0, tx.y), 0.0).r;
-    const float dd = textureLod(depth_tex, uv + vec2(0.0, tx.y), 0.0).r;
-    const float reach = 0.5 * abs(p.z) + 2.0;
+    const float o = 3.0;   // (pixels de voisinage)
+    const float dl = textureLod(depth_tex, uv - vec2(tx.x * o, 0.0), 0.0).r;
+    const float dr = textureLod(depth_tex, uv + vec2(tx.x * o, 0.0), 0.0).r;
+    const float du = textureLod(depth_tex, uv - vec2(0.0, tx.y * o), 0.0).r;
+    const float dd = textureLod(depth_tex, uv + vec2(0.0, tx.y * o), 0.0).r;
+    const float reach = 2.0 * abs(p.z) + 4.0;   // (le voisinage plus large franchit plus de distance)
     if (dl >= 0.99995 || dr >= 0.99995 || du >= 0.99995 || dd >= 0.99995) {
         imageStore(out_img, px, base);
         return;
     }
-    const vec3 pl = view_pos(uv - vec2(tx.x, 0.0), dl);
-    const vec3 pr = view_pos(uv + vec2(tx.x, 0.0), dr);
-    const vec3 pu = view_pos(uv - vec2(0.0, tx.y), du);
-    const vec3 pd = view_pos(uv + vec2(0.0, tx.y), dd);
+    const vec3 pl = view_pos(uv - vec2(tx.x * o, 0.0), dl);
+    const vec3 pr = view_pos(uv + vec2(tx.x * o, 0.0), dr);
+    const vec3 pu = view_pos(uv - vec2(0.0, tx.y * o), du);
+    const vec3 pd = view_pos(uv + vec2(0.0, tx.y * o), dd);
     if (abs(pl.z - p.z) > reach || abs(pr.z - p.z) > reach || abs(pu.z - p.z) > reach || abs(pd.z - p.z) > reach) {
         imageStore(out_img, px, base);
         return;
@@ -110,8 +113,13 @@ void main() {
 
     const float up = clamp(dot(n, pc.view_up), 0.0, 1.0);
     const float ndv = clamp(dot(n, eye), 0.0, 1.0);
+    // (OcaDim 0.0.6) confiance de planéité : la pente de profondeur rapportée à la distance. Un sol vu de biais a une
+    // pente faible et reguliere ; un bord d'objet, une marche ou une silhouette la font exploser : on n'y touche pas
+    const float slope = length(vec2(scene_z(dr) - scene_z(dl), scene_z(dd) - scene_z(du))) * 0.5 /
+                        max(1.0, -p.z) / (o * 2.0);
+    const float conf = 1.0 - smoothstep(0.015, 0.090, slope);
     // (les surfaces qui regardent le ciel : sols, eau, dalles. Un mur vertical ne brille pas)
-    const float flat_mask = smoothstep(0.30, 0.75, up);
+    const float flat_mask = smoothstep(0.30, 0.75, up) * conf;
 
     // (1) la teinte de ciel : faible de face, plus forte en incidence rasante. Une couleur FIXE (le haut de l'image),
     // donc rien qui glisse ni qui bave)
@@ -119,7 +127,7 @@ void main() {
     // melanger telles quelles brulait le sol et les personnages en blanc
     const vec3 sky = min(textureLod(color_tex, vec2(0.5, 0.02), 0.0).rgb, vec3(1.5));
     const float fresnel = 0.05 + 0.95 * pow(1.0 - ndv, 3.0);
-    float tint = pc.strength * flat_mask * (0.07 + 0.09 * fresnel);   // (visible a tout angle ; faible, car le jeu peut finir deux passes)
+    float tint = pc.strength * flat_mask * (0.06 + 0.08 * fresnel);   // (visible a tout angle ; faible, car le jeu peut finir deux passes)
     vec3 col = mix(base.rgb, mix(vec3(dot(sky, vec3(0.2126, 0.7152, 0.0722))), sky, 0.45), clamp(tint, 0.0, 0.7));
 
     // (2) le scintillement : des points qui vivent, sur les surfaces horizontales, plus petits et plus rares au loin.

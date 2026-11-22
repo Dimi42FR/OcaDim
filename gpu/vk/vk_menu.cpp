@@ -2141,12 +2141,8 @@ Row rows[] = {
      "cancels."},
     // ---- (OcaDim) Ray-Tracing : les essais, séparés de l'onglet OcaDim. Le SSR y est branché ; le SSAO a été retiré ----
     {TAB_RT, "Ray-Tracing — EXPÉRIMENTAL, NE FONCTIONNE PAS", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, false, true, -1, true},
-    {TAB_RT, "Réflexions écran (SSR)", &opts.ssr, 0, 100, 5, tx_ssr_fr,   // (OcaDim: les reflets dans la profondeur)
-     "EXPÉRIMENTAL — NE FONCTIONNE PAS DE FAÇON FIABLE. Les reflets sur l'eau, les sols et les vitres, calculés à partir de "
-     "la couleur et de la profondeur de la scène : seuls les reflets visibles à l'écran existent, et les bords s'effacent. "
-     "Désactivée par défaut. Au-dessus, la part du reflet mélangée à la couleur (100 % : miroir). À réserver aux tests, sur "
-     "une copie de l'installation.",
-     nullptr, false, true},
+    // (OcaDim 0.0.6 : la ligne « Réflexions écran (SSR) » est retiree — l'effet donnait des taches sur les sols, faute de
+    // G-buffer pour une normale propre. Le code est garde (vk_draw.cpp shine_apply, shaders/ssr.comp) pour une reprise)
     {TAB_RT, "Test BVH (ray_query)", &opts.rt_test, 0, 1, 1, tx_onoff_fr,   // (OcaDim: le premier rayon, debug)
      "DEBUG — NE PRODUIT PAS UNE IMAGE CORRECTE. Le premier rayon du vrai ray tracing : une structure d'accélération (TLAS) "
      "avec un triangle, et un rayon fixe. Écran rouge : le rayon touche le triangle ; vert : il le manque. Sert seulement à "
