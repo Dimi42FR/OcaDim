@@ -6793,12 +6793,8 @@ void ssr_after_pass(VkCommandBuffer cmd, const Pass& ps) {
     // (OcaDim : la scene peut finir en plusieurs passes ; la derniere est l'image que l'upscaler prend, c'est elle qui doit
     // porter les reflets. On applique donc a chaque fin de passe de cette profondeur, la derniere gagne. Le cout est celui
     // d'une passe par fin de passe ; le jeu n'en a qu'une en pratique)
-    // (OcaDim 0.0.6) une seule application par frame : le reseau d'upscale est dispatche plusieurs fois, et chaque
-    // passage remelangeait une image deja traitee (l'ecran partait au blanc)
-    static std::atomic<uint64_t> applied{~0ull};
-    const uint64_t fno = texture_frame_no();
-    uint64_t was = applied.load(std::memory_order_relaxed);
-    if (was == fno || !applied.compare_exchange_strong(was, fno, std::memory_order_relaxed)) return;
+    // (OcaDim 0.0.6) pas de verrou : si l'upscaler dispatche deux reseaux, chacun doit recevoir l'effet, sinon le
+    // second reecrit l'image sans lui et l'effet alterne d'une image a l'autre
     SsrImage* im = ssr_image(w, h, VK_FORMAT_R16G16B16A16_SFLOAT, cmd);
     if (!im) {
         g_ssr.failed = true;
@@ -6824,7 +6820,9 @@ void ssr_after_pass(VkCommandBuffer cmd, const Pass& ps) {
     const float max_dist = std::min(4000.0f, std::max(250.0f, far_z * 0.05f));
     SsrPush pc{};
     pc.proj[0] = proj[0], pc.proj[1] = proj[5], pc.proj[2] = proj[10], pc.proj[3] = proj[11];
-    pc.jitter[0] = proj[2], pc.jitter[1] = proj[6];
+    // (OcaDim 0.0.6) la projection SANS le jitter de l'upscaler : celui-ci alterne d'une image a l'autre et faisait
+    // osciller le reflet (clignotement a la frequence des images)
+    pc.jitter[0] = 0.0f, pc.jitter[1] = 0.0f;
     pc.inv_size[0] = 1.0f / (float)w, pc.inv_size[1] = 1.0f / (float)h;
     pc.near_z = near_z, pc.max_dist = max_dist;
     pc.thickness = std::max(2.0f, max_dist / (float)steps * 1.5f);
@@ -7118,7 +7116,8 @@ bool shine_make(VkFormat format) {
 /// (OcaDim 0.0.6) Pose la couche « rue mouillee » sur l'image de la fenetre (deja presentee). false : rien fait.
 /// La cible arrive en TRANSFER_DST_OPTIMAL et ressort en COLOR_ATTACHMENT_OPTIMAL (l'overlay d'ImGui suit, en LOAD).
 bool present_shine(VkCommandBuffer cmd, VkImage dst, VkImageView dst_view, VkFormat format, uint32_t w, uint32_t h, int strength) {
-    if (strength <= 0 || !dst_view || !w || !h) return false;
+    const bool any = opts.fx_style != 0 || opts.ssr > 0 || opts.fx_vignette > 0 || opts.fx_warm != 50 || opts.fx_grain > 0;
+    if (!any || !dst_view || !w || !h) return false;
     if (!shine_make(format)) return false;
     VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
     b.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT, b.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
@@ -7142,9 +7141,21 @@ bool present_shine(VkCommandBuffer cmd, VkImage dst, VkImageView dst_view, VkFor
     vkCmdSetViewport(cmd, 0, 1, &v);
     vkCmdSetScissor(cmd, 0, 1, &sc);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_shine.pipe);
-    struct { float strength; float time; float pad[2]; } pc{};
-    pc.strength = (float)std::clamp(strength, 0, 100) / 100.0f;
-    pc.time = (float)((prof_now() / 1000000) % 100000) / 1000.0f;
+    struct { float sheen, vignette, warm, grain; } pc{};
+    pc.sheen = (float)std::clamp(opts.ssr, 0, 100) / 100.0f;
+    pc.vignette = (float)std::clamp(opts.fx_vignette, 0, 100) / 100.0f;
+    pc.warm = ((float)std::clamp(opts.fx_warm, 0, 100) - 50.0f) / 50.0f;
+    pc.grain = (float)std::clamp(opts.fx_grain, 0, 100) / 100.0f;
+    // (OcaDim 0.0.6) les styles graphiques : quatre valeurs chacun, posees ensemble. 0 : les lignes du dessous)
+    switch (std::clamp(opts.fx_style, 0, 6)) {
+        case 1: pc.warm = -0.60f, pc.vignette = 0.35f, pc.grain = 0.08f, pc.sheen = 0.40f; break;   // Nuit
+        case 2: pc.warm = 0.60f, pc.vignette = 0.25f, pc.grain = 0.00f, pc.sheen = 0.50f; break;    // Coucher de soleil
+        case 3: pc.warm = -0.50f, pc.vignette = 0.55f, pc.grain = 0.12f, pc.sheen = 0.20f; break;   // Donjon
+        case 4: pc.warm = 0.10f, pc.vignette = 0.30f, pc.grain = 0.25f, pc.sheen = 0.10f; break;    // Cinema
+        case 5: pc.warm = -0.40f, pc.vignette = 0.25f, pc.grain = 0.10f, pc.sheen = 0.80f; break;   // Pluie
+        case 6: pc.warm = 0.20f, pc.vignette = 0.40f, pc.grain = 0.45f, pc.sheen = 0.00f; break;    // Retro
+        default: break;
+    }
     vkCmdPushConstants(cmd, g_shine.lay, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof pc, &pc);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkCmdEndRendering(cmd);
@@ -10250,7 +10261,11 @@ bool temporal_stand_in(VkCommandBuffer cmd, const NvnState& s, const Program& p)
     const bool done = temporal_upscale(cmd, p.key, gameplay_network(p.key), in, in_view, out, out_view, level);
     // (OcaDim 0.0.6) l'effet de surface, sur la SORTIE de l'upscaler (RGBA16F) : la cible HDR compactee (B10G11R11) n'est
     // pas ecrivable de facon fiable (canaux inverses), mais celle-ci oui, et une copie au meme format ne convertit rien
-    if (done && out && opts.ssr > 0) shine_apply(cmd, out, scene_depth_now(), out->width, out->height);
+    // (OcaDim 0.0.6) l'effet s'applique sur la SORTIE de l'upscaler : la camera de scene n'est disponible qu'a ce
+    // moment-la. Il exige la frame generation desactivee (la FG fabrique des images que l'on ne peut pas teinter)
+    // (OcaDim 0.0.6) les effets sont poses par la couche de presentation (vk_replay.cpp present_shine), qui ne lit
+    // aucune image : le SSR qui lisait la profondeur gresillait sur l'image upscalee
+    (void)done;
     // (its actor motion may have drawn with a pipeline, viewport and descriptors of its own: the next draw sets all of its again)
     bound().reset();
     return done;

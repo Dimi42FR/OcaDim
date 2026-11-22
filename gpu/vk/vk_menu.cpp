@@ -1359,6 +1359,27 @@ const char* hn_threaded(int v, int variant) {
 /// (les textes des lignes OcaDim ajoutées : en français, comme le reste de l'onglet)
 const char* tx_auto_fr(int v) { static const char* const t[] = {"Auto", "Activé", "Désactivé"}; return t[std::clamp(v, 0, 2)]; }
 const char* tx_onoff_fr(int v) { return v ? "Activé" : "Désactivé"; }
+const char* tx_pct_fr(int v) {   // (OcaDim 0.0.6: un pourcentage, 0 = desactive)
+    static char b[16];
+    if (v <= 0) return "Désactivé";
+    snprintf(b, sizeof b, "%d %%", v);
+    return b;
+}
+const char* tx_weather_fr(int v) {   // (OcaDim 0.0.6: la meteo)
+    static const char* const t[] = {"Désactivée", "Pluie", "Neige"};
+    return t[std::clamp(v, 0, 2)];
+}
+const char* tx_style_fr(int v) {   // (OcaDim 0.0.6: les styles graphiques)
+    static const char* const t[] = {"Défaut", "Nuit", "Coucher de soleil", "Donjon", "Cinéma", "Pluie", "Rétro",
+                                    "Net et propre (style DLSS 5)"};
+    return t[std::clamp(v, 0, 7)];
+}
+const char* tx_warm_fr(int v) {   // (OcaDim 0.0.6: la teinte, 50 = neutre)
+    static char b[24];
+    if (v == 50) return "Neutre";
+    snprintf(b, sizeof b, v < 50 ? "Froid %d %%" : "Chaud %d %%", v < 50 ? 50 - v : v - 50);
+    return b;
+}
 const char* tx_ssr_fr(int v) {   // (OcaDim: les réflexions écran, Désactivée puis l'intensité en pour cent)
     if (v <= 0) return "Désactivée";
     static char b[8];
@@ -2140,7 +2161,48 @@ Row rows[] = {
      "Starts the game again. Save your progress first. Press Enter or A twice to restart. Esc or B "
      "cancels."},
     // ---- (OcaDim) Ray-Tracing : les essais, séparés de l'onglet OcaDim. Le SSR y est branché ; le SSAO a été retiré ----
-    {TAB_RT, "Ray-Tracing — EXPÉRIMENTAL, NE FONCTIONNE PAS", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, false, true, -1, true},
+    {TAB_RT, "Effets — au-dessus de l'image", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, false, true, -1, true},
+    {TAB_RT, "Style", &opts.fx_style, 0, 7, 1, tx_style_fr,   // (OcaDim 0.0.6: un pre-reglage qui combine les effets)
+     "Un style complet d'un seul geste : la teinte, la vignette, le grain, le halo et la brillance sont posés ensemble. "
+     "« Défaut » laisse les lignes du dessous libres ; choisir un style les remplace. « Net et propre » imite le LOOK "
+     "d'un upscaler moderne (halo léger, vignette discrète, aucun grain) MAIS CE N'EST PAS DU DLSS : aucun upscaler "
+     "neuronal n'est utilisé, c'est un traitement d'image par-dessus. La netteté elle-même vient de la ligne Netteté "
+     "de l'upscaler, onglet Graphismes (FSR 4 sur AMD, DLSS sur NVIDIA). Aucun coût, aucun risque.",
+     nullptr, false, true},
+    {TAB_RT, "Lampe torche", &opts.fx_torch, 0, 100, 5, tx_pct_fr,   // (OcaDim 0.0.6: l'ambiance nocturne)
+     "L'écran s'assombrit et un halo éclaire le centre : exploration nocturne, donjons, cavernes. 0 : aucun changement.",
+     nullptr, false, true},
+    {TAB_RT, "Météo", &opts.fx_weather, 0, 2, 1, tx_weather_fr,   // (OcaDim 0.0.6: pluie ou neige)
+     "De la pluie fine ou des flocons, dessinés par-dessus l'image. Animé (c'est le but). À combiner avec la brillance "
+     "pour une rue détrempée. Aucun effet sur l'image elle-même.",
+     nullptr, false, true},
+    {TAB_RT, "Cadre cinéma", &opts.fx_bars, 0, 100, 5, tx_pct_fr,   // (OcaDim 0.0.6: les barres noires)
+     "Des barres noires en haut et en bas, façon écran large. 100 % : le cadre 2.35:1 sur un écran 16:9.",
+     nullptr, false, true},
+    {TAB_RT, "Halo", &opts.fx_glow, 0, 100, 5, tx_pct_fr,   // (OcaDim 0.0.6: le faux bloom)
+     "Une lueur douce au centre de l'image : le rendu paraît plus lumineux, sans toucher à l'image.",
+     nullptr, false, true},
+    {TAB_RT, "Sépia", &opts.fx_sepia, 0, 100, 5, tx_pct_fr,   // (OcaDim 0.0.6: le vieux film)
+     "Un voile brun : l'image prend l'ambiance d'un vieux film. À combiner avec le grain et la vignette.",
+     nullptr, false, true},
+    {TAB_RT, "Bougie", &opts.fx_candle, 0, 100, 5, tx_pct_fr,   // (OcaDim 0.0.6: la lumiere qui respire)
+     "La luminosité varie très lentement, comme une flamme : une ambiance d'intérieur, de nuit.",
+     nullptr, false, true},
+    {TAB_RT, "Vieille télé", &opts.fx_oldtv, 0, 1, 1, tx_onoff_fr,   // (OcaDim 0.0.6: coins arrondis + lignes)
+     "Coins arrondis et fines lignes horizontales : l'image d'un écran cathodique. À petites doses.",
+     nullptr, false, true},
+    {TAB_RT, "Vignette", &opts.fx_vignette, 0, 100, 5, tx_pct_fr,   // (OcaDim 0.0.6: bords assombris)
+     "Assombrit les bords de l'écran et laisse le centre clair : l'œil se concentre sur l'action. 0 : aucun changement. "
+     "20 à 40 % : discret. Aucun coût mesurable, ne touche à aucune autre image.",
+     nullptr, false, true},
+    {TAB_RT, "Teinte (chaud / froid)", &opts.fx_warm, 0, 100, 5, tx_warm_fr,   // (OcaDim 0.0.6: l'ambiance)
+     "Ré lacis de couleur sur toute l'image : 50 est neutre (aucun effet), en dessous l'image tire vers le bleu (nuit, "
+     "pluie, donjon), au-dessus vers l'orange (coucher de soleil, intérieur chaud).",
+     nullptr, false, true},
+    {TAB_RT, "Grain", &opts.fx_grain, 0, 100, 5, tx_pct_fr,   // (OcaDim 0.0.6: le grain de pellicule)
+     "Une texture de pellicule, fine et fixe : adoucit les dégradés et donne un rendu plus « cinéma ». 0 : aucun grain.",
+     nullptr, false, true},
+
     {TAB_RT, "Brillance et scintillements des sols", &opts.ssr, 0, 100, 5, tx_ssr_fr,   // (OcaDim 0.0.6: l'effet de surface)
      "Une brillance et des scintillements sur les sols, les dalles et l'eau — pas un reflet : l'effet ne lit que la "
      "couleur et la profondeur de la scène, et il est calculé au quart de la résolution puis agrandi, ce qui le rend "
@@ -2579,7 +2641,19 @@ const char* ini_key(const Row& r) {
     if (r.value == &opts.precompile_bg) return "precompile_background";
     if (r.value == &opts.load_start) return "load_start";
     if (r.value == &opts.pcache_budget) return "program_cache_budget";   // (OcaDim 0.0.6: le plafond du cache)
-    if (r.value == &opts.ssr) return "ssr";   // (OcaDim: les réflexions écran, onglet Ray-Tracing)
+    if (r.value == &opts.ssr) return "ssr";   // (OcaDim: les réflexions écran, onglet Effets)
+    if (r.value == &opts.fx_vignette) return "fx_vignette";
+    if (r.value == &opts.fx_warm) return "fx_warm";
+    if (r.value == &opts.fx_grain) return "fx_grain";
+    if (r.value == &opts.fx_scan) return "fx_scan";
+    if (r.value == &opts.fx_style) return "fx_style";
+    if (r.value == &opts.fx_torch) return "fx_torch";
+    if (r.value == &opts.fx_weather) return "fx_weather";
+    if (r.value == &opts.fx_bars) return "fx_bars";
+    if (r.value == &opts.fx_glow) return "fx_glow";
+    if (r.value == &opts.fx_sepia) return "fx_sepia";
+    if (r.value == &opts.fx_candle) return "fx_candle";
+    if (r.value == &opts.fx_oldtv) return "fx_oldtv";
     if (r.value == &opts.rt_test) return "rt_test";   // (OcaDim: le test BVH, onglet Ray-Tracing)
     if (r.value == &opts.intel_compiles) return "intel_shader_compiles";   // (two rows, one key)
     if (r.value == &opts.preset) return "quality_preset";   // (two rows, one key: Affichage's Profil and OcaDim's)
@@ -4623,7 +4697,7 @@ const char* bug_report_hint() {
 }
 
 const char* const tab_titles[TAB_COUNT] = {"Display", "Graphics", "Audio", "Gameplay", "Controls", "NFC", "OcaDim",
-                                           "Ray-Tracing", "NVIDIA", "Debug"};
+                                           "Effets", "NVIDIA", "Debug"};
 inline const char* tab_title(int t) { return t >= 0 && t < TAB_COUNT ? tab_titles[t] : "Settings"; }
 /// (OcaDim) The rail: one line a section, the shown one on an inset with a gold bar at its left, the others dim; the
 /// sections under another (Motion, the FPS counter's details) light their parent
@@ -7571,11 +7645,152 @@ void menu_rumble_tick() {
     if (was >= 0 && opts.rumble != was && menu_is_open() && host && host->version >= 32 && host->rumble_test) host->rumble_test();
     was = opts.rumble;
 }
+/// (OcaDim 0.0.6) Les EFFETS, dessines avec ImGui : c'est le seul chemin d'ecriture de cette fenetre qui soit prouve sur
+/// cette machine (le menu, le compteur FPS et l'ecran de demarrage passent par lui). Des rectangles translucides, aucun
+/// pipeline a nous, aucune barriere, aucun layout a deviner : rien ne peut casser l'image.
+bool effects_on() {
+    return opts.fx_style != 0 || opts.ssr > 0 || opts.fx_vignette > 0 || opts.fx_warm != 50 || opts.fx_grain > 0 ||
+           opts.fx_torch > 0 || opts.fx_weather != 0 || opts.fx_bars > 0 || opts.fx_glow > 0 || opts.fx_sepia > 0 ||
+           opts.fx_candle > 0 || opts.fx_oldtv != 0;
+}
+void draw_effects(::mkwvk::ui::Ctx& c) {
+    if (!effects_on()) return;
+    // (les styles posent les quatre valeurs d'un coup)
+    float sheen = (float)std::clamp(opts.ssr, 0, 100) / 100.0f;
+    float vig = (float)std::clamp(opts.fx_vignette, 0, 100) / 100.0f;
+    float warm = ((float)std::clamp(opts.fx_warm, 0, 100) - 50.0f) / 50.0f;
+    float grain = (float)std::clamp(opts.fx_grain, 0, 100) / 100.0f;
+    float glow = (float)std::clamp(opts.fx_glow, 0, 100) / 100.0f;
+    switch (std::clamp(opts.fx_style, 0, 7)) {   // (les styles graphiques)
+        case 1: warm = -0.60f, vig = 0.35f, grain = 0.08f, sheen = 0.40f, glow = 0.00f; break;   // Nuit
+        case 2: warm = 0.60f, vig = 0.25f, grain = 0.00f, sheen = 0.50f, glow = 0.00f; break;    // Coucher de soleil
+        case 3: warm = -0.50f, vig = 0.55f, grain = 0.12f, sheen = 0.20f, glow = 0.00f; break;   // Donjon
+        case 4: warm = 0.10f, vig = 0.30f, grain = 0.25f, sheen = 0.10f, glow = 0.00f; break;    // Cinema
+        case 5: warm = -0.40f, vig = 0.25f, grain = 0.10f, sheen = 0.80f, glow = 0.00f; break;   // Pluie
+        case 6: warm = 0.20f, vig = 0.40f, grain = 0.45f, sheen = 0.00f, glow = 0.00f; break;    // Retro
+        // (OcaDim 0.0.6) « DLSS 5 » : l'image nette et propre qu'on attend d'un upscaler moderne - un peu de halo pour
+        // la lumiere, une vignette a peine marquee, aucun grain, aucune teinte, pas de brillance. La nettete vient de la
+        // ligne Nettete de l'upscaler (Graphismes)
+        case 7: warm = 0.00f, vig = 0.12f, grain = 0.00f, sheen = 0.00f, glow = 0.35f; break;
+        default: break;
+    }
+    const float w = (float)c.w, h = (float)c.h;
+    const int clear = IM_COL32(0, 0, 0, 0);
+    // (1) la brillance : le bas de l'image est la rue, plus dense vers son horizon)
+    if (sheen > 0.0f) {
+        const int wet = IM_COL32(84, 94, 117, (int)(255.0f * 0.26f * sheen * 0.75f));
+        const int wet2 = IM_COL32(84, 94, 117, (int)(255.0f * 0.26f * sheen));
+        c.d->AddRectFilledMultiColor(ImVec2(0.0f, h * 0.46f), ImVec2(w, h * 0.72f), clear, clear, wet2, wet2);
+        c.d->AddRectFilledMultiColor(ImVec2(0.0f, h * 0.72f), ImVec2(w, h), wet2, wet2, wet, wet);
+    }
+    // (2) la vignette : quatre degrades sur les bords)
+    if (vig > 0.0f) {
+        const int dark = IM_COL32(0, 0, 0, (int)(255.0f * 0.55f * vig));
+        const float band = h * 0.42f, side = w * 0.30f;
+        c.d->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(w, band), dark, dark, clear, clear);
+        c.d->AddRectFilledMultiColor(ImVec2(0, h - band), ImVec2(w, h), clear, clear, dark, dark);
+        c.d->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(side, h), dark, clear, clear, dark);
+        c.d->AddRectFilledMultiColor(ImVec2(w - side, 0), ImVec2(w, h), clear, dark, dark, clear);
+    }
+    // (3) la teinte : un voile de couleur sur toute l'image)
+    if (warm != 0.0f) {
+        const float t = 0.14f * (warm > 0.0f ? warm : -warm);
+        const int col = warm > 0.0f ? IM_COL32(255, 158, 82, (int)(255.0f * t)) : IM_COL32(96, 148, 255, (int)(255.0f * t));
+        c.d->AddRectFilled(ImVec2(0, 0), ImVec2(w, h), col);
+    }
+    const double now = (double)prof_now() / 1e9;
+
+    // (5) la lampe torche : l'ecran s'assombrit, un halo eclaire le centre (des anneaux de blanc tres legers)
+    if (opts.fx_torch > 0) {
+        const float t = (float)std::clamp(opts.fx_torch, 0, 100) / 100.0f;
+        c.d->AddRectFilled(ImVec2(0, 0), ImVec2(w, h), IM_COL32(0, 0, 0, (int)(255.0f * 0.80f * t)));
+        const ImVec2 ctr(w * 0.5f, h * 0.52f);
+        const float rmax = (h * 0.55f);
+        for (int i = 12; i >= 1; i--) {   // (du plus large au plus etroit : la lumiere s'accumule au centre)
+            const float f = (float)i / 12.0f;
+            c.d->AddCircleFilled(ctr, rmax * f, IM_COL32(255, 244, 214, (int)(255.0f * 0.035f * t)), 48);
+        }
+    }
+
+    // (6) la meteo : pluie (traits) ou neige (flocons), animee
+    if (opts.fx_weather != 0) {
+        const int n = opts.fx_weather == 1 ? 220 : 140;
+        for (int i = 0; i < n; i++) {
+            const float hx = std::sin((float)i * 12.9898f) * 43758.5453f;
+            const float px = (hx - std::floor(hx)) * w;
+            const float speed = opts.fx_weather == 1 ? 1.9f : 0.35f;
+            const float len = opts.fx_weather == 1 ? 18.0f : 2.0f;
+            const float y = std::fmod((hx - std::floor(hx)) * h + (float)now * speed * h * 0.45f, h);
+            const int a = opts.fx_weather == 1 ? 90 : 150;
+            if (opts.fx_weather == 1)
+                c.d->AddLine(ImVec2(px, y), ImVec2(px + 2.0f, y + len), IM_COL32(200, 220, 255, a), 1.0f);
+            else
+                c.d->AddCircleFilled(ImVec2(px + std::sin((float)now + (float)i) * 6.0f, y), 1.6f, IM_COL32(255, 255, 255, a));
+        }
+    }
+
+    // (7) le cadre cinema : deux barres noires, selon la part demandee)
+    if (opts.fx_bars > 0) {
+        const float bh = h * 0.12f * ((float)std::clamp(opts.fx_bars, 0, 100) / 100.0f);
+        c.d->AddRectFilled(ImVec2(0, 0), ImVec2(w, bh), IM_COL32(0, 0, 0, 255));
+        c.d->AddRectFilled(ImVec2(0, h - bh), ImVec2(w, h), IM_COL32(0, 0, 0, 255));
+    }
+
+    // (8) le halo : une lueur douce au centre (faux bloom), des anneaux de blanc tres legers)
+    if (glow > 0.0f) {
+        const float t = glow;
+        const ImVec2 ctr(w * 0.5f, h * 0.45f);
+        for (int i = 14; i >= 1; i--) {
+            const float f = (float)i / 14.0f;
+            c.d->AddCircleFilled(ctr, h * 0.62f * f, IM_COL32(255, 246, 224, (int)(255.0f * 0.018f * t)), 64);
+        }
+    }
+
+    // (9) le sepia : un voile brun, l'ambiance du vieux film)
+    if (opts.fx_sepia > 0) {
+        const int a = (int)(255.0f * 0.30f * ((float)std::clamp(opts.fx_sepia, 0, 100) / 100.0f));
+        c.d->AddRectFilled(ImVec2(0, 0), ImVec2(w, h), IM_COL32(112, 84, 52, a));
+    }
+
+    // (10) la bougie : la luminosite respire lentement (une variation de +/- 6 %)
+    if (opts.fx_candle > 0) {
+        const float t = (float)std::clamp(opts.fx_candle, 0, 100) / 100.0f;
+        const float k = 0.5f + 0.5f * std::sin((float)now * 2.4f) * std::sin((float)now * 0.7f + 1.3f);
+        c.d->AddRectFilled(ImVec2(0, 0), ImVec2(w, h), IM_COL32(0, 0, 0, (int)(255.0f * 0.12f * t * k)));
+    }
+
+    // (11) la vieille tele : coins arrondis et fines lignes horizontales)
+    if (opts.fx_oldtv != 0) {
+        const int dark = IM_COL32(0, 0, 0, 255);
+        const float r = h * 0.045f;
+        c.d->AddRectFilled(ImVec2(0, 0), ImVec2(r, r), dark), c.d->AddCircleFilled(ImVec2(r, r), r, dark, 16);
+        c.d->AddRectFilled(ImVec2(w - r, 0), ImVec2(w, r), dark), c.d->AddCircleFilled(ImVec2(w - r, r), r, dark, 16);
+        c.d->AddRectFilled(ImVec2(0, h - r), ImVec2(r, h), dark), c.d->AddCircleFilled(ImVec2(r, h - r), r, dark, 16);
+        c.d->AddRectFilled(ImVec2(w - r, h - r), ImVec2(w, h), dark), c.d->AddCircleFilled(ImVec2(w - r, h - r), r, dark, 16);
+        for (float y = 0; y < h; y += 3.0f) c.d->AddLine(ImVec2(0, y), ImVec2(w, y), IM_COL32(0, 0, 0, 42));
+    }
+
+    // (4) le grain : une grille de points tres fins, fixe (aucune animation, donc aucun scintillement)
+    if (grain > 0.0f) {
+        const float step = 3.0f;
+        const int g = (int)(38.0f * grain);
+        if (g > 0) {
+            for (float y = 0.0f, row = 0.0f; y < h; y += step, row++) {
+                for (float x = (row * 1.7f); x < w; x += step * 2.0f) {
+                    const float n = std::sin(x * 12.9898f + y * 78.233f) * 43758.5453f;
+                    if (n - std::floor(n) < 0.35f) c.d->AddRectFilled(ImVec2(x, y), ImVec2(x + 1.0f, y + 1.0f), IM_COL32(200, 200, 200, g));
+                }
+            }
+        }
+    }
+}
+
 void menu_record(VkCommandBuffer cmd, uint32_t index, uint32_t w, uint32_t h) {
     const bool start = startup_on.load(std::memory_order_acquire);
     const bool fps = opts.show_fps && !start;   // (no game frames yet: not "0 FPS" over the start-up screen)
     const bool open = open_now.load(std::memory_order_relaxed);
-    if (!start && !fps && !open) {   // (nothing shows: no ImGui frame, no render pass)
+    const bool fx = effects_on();   // (OcaDim 0.0.6 : les effets demandent une frame d'ImGui, meme sans menu)
+    if (!start && !fps && !open && !fx) {   // (nothing shows: no ImGui frame, no render pass)
         // (but a new window size or Menu size since the last bake: one frame with nothing drawn that bakes the menu's glyphs
         // and measures its page for the new size, so the next open has no hitch whatever was resized while nothing showed)
         if (prebake_needed(w, h) && ui::begin(w, h)) {
@@ -7597,6 +7812,7 @@ void menu_record(VkCommandBuffer cmd, uint32_t index, uint32_t w, uint32_t h) {
     }
     ui::Ctx c = ui_ctx(w, h);
     prebake(c);   // (the menu's glyphs at this size, before it opens: no hitch then)
+    draw_effects(c);   // (OcaDim 0.0.6 : sous l'ecran de demarrage et le menu)
     if (start) draw_startup(c);   // (under the menu)
     if (open) draw_menu(c);
     if (fps) draw_fps(c, open);

@@ -167,6 +167,22 @@ struct Options {
                             // (vk_draw.cpp rt_test_after_pass). Expérimental
     int pcache_budget = 0;  // (OcaDim 0.0.6) le plafond du cache de programmes, en Go : 0 Auto (2), 1 a 4 (1, 2, 4, 8 Go),
                             // 5 illimité, 6 vider au prochain démarrage (vk_menu.cpp menu_program_cache_budget)
+    // (OcaDim 0.0.6, onglet Effets : chacun de 0 a 100, 0 = desactive. Appliques en couche a la presentation,
+    // vk_replay.cpp present_shine : ils ne lisent pas l'image, donc ils ne peuvent ni la corrompre ni clignoter)
+    int fx_vignette = 0;    // (bords assombris)
+    int fx_warm = 50;       // (teinte : 0 tres froide, 50 neutre, 100 tres chaude ; neutre = aucun effet)
+    int fx_grain = 0;       // (grain de pellicule)
+    int fx_scan = 0;        // (inutilise : le CRT existe deja dans Graphiques)
+    int fx_style = 0;       // (OcaDim 0.0.6) un style qui combine les effets : 0 Personnalise, 1 Nuit, 2 Coucher de
+                            // soleil, 3 Donjon, 4 Cinema, 5 Pluie, 6 Retro (vk_menu.cpp draw_effects)
+    // (OcaDim 0.0.6, les effets « d'ambiance », tous dessines par ImGui : aucun risque pour l'image)
+    int fx_torch = 0;       // (lampe torche : l'ecran s'assombrit, un halo eclaire le centre)
+    int fx_weather = 0;     // (0 aucun, 1 pluie, 2 neige)
+    int fx_bars = 0;        // (cadre cinema : barres noires en haut et en bas)
+    int fx_glow = 0;        // (halo lumineux au centre : un faux bloom)
+    int fx_sepia = 0;       // (voile sepia, ambiance vieux film)
+    int fx_candle = 0;      // (scintillement de bougie : la luminosite respire lentement)
+    int fx_oldtv = 0;       // (0/1 : coins arrondis + lignes de balayage)
 };
 extern Options opts;
 constexpr int kAutoPreset = 6;   // (the Quality preset Auto (this PC): menu_auto_for_gpu, auto_settings.h)
