@@ -6888,6 +6888,26 @@ void ssr_after_pass(VkCommandBuffer cmd, const Pass& ps) {
 std::mutex g_scene_mu;
 Texture* g_scene_depth = nullptr;
 uint64_t g_scene_depth_frame = ~0ull;
+/// (OcaDim 0.0.6) une vue de la cible pour la passe de rendu qui ecrit l'effet : la conversion RGBA16F -> B10G11R11
+/// se fait alors par le materiel, la ou un blit de conversion la corrompait sur ce pilote
+static std::mutex g_av_mu;
+static std::unordered_map<uint64_t, VkImageView> g_av_cache;
+static VkImageView attachment_view(const Texture* t) {
+    if (!t || t->image == VK_NULL_HANDLE) return VK_NULL_HANDLE;
+    const uint64_t key = (uint64_t)(uintptr_t)t->image ^ ((uint64_t)t->format << 56);
+    std::lock_guard lk(g_av_mu);
+    if (const auto it = g_av_cache.find(key); it != g_av_cache.end()) return it->second;
+    VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vi.image = t->image;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vi.format = t->format;
+    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    VkImageView v = VK_NULL_HANDLE;
+    if (vkCreateImageView(dev.device, &vi, nullptr, &v) != VK_SUCCESS) return VK_NULL_HANDLE;
+    g_av_cache[key] = v;
+    return v;
+}
+
 static Texture* scene_depth_now() {
     std::lock_guard lk(g_scene_mu);
     return g_scene_depth_frame + 8 >= texture_frame_no() ? g_scene_depth : nullptr;
@@ -6926,7 +6946,7 @@ void shine_apply(VkCommandBuffer cmd, Texture* color, Texture* depth, uint32_t w
     if (near_z <= 0.0f) return;   (void)cw, (void)ch;
     // (OcaDim 0.0.6) l'effet est une information BASSE FREQUENCE : calcule au quart de la resolution, le bruit de la
     // profondeur s'y integre au lieu de faire des plaques, et le cout tombe d'un facteur 16. Le blit l'agrandit en douceur
-    const uint32_t ew = std::max(1u, (w + 3) / 4), eh = std::max(1u, (h + 3) / 4);
+    const uint32_t ew = w, eh = h;   // (OcaDim 0.0.6 : pleine resolution - l'agrandissement depuis le quart de resolution faisait un bruit de couleur)
     SsrImage* im = ssr_image(ew, eh, cmd);
     if (!im) {
         g_ssr.failed = true;
@@ -6978,14 +6998,36 @@ void shine_apply(VkCommandBuffer cmd, Texture* color, Texture* depth, uint32_t w
     vkCmdPushConstants(cmd, g_ssr.lay_compute, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof pc, &pc);
     vkCmdDispatch(cmd, (ew + 7) / 8, (eh + 7) / 8, 1);
     full_barrier(cmd, "barrier (Shine, avant la copie)");
-    // (un blit, pas une copie : il convertit RGBA16F vers le format HDR de la cible)
-    VkImageBlit region{};
-    region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    region.srcOffsets[1] = {(int32_t)ew, (int32_t)eh, 1};
-    region.dstOffsets[1] = {(int32_t)w, (int32_t)h, 1};
-    vkCmdBlitImage(cmd, im->image, VK_IMAGE_LAYOUT_GENERAL, color->image, VK_IMAGE_LAYOUT_GENERAL, 1, &region,
-                   VK_FILTER_LINEAR);
+    // (OcaDim 0.0.6) l'ecriture : une PASSE DE RENDU, pas un blit. Le blit RGBA16F -> B10G11R11 corrompait l'image sur ce
+    // pilote ; ici le materiel convertit en ecrivant l'attachement, ce qui est garanti
+    const VkImageView av = attachment_view(color);
+    const VkPipeline blit = ssr_blit_pipeline(color->format, VK_SAMPLE_COUNT_1_BIT);
+    if (!av || !blit) {
+        full_barrier(cmd, "barrier (apres le Shine)");
+        bound().reset();
+        return;
+    }
+    VkRenderingAttachmentInfo ca{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    ca.imageView = av;
+    ca.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    ca.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    ca.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+    ri.renderArea = {{0, 0}, {w, h}};
+    ri.layerCount = 1;
+    ri.colorAttachmentCount = 1, ri.pColorAttachments = &ca;
+    vkCmdBeginRendering(cmd, &ri);
+    const VkViewport vp{0.0f, 0.0f, (float)w, (float)h, 0.0f, 1.0f};
+    const VkRect2D sc{{0, 0}, {w, h}};
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    vkCmdSetScissor(cmd, 0, 1, &sc);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, blit);
+    VkDescriptorImageInfo bi{g_ssr.color_sampler, im->view, VK_IMAGE_LAYOUT_GENERAL};
+    VkWriteDescriptorSet wb{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 0, 0, 1,
+                            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &bi, nullptr, nullptr};
+    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_ssr.lay_blit, 0, 1, &wb);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRendering(cmd);
     full_barrier(cmd, "barrier (apres le Shine)");
     bound().reset();   // (le compute a lie son pipeline : les draws suivants remettent le leur)
 }
