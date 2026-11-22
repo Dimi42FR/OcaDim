@@ -1,5 +1,36 @@
 # OcaDim 0.0.5 — passation, tests et outils (2026-11-22)
 
+## 0.0.5-2 (22/11, nuit) — la mémoire
+
+- **Problème trouvé en jouant** : le cache de programmes (`cache/ocadim_programs.bin`, 7,2 Go,
+  47 798 programmes) était chargé **en entier en RAM** au démarrage par Auto → **18,7 Go** pour le jeu.
+- **Correctif** : `menu_load_start` reste, mais Auto s'arrête à `kLoadAtStartCacheMax` (2 Go) dans
+  `vk_programs.cpp` (programs_load_decide) : au-delà, mode `create` (lecture à la première utilisation).
+  « Activé » et `RX_VK_LOAD=start` forcent l'ancien comportement.
+- Mesures en jeu : **8,6 Go** au lieu de 17,8-18,7, mêmes fps (75,3-77,4 en zone légère),
+  `program census (play): created 0` → aucun programme recréé.
+- Version : `host/hos.h` → `0.0.5-2`, Setup → `0.0.5.2` / affiché `0.0.5-2`.
+- Commit `d4e7e2e5`, tag `v0.0.5-2`, release GitHub avec `OcaDimSetup-0.0.5-2.zip` (501 Mo).
+
+### Mesures 0.0.5-2 (autre lieu, 1 425-1 815 draws)
+
+| Configuration | fps | RAM |
+|---|---|---|
+| 0.0.5, load_start=0 | 72,8-77,0 | 17,8-18,7 Go |
+| **0.0.5-2, Auto (2 Go)** | **75,3-77,4** | **8,6 Go** |
+| 0.0.5, 2 threads de replay | 59,3-61,0 (Kokiri) | — |
+
+### Enseignements
+
+- **Culling : mort.** Mesuré avec `RX_VK_DRAW_STATS` (sonde GPU existante) : Kokiri 0,9 % de draws
+  entièrement clippés, autre zone 5,2 %. Les 38-50 % à `fs = 0` sont des passes de profondeur, pas
+  des objets invisibles. Rien à gagner.
+- **Le replay compte pour moitié** dans la frame : 2 threads → submit 13,1-13,3 ms, frame 16,7 ms,
+  fps 59-61 (contre 10,6 / 15,4 / 63,9-66 à 4 threads). 1 ms de replay gagné ≈ 0,5 ms de frame ≈ +2 fps.
+- **`PRESENTS_AHEAD=2` rejeté** (62,4-64,7 fps) : les 4,8 ms hors replay ne sont pas des attentes de present.
+- **Freezes** : ce sont des **pipelines** construits par le driver, pas de la traduction. La ligne
+  « Précompilation au chargement » les déplace dans les écrans de chargement.
+
 ## Identité de la version
 
 - Produit : **OcaDim 0.0.5**
