@@ -177,7 +177,6 @@ struct Options {
                             // soleil, 3 Donjon, 4 Cinema, 5 Pluie, 6 Retro (vk_menu.cpp draw_effects)
     // (OcaDim 0.0.6, les effets « d'ambiance », tous dessines par ImGui : aucun risque pour l'image)
     int fx_torch = 0;       // (lampe torche : l'ecran s'assombrit, un halo eclaire le centre)
-    int fx_weather = 0;     // (0 aucun, 1 pluie, 2 neige)
     int fx_bars = 0;        // (cadre cinema : barres noires en haut et en bas)
     int fx_glow = 0;        // (halo lumineux au centre : un faux bloom)
     int fx_sepia = 0;       // (voile sepia, ambiance vieux film)

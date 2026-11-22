@@ -1365,10 +1365,6 @@ const char* tx_pct_fr(int v) {   // (OcaDim 0.0.6: un pourcentage, 0 = desactive
     snprintf(b, sizeof b, "%d %%", v);
     return b;
 }
-const char* tx_weather_fr(int v) {   // (OcaDim 0.0.6: la meteo)
-    static const char* const t[] = {"Désactivée", "Pluie", "Neige"};
-    return t[std::clamp(v, 0, 2)];
-}
 const char* tx_style_fr(int v) {   // (OcaDim 0.0.6: les styles graphiques)
     static const char* const t[] = {"Défaut", "Nuit", "Coucher de soleil", "Donjon", "Cinéma", "Pluie", "Rétro",
                                     "Net et propre (style DLSS 5)"};
@@ -2172,10 +2168,7 @@ Row rows[] = {
     {TAB_RT, "Lampe torche", &opts.fx_torch, 0, 100, 5, tx_pct_fr,   // (OcaDim 0.0.6: l'ambiance nocturne)
      "L'écran s'assombrit et un halo éclaire le centre : exploration nocturne, donjons, cavernes. 0 : aucun changement.",
      nullptr, false, true},
-    {TAB_RT, "Météo", &opts.fx_weather, 0, 2, 1, tx_weather_fr,   // (OcaDim 0.0.6: pluie ou neige)
-     "De la pluie fine ou des flocons, dessinés par-dessus l'image. Animé (c'est le but). À combiner avec la brillance "
-     "pour une rue détrempée. Aucun effet sur l'image elle-même.",
-     nullptr, false, true},
+
     {TAB_RT, "Cadre cinéma", &opts.fx_bars, 0, 100, 5, tx_pct_fr,   // (OcaDim 0.0.6: les barres noires)
      "Des barres noires en haut et en bas, façon écran large. 100 % : le cadre 2.35:1 sur un écran 16:9.",
      nullptr, false, true},
@@ -2648,7 +2641,6 @@ const char* ini_key(const Row& r) {
     if (r.value == &opts.fx_scan) return "fx_scan";
     if (r.value == &opts.fx_style) return "fx_style";
     if (r.value == &opts.fx_torch) return "fx_torch";
-    if (r.value == &opts.fx_weather) return "fx_weather";
     if (r.value == &opts.fx_bars) return "fx_bars";
     if (r.value == &opts.fx_glow) return "fx_glow";
     if (r.value == &opts.fx_sepia) return "fx_sepia";
@@ -7650,7 +7642,7 @@ void menu_rumble_tick() {
 /// pipeline a nous, aucune barriere, aucun layout a deviner : rien ne peut casser l'image.
 bool effects_on() {
     return opts.fx_style != 0 || opts.ssr > 0 || opts.fx_vignette > 0 || opts.fx_warm != 50 || opts.fx_grain > 0 ||
-           opts.fx_torch > 0 || opts.fx_weather != 0 || opts.fx_bars > 0 || opts.fx_glow > 0 || opts.fx_sepia > 0 ||
+           opts.fx_torch > 0 || opts.fx_bars > 0 || opts.fx_glow > 0 || opts.fx_sepia > 0 ||
            opts.fx_candle > 0 || opts.fx_oldtv != 0;
 }
 void draw_effects(::mkwvk::ui::Ctx& c) {
@@ -7709,23 +7701,6 @@ void draw_effects(::mkwvk::ui::Ctx& c) {
         for (int i = 12; i >= 1; i--) {   // (du plus large au plus etroit : la lumiere s'accumule au centre)
             const float f = (float)i / 12.0f;
             c.d->AddCircleFilled(ctr, rmax * f, IM_COL32(255, 244, 214, (int)(255.0f * 0.035f * t)), 48);
-        }
-    }
-
-    // (6) la meteo : pluie (traits) ou neige (flocons), animee
-    if (opts.fx_weather != 0) {
-        const int n = opts.fx_weather == 1 ? 220 : 140;
-        for (int i = 0; i < n; i++) {
-            const float hx = std::sin((float)i * 12.9898f) * 43758.5453f;
-            const float px = (hx - std::floor(hx)) * w;
-            const float speed = opts.fx_weather == 1 ? 1.9f : 0.35f;
-            const float len = opts.fx_weather == 1 ? 18.0f : 2.0f;
-            const float y = std::fmod((hx - std::floor(hx)) * h + (float)now * speed * h * 0.45f, h);
-            const int a = opts.fx_weather == 1 ? 90 : 150;
-            if (opts.fx_weather == 1)
-                c.d->AddLine(ImVec2(px, y), ImVec2(px + 2.0f, y + len), IM_COL32(200, 220, 255, a), 1.0f);
-            else
-                c.d->AddCircleFilled(ImVec2(px + std::sin((float)now + (float)i) * 6.0f, y), 1.6f, IM_COL32(255, 255, 255, a));
         }
     }
 
