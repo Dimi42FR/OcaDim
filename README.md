@@ -8,6 +8,32 @@
 
 <h4 align="center">La récompilation native d'<b>Ocarina of Time</b> sur PC, depuis <b>ta propre copie du jeu</b> — par <b>Dimi42FR</b></h4>
 
+## Nouveautés de la 0.0.5 — le replay en parallèle
+
+C'est d'abord une version de **performance**. Le *replay* — ce que le CPU doit faire pour transformer les
+commandes du jeu en Vulkan — est maintenant découpé en **segments de 32 draws, enregistrés sur 4 threads**,
+et le cache de programmes garde **4 programmes par thread** au lieu de 2.
+
+| Réglage | images/s | temps de replay |
+|---|---|---|
+| 0.0.4 (avant cette version) | 53,8 | 15,39 ms |
+| 4 threads de replay | 60,2-61,5 | 11,3-11,9 ms |
+| **4 threads + segments de 32 (défaut)** | **63,9-66,0** | **10,6-10,7 ms** |
+
+Mesures : Forêt Kokiri, même sauvegarde, même caméra — RX 9070 XT, Ryzen 7 5800X, 2560×1440.
+Le détail complet, **y compris ce qui a été rejeté** (lot « lift » amont, préchargement des descripteurs,
+6 threads, render thread coupé), est dans [`docs/OCADIM-0.0.5-TESTS.md`](docs/OCADIM-0.0.5-TESTS.md).
+
+Avec ça :
+
+- **Menu F1 OcaDim en français par défaut**, onglet OcaDim complet.
+- **Nouvel écran de démarrage OcaDim** : artwork, barre dorée, textes français, 2,5 s minimum.
+- **Ray-Tracing marqué EXPÉRIMENTAL — NE FONCTIONNE PAS** : SSR et test BVH ne sont plus présentés comme fiables.
+- **« Save my pipeline list » reste local** : le zip va dans Téléchargements, rien n'ouvre Chrome ni GitHub.
+- **Graphe « Shaders built » corrigé** : les pipelines de précompilation sont comptés.
+- **FSR 4 Frame Generation** vérifiée en jeu ; réglages par défaut mesurés (FSR 4 Native AA sur AMD,
+  DLSS Quality sur NVIDIA, 92 %, plafond 144, rendu thread, anti-lag AMD).
+
 ## Nouveautés de la 0.0.3 — la mise à jour des petits PC
 
 **Tout ce qui suit a été conçu et codé côté OcaDim** — pas seulement repris de l'amont. Cette version est
@@ -64,7 +90,7 @@ ton `.nup`.
 **27 heures.** C'est le temps qu'il a fallu pour sortir cette première version : du premier commit (14 novembre, 23:53)
 à la version livrée (16 novembre, 03:19). La frame generation d'AMD y est entrée dans la dernière nuit.
 
-**Télécharger :** [OcaDim 0.0.2 — le Setup Windows x64](https://github.com/Dimi42FR/OcaDim/releases/latest). Il compile le
+**Télécharger :** [OcaDim 0.0.5 — le Setup Windows x64](https://github.com/Dimi42FR/OcaDim/releases/latest). Il compile le
 jeu chez toi, à partir de ton `.nup`.
 
 **Tu viens tester ?** Il y a trois choses à essayer ce soir et quatre façons d'aider sans coder, plus bas, dans
@@ -289,7 +315,7 @@ Ce qui nous aide le plus, ce n'est pas « c'est bien » : c'est **où ça casse*
 ### Avec le Setup (recommandé)
 
 Le paquet est dans les **[releases](https://github.com/Dimi42FR/OcaDim/releases/latest)** :
-`OcaDimSetup-0.0.1-win64.zip` (81,8 Mo, SHA-256 `c951efaf…36919`). Dézippe-le, lance **`OcaDimSetup.exe`**, choisis ton
+`OcaDimSetup-0.0.5.zip` (501 Mo, SHA-256 `c713c87a…37bd91`). Dézippe-le, lance **`OcaDimSetup.exe`**, choisis ton
 `.nup`, attends. Aux lancements suivants, le même exe propose **Jouer / Mettre à jour / Désinstaller**.
 
 ### À la main, depuis les sources
