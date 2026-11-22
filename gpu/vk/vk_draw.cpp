@@ -6948,7 +6948,7 @@ void shine_apply(VkCommandBuffer cmd, Texture* color, Texture* depth, uint32_t w
     // (OcaDim 0.0.6) l'effet est une information BASSE FREQUENCE : calcule au quart de la resolution, le bruit de la
     // profondeur s'y integre au lieu de faire des plaques, et le cout tombe d'un facteur 16. Le blit l'agrandit en douceur
     const uint32_t ew = w, eh = h;   // (OcaDim 0.0.6 : pleine resolution - l'agrandissement depuis le quart de resolution faisait un bruit de couleur)
-    SsrImage* im = ssr_image(ew, eh, color->format, cmd);   // (le format de la cible : la copie n'aura rien a convertir)
+    SsrImage* im = ssr_image(ew, eh, VK_FORMAT_R16G16B16A16_SFLOAT, cmd);   // (la passe de rendu convertit en ecrivant)
     if (!im) {
         g_ssr.failed = true;
         logf("vk: OcaDim : Shine : son image temporaire n'a pas pu etre faite : la ligne est sans effet");
@@ -6999,22 +6999,45 @@ void shine_apply(VkCommandBuffer cmd, Texture* color, Texture* depth, uint32_t w
     vkCmdPushConstants(cmd, g_ssr.lay_compute, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof pc, &pc);
     vkCmdDispatch(cmd, (ew + 7) / 8, (eh + 7) / 8, 1);
     full_barrier(cmd, "barrier (Shine, avant la copie)");
-    // (OcaDim 0.0.6) l'ecriture : une COPIE. L'image temporaire a le format de la cible, donc rien n'est converti : un
-    // blit de conversion corrompait l'image, une passe de rendu l'assombrissait
-    VkImageCopy region{};
-    region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    region.extent = {ew, eh, 1};
-    vkCmdCopyImage(cmd, im->image, VK_IMAGE_LAYOUT_GENERAL, color->image, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+    // (OcaDim 0.0.6) l'ecriture : une PASSE DE RENDU. Le materiel convertit RGBA16F vers le format de la sortie en
+    // ecrivant l'attachement (une copie au meme format inversait les canaux, un blit de conversion bruitait)
+    const VkImageView av = attachment_view(color);
+    const VkPipeline blit = ssr_blit_pipeline(color->format, VK_SAMPLE_COUNT_1_BIT);
+    if (!av || !blit) {
+        full_barrier(cmd, "barrier (apres le Shine)");
+        bound().reset();
+        return;
+    }
+    VkRenderingAttachmentInfo ca{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    ca.imageView = av;
+    ca.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    ca.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    ca.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+    ri.renderArea = {{0, 0}, {w, h}};
+    ri.layerCount = 1;
+    ri.colorAttachmentCount = 1, ri.pColorAttachments = &ca;
+    vkCmdBeginRendering(cmd, &ri);
+    const VkViewport vp{0.0f, 0.0f, (float)w, (float)h, 0.0f, 1.0f};
+    const VkRect2D sc{{0, 0}, {w, h}};
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    vkCmdSetScissor(cmd, 0, 1, &sc);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, blit);
+    VkDescriptorImageInfo bi{g_ssr.color_sampler, im->view, VK_IMAGE_LAYOUT_GENERAL};
+    VkWriteDescriptorSet wb{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 0, 0, 1,
+                            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &bi, nullptr, nullptr};
+    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_ssr.lay_blit, 0, 1, &wb);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRendering(cmd);
     full_barrier(cmd, "barrier (apres le Shine)");
     bound().reset();   // (le compute a lie son pipeline : les draws suivants remettent le leur)
 }
 
 } // namespace
 
-// ---- (OcaDim 0.0.6) « rue mouillee » a la PRESENTATION : sur l'image finale de la fenetre, au format d'ecran ----
-// (le tampon de rendu du jeu est en B10G11R11 et ce pilote l'ecrit mal depuis notre code ; ici l'ecriture est celle
-// d'ImGui, donc fiable. Rien quand la ligne est sur Desactive, et repli sur le blit habituel si quoi que ce soit echoue)
+// ---- (OcaDim 0.0.6) « rue mouillee » : une COUCHE TRANSLUCIDE a la presentation ----
+// (elle ne lit aucune image : elle se melange a l'image deja presentee, comme les overlays d'ImGui. Un tirage qui
+// echantillonnait l'image pour la reecrire la corrompait, meme en recopiant sans calcul)
 #include "shaders/present_shine_vert_spv.h"
 #include "shaders/present_shine_frag_spv.h"
 
@@ -7023,8 +7046,6 @@ struct PresentShine {
     VkFormat format = VK_FORMAT_UNDEFINED;
     VkPipeline pipe = VK_NULL_HANDLE;
     VkPipelineLayout lay = VK_NULL_HANDLE;
-    VkDescriptorSetLayout dsl = VK_NULL_HANDLE;
-    VkSampler samp = VK_NULL_HANDLE;
     bool failed = false;
 };
 PresentShine g_shine;
@@ -7033,22 +7054,11 @@ bool shine_make(VkFormat format) {
     if (g_shine.failed) return false;
     if (g_shine.pipe && g_shine.format == format) return true;
     if (g_shine.pipe) vkDestroyPipeline(dev.device, g_shine.pipe, nullptr), g_shine.pipe = VK_NULL_HANDLE;
-    if (!g_shine.dsl) {
-        VkDescriptorSetLayoutBinding b{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-        VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        li.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-        li.bindingCount = 1, li.pBindings = &b;
-        if (vkCreateDescriptorSetLayout(dev.device, &li, nullptr, &g_shine.dsl) != VK_SUCCESS) return (g_shine.failed = true), false;
-        VkPushConstantRange r{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 32};
+    if (!g_shine.lay) {
+        VkPushConstantRange r{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16};
         VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-        pl.setLayoutCount = 1, pl.pSetLayouts = &g_shine.dsl;
         pl.pushConstantRangeCount = 1, pl.pPushConstantRanges = &r;
         if (vkCreatePipelineLayout(dev.device, &pl, nullptr, &g_shine.lay) != VK_SUCCESS) return (g_shine.failed = true), false;
-        VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-        si.magFilter = si.minFilter = VK_FILTER_LINEAR;
-        si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        si.maxLod = 0.0f;
-        if (vkCreateSampler(dev.device, &si, nullptr, &g_shine.samp) != VK_SUCCESS) return (g_shine.failed = true), false;
     }
     VkShaderModule vm = VK_NULL_HANDLE, fm = VK_NULL_HANDLE;
     const auto vert = BUILTIN_SPV(PRESENT_SHINE_VERT_SPV), frag = BUILTIN_SPV(PRESENT_SHINE_FRAG_SPV);
@@ -7073,7 +7083,15 @@ bool shine_make(VkFormat format) {
     rs.polygonMode = VK_POLYGON_MODE_FILL, rs.cullMode = VK_CULL_MODE_NONE, rs.lineWidth = 1.0f;
     VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    // (le melange alpha : la couche se pose sur l'image, elle ne la remplace pas)
     VkPipelineColorBlendAttachmentState cb{};
+    cb.blendEnable = VK_TRUE;
+    cb.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    cb.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    cb.colorBlendOp = VK_BLEND_OP_ADD;
+    cb.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    cb.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    cb.alphaBlendOp = VK_BLEND_OP_ADD;
     cb.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
     VkPipelineColorBlendStateCreateInfo bs{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
     bs.attachmentCount = 1, bs.pAttachments = &cb;
@@ -7092,32 +7110,16 @@ bool shine_make(VkFormat format) {
     vkDestroyShaderModule(dev.device, fm, nullptr);
     if (!ok) return (g_shine.failed = true), false;
     g_shine.format = format;
-    logf("vk: OcaDim : rue mouillee : pipeline de presentation pret (format %d)", (int)format);
+    logf("vk: OcaDim : rue mouillee : couche de presentation prete (format %d)", (int)format);
     return true;
 }
 }   // namespace
 
-/// (OcaDim 0.0.6) L'effet, tire dans l'image de la fenetre. false : rien n'a ete fait, l'appelant fait son blit habituel.
-bool present_shine(VkCommandBuffer cmd, VkImage dst, VkImageView dst_view, VkImageView src_view, const uint32_t crop[4],
-                   uint32_t sw, uint32_t sh, const VkRect2D& rect, VkFormat format, int strength) {
-    if (strength <= 0 || !src_view || !rect.extent.width || !rect.extent.height) return false;
-    // (OcaDim 0.0.6) la vue de la fenetre n'existe que pour les overlays d'ImGui : on la fait nous-memes, une par image
-    if (!dst_view) {
-        static std::unordered_map<uint64_t, VkImageView> made;
-        const uint64_t key = (uint64_t)(uintptr_t)dst ^ ((uint64_t)format << 56);
-        if (const auto it = made.find(key); it != made.end()) {
-            dst_view = it->second;
-        } else {
-            VkImageViewCreateInfo vc{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-            vc.image = dst, vc.viewType = VK_IMAGE_VIEW_TYPE_2D, vc.format = format;
-            vc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            VkImageView v = VK_NULL_HANDLE;
-            if (vkCreateImageView(dev.device, &vc, nullptr, &v) != VK_SUCCESS) return false;
-            made[key] = v, dst_view = v;
-        }
-    }
+/// (OcaDim 0.0.6) Pose la couche « rue mouillee » sur l'image de la fenetre (deja presentee). false : rien fait.
+/// La cible arrive en TRANSFER_DST_OPTIMAL et ressort en COLOR_ATTACHMENT_OPTIMAL (l'overlay d'ImGui suit, en LOAD).
+bool present_shine(VkCommandBuffer cmd, VkImage dst, VkImageView dst_view, VkFormat format, uint32_t w, uint32_t h, int strength) {
+    if (strength <= 0 || !dst_view || !w || !h) return false;
     if (!shine_make(format)) return false;
-    // (la cible arrive en TRANSFER_DST_OPTIMAL : on la passe en attachement pour le tirage, puis on la rend comme avant)
     VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
     b.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT, b.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
     b.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, b.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
@@ -7131,34 +7133,28 @@ bool present_shine(VkCommandBuffer cmd, VkImage dst, VkImageView dst_view, VkIma
     ca.imageView = dst_view, ca.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     ca.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD, ca.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
-    ri.renderArea = rect;
+    ri.renderArea = {{0, 0}, {w, h}};
     ri.layerCount = 1;
     ri.colorAttachmentCount = 1, ri.pColorAttachments = &ca;
     vkCmdBeginRendering(cmd, &ri);
-    const VkViewport v{ (float)rect.offset.x, (float)rect.offset.y, (float)rect.extent.width, (float)rect.extent.height, 0.0f, 1.0f };
+    const VkViewport v{0.0f, 0.0f, (float)w, (float)h, 0.0f, 1.0f};
+    const VkRect2D sc{{0, 0}, {w, h}};
     vkCmdSetViewport(cmd, 0, 1, &v);
-    vkCmdSetScissor(cmd, 0, 1, &rect);
+    vkCmdSetScissor(cmd, 0, 1, &sc);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_shine.pipe);
-    VkDescriptorImageInfo ii{g_shine.samp, src_view, VK_IMAGE_LAYOUT_GENERAL};
-    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 0, 0, 1,
-                           VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &ii, nullptr, nullptr};
-    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_shine.lay, 0, 1, &w);
-    struct { float uv[4]; float strength; float time; float pad[2]; } pc{};
-    pc.uv[0] = (float)crop[2] / (float)sw, pc.uv[1] = (float)crop[3] / (float)sh;
-    pc.uv[2] = (float)crop[0] / (float)sw, pc.uv[3] = (float)crop[1] / (float)sh;
+    struct { float strength; float time; float pad[2]; } pc{};
     pc.strength = (float)std::clamp(strength, 0, 100) / 100.0f;
     pc.time = (float)((prof_now() / 1000000) % 100000) / 1000.0f;
     vkCmdPushConstants(cmd, g_shine.lay, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof pc, &pc);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkCmdEndRendering(cmd);
-    // (retour a l'etat attendu par la suite de la presentation)
+    // (la cible ressort dans l'etat ou la suite l'attend)
     b.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, b.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-    b.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-    b.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+    b.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, b.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
     b.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     vkCmdPipelineBarrier2(cmd, &di);
     static bool told;
-    if (!told) told = true, logf("vk: OcaDim : rue mouillee : actif a la presentation (intensite %d %%)", std::clamp(strength, 0, 100));
+    if (!told) told = true, logf("vk: OcaDim : rue mouillee : couche posee (intensite %d %%)", std::clamp(strength, 0, 100));
     return true;
 }
 
@@ -10250,7 +10246,7 @@ bool temporal_stand_in(VkCommandBuffer cmd, const NvnState& s, const Program& p)
     }
     // (OcaDim 0.0.6) OcaDim Shine : une seule fois par frame, sur l'image FINALE que l'upscaler prend, donc quel que
     // soit le nombre de passes du jeu et le nombre de threads du replay
-    if (in && opts.ssr > 0) shine_apply(cmd, in, scene_depth_now(), in->width, in->height);
+    // (OcaDim 0.0.6 : l'effet s'applique sur la SORTIE de l'upscaler, plus bas, et non sur la scene)
     const bool done = temporal_upscale(cmd, p.key, gameplay_network(p.key), in, in_view, out, out_view, level);
     // (OcaDim 0.0.6) l'effet de surface, sur la SORTIE de l'upscaler (RGBA16F) : la cible HDR compactee (B10G11R11) n'est
     // pas ecrivable de facon fiable (canaux inverses), mais celle-ci oui, et une copie au meme format ne convertit rien

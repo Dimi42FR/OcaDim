@@ -1,19 +1,17 @@
 #version 450
-// (OcaDim 0.0.6) « Rue mouillee », applique a la PRESENTATION, sur l'image finale de la fenetre (format d'ecran, 8 bits).
+// (OcaDim 0.0.6) « Rue mouillee », en COUCHE TRANSLUCIDE a la presentation.
 //
-// Pourquoi ici : le tampon de rendu du jeu est en B10G11R11 (flottant compacte), et ce pilote l'ecrit mal depuis notre code
-// (blit de conversion : bruit ; passe de rendu : assombrissement ; storage : canaux inverses). A la presentation l'image
-// est deja convertie dans le format de l'ecran : l'ecriture y est celle d'ImGui, donc fiable.
+// Pourquoi une couche : mon tirage qui echantillonnait l'image de la frame generation pour la reecrire la corrompait (meme
+// en recopiant sans calcul). Ici la couche ne lit RIEN : elle se melange a l'image deja affichee, comme les overlays
+// d'ImGui, donc rien ne peut etre corrompu.
 //
-// L'effet ne lit ni normale ni profondeur : la rue est en bas de l'image. Une chaussee mouillee s'assombrit, prend une
-// lueur de ciel rasante, et scintille un peu. Rien ne peut baver sur les facades ni dependre du hors-champ.
-layout(binding = 0) uniform sampler2D pic;
-
+// Une chaussee mouillee = plus sombre, une lueur de ciel rasante, et quelques scintillements. Tout vient de la position a
+// l'ecran (la rue est en bas), aucune profondeur, aucune normale.
 layout(push_constant) uniform P {
-    vec4 uv;         // (echelle x, echelle y, decalage x, decalage y) : la zone de l'image source a lire
-    float strength;  // (0 = aucun effet, 1 = plein)
-    float time;      // (secondes, pour les scintillements)
-    vec2 pad;
+    float strength;   // (0 = rien, 1 = plein)
+    float time;       // (secondes)
+    float pad0;
+    float pad1;
 } pc;
 
 layout(location = 0) in vec2 v_uv;
@@ -25,27 +23,18 @@ float hash21(vec2 p) {
     return fract(p.x * p.y);
 }
 
-vec3 src(vec2 uv) { return texture(pic, pc.uv.zw + uv * pc.uv.xy).rgb; }
-
 void main() {
-    const vec3 c = src(v_uv);
     const float y = v_uv.y;   // (0 en haut de l'ecran)
-
-    // (la rue : le bas de l'image ; la ou elle s'eloigne (vers l'horizon) est le plus mouille, le tout premier plan reste
-    // plus mat - comme une vraie chaussee)
-    const float road = smoothstep(0.38, 0.66, y) * mix(1.0, 0.55, smoothstep(0.82, 1.0, y));
-    const float band = smoothstep(0.42, 0.62, y) * (1.0 - smoothstep(0.62, 0.86, y));
+    // (la rue : le bas ; le plus mouille la ou elle s'eloigne, le premier plan plus mat)
+    const float road = smoothstep(0.38, 0.62, y) * mix(1.0, 0.55, smoothstep(0.82, 1.0, y));
+    const float band = smoothstep(0.42, 0.60, y) * (1.0 - smoothstep(0.60, 0.84, y));
     const float s = pc.strength * road;
 
-    // (le ciel, ecrete : l'image de presentation peut encore porter des valeurs au-dessus de 1)
-    const vec3 sky = min(src(vec2(0.5, 0.02)), vec3(1.5));
-    const vec3 sky_grey = mix(vec3(dot(sky, vec3(0.2126, 0.7152, 0.0722))), sky, 0.55);
+    // (1) et (2) : la teinte froide de la pierre humide, plus dense vers l'horizon de la rue
+    vec3 col = vec3(0.42, 0.46, 0.54);
+    float a = clamp(0.16 * s * (0.45 + 0.55 * band), 0.0, 0.5);
 
-    // (1) la pierre humide s'assombrit
-    vec3 col = c * (1.0 - 0.22 * s);
-    // (2) la lueur de ciel, rasante : c'est elle qui fait « mouille »
-    col = mix(col, sky_grey, clamp(0.16 * s * (0.35 + 0.65 * band), 0.0, 0.6));
-    // (3) quelques scintillements, uniquement sur la rue, petits et rares
+    // (3) les scintillements : de petits points blancs, rares, uniquement sur la rue
     const vec2 gp = gl_FragCoord.xy / 2.5;
     float spark = 0.0;
     for (int k = 0; k < 3; k++) {
@@ -55,7 +44,9 @@ void main() {
         const float spot = step(0.960, hash21(floor(gp) + 3.7 + float(k) * 5.1));
         spark += on * spot;
     }
-    col += sky_grey * clamp(spark, 0.0, 1.0) * pc.strength * road * 0.35;
+    spark = clamp(spark, 0.0, 1.0) * s;
+    col = mix(col, vec3(1.0, 0.98, 0.92), spark);
+    a = mix(a, 0.45, spark);
 
-    out_col = vec4(col, 1.0);
+    out_col = vec4(col, a);
 }

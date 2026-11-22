@@ -137,7 +137,6 @@ VkResult extern_guarded_shader_module(const VkShaderModuleCreateInfo* ci, VkShad
 bool driver_faulted_program(uint64_t key);
 void driver_faulted_module(uint64_t key);
 
-/// (OcaDim 0.0.6) Tire l'effet de surface dans l'image de la fenetre (presentation). false : rien fait, l'appelant blitte.
-bool present_shine(VkCommandBuffer cmd, VkImage dst, VkImageView dst_view, VkImageView src_view, const uint32_t crop[4],
-                   uint32_t sw, uint32_t sh, const VkRect2D& rect, VkFormat format, int strength);
+/// (OcaDim 0.0.6) Pose la couche « rue mouillee » sur l'image de la fenetre (presentation). false : rien fait.
+bool present_shine(VkCommandBuffer cmd, VkImage dst, VkImageView dst_view, VkFormat format, uint32_t w, uint32_t h, int strength);
 } // namespace mkwvk

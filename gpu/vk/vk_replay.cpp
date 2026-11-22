@@ -6404,25 +6404,25 @@ void present_image(VkImage src, uint32_t sw, uint32_t sh, const int crop[4], VkI
         ? (scaled ? framegen_hdr(f.cmd, framegen_scaled_view(), rect.w, rect.h, nullptr, rect.w, rect.h, native_pq)
                   : framegen_hdr(f.cmd, view, sw, sh, crop, rect.w, rect.h, native_pq))
         : VK_NULL_HANDLE;
+    {   // (OcaDim 0.0.6, diagnostic : la route de presentation et ce qui est disponible, une fois)
+        static bool told;
+        if (!told) {
+            told = true;
+            logf("vk: OcaDim : presentation : src %d, view %d, scaled %d, hdr %d, native_pq %d, vue fenetre %d, vue mise a "
+                 "l'echelle %d, ssr %d",
+                 src != nullptr, view != VK_NULL_HANDLE, scaled != VK_NULL_HANDLE, hdr_image != VK_NULL_HANDLE, (int)native_pq,
+                 dev.swap_views[index] != VK_NULL_HANDLE, scaled ? framegen_scaled_view() != VK_NULL_HANDLE : false, opts.ssr);
+        }
+    }
     if (hdr_image) {
         trace_route = 3;
         full_barrier(f.cmd);
         blit_crop_to_rect(f.cmd, hdr_image, rect.w, rect.h, nullptr, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, rect);
     } else if (scaled) {
         trace_route = 1;
-        // (OcaDim 0.0.6) l'effet de surface : sur le chemin REELLEMENT utilise (l'image mise a l'echelle par l'upscaler),
-        // avec repli sur le blit s'il ne peut pas. Le format est celui de l'ecran, donc l'ecriture est fiable
-        const uint32_t cr[4] = {0, 0, rect.w, rect.h};
-        const VkRect2D r2{{(int32_t)rect.x, (int32_t)rect.y}, {rect.w, rect.h}};
-        if (!present_shine(f.cmd, dst, dev.swap_views[index], framegen_scaled_view(), cr, rect.w, rect.h, r2, dev.swap_format,
-                           opts.ssr))
-            blit_crop_to_rect(f.cmd, scaled, rect.w, rect.h, nullptr, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, rect);
+        blit_crop_to_rect(f.cmd, scaled, rect.w, rect.h, nullptr, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, rect);
     } else if (src && !native_pq) {
-        // (OcaDim 0.0.6) l'effet de surface, sur l'image finale de la fenetre ; repli sur le blit s'il ne peut pas
-        const uint32_t cr[4] = {crop ? crop[0] : 0u, crop ? crop[1] : 0u, crop ? crop[2] : sw, crop ? crop[3] : sh};
-        const VkRect2D r2{{(int32_t)rect.x, (int32_t)rect.y}, {rect.w, rect.h}};
-        if (!present_shine(f.cmd, dst, dev.swap_views[index], view, cr, sw, sh, r2, dev.swap_format, opts.ssr))
-            blit_crop_to_rect(f.cmd, src, sw, sh, crop, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, rect);
+        blit_crop_to_rect(f.cmd, src, sw, sh, crop, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, rect);
     } else {
         if (src) {   // (Native, unscaled, and the HDR pass not made: black, said once, rather than the picture converted)
             static bool told;
