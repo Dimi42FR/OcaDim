@@ -6924,7 +6924,10 @@ void shine_apply(VkCommandBuffer cmd, Texture* color, Texture* depth, uint32_t w
     // (OcaDim 0.0.6) la camera peut etre a la taille de la scene et l'image finale a celle du rendu : l'echantillonnage
     // se fait en uv, donc les deux tailles n'ont pas a coincider
     if (near_z <= 0.0f) return;   (void)cw, (void)ch;
-    SsrImage* im = ssr_image(w, h, cmd);
+    // (OcaDim 0.0.6) l'effet est une information BASSE FREQUENCE : calcule au quart de la resolution, le bruit de la
+    // profondeur s'y integre au lieu de faire des plaques, et le cout tombe d'un facteur 16. Le blit l'agrandit en douceur
+    const uint32_t ew = std::max(1u, (w + 3) / 4), eh = std::max(1u, (h + 3) / 4);
+    SsrImage* im = ssr_image(ew, eh, cmd);
     if (!im) {
         g_ssr.failed = true;
         logf("vk: OcaDim : Shine : son image temporaire n'a pas pu etre faite : la ligne est sans effet");
@@ -6947,7 +6950,7 @@ void shine_apply(VkCommandBuffer cmd, Texture* color, Texture* depth, uint32_t w
     SsrPush pc{};
     pc.proj[0] = proj[0], pc.proj[1] = proj[5], pc.proj[2] = proj[10], pc.proj[3] = proj[11];
     pc.jitter[0] = proj[2], pc.jitter[1] = proj[6];
-    pc.inv_size[0] = 1.0f / (float)w, pc.inv_size[1] = 1.0f / (float)h;
+    pc.inv_size[0] = 1.0f / (float)ew, pc.inv_size[1] = 1.0f / (float)eh;
     pc.near_z = near_z, pc.max_dist = max_dist;
     pc.thickness = std::max(2.0f, max_dist / 32.0f * 1.5f);
     pc.strength = std::clamp(opts.ssr, 0, 100) / 100.0f, pc.steps = 32;
@@ -6973,16 +6976,16 @@ void shine_apply(VkCommandBuffer cmd, Texture* color, Texture* depth, uint32_t w
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g_ssr.compute);
     vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g_ssr.lay_compute, 0, 3, wr);
     vkCmdPushConstants(cmd, g_ssr.lay_compute, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof pc, &pc);
-    vkCmdDispatch(cmd, (w + 7) / 8, (h + 7) / 8, 1);
+    vkCmdDispatch(cmd, (ew + 7) / 8, (eh + 7) / 8, 1);
     full_barrier(cmd, "barrier (Shine, avant la copie)");
     // (un blit, pas une copie : il convertit RGBA16F vers le format HDR de la cible)
     VkImageBlit region{};
     region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    region.srcOffsets[1] = {(int32_t)w, (int32_t)h, 1};
+    region.srcOffsets[1] = {(int32_t)ew, (int32_t)eh, 1};
     region.dstOffsets[1] = {(int32_t)w, (int32_t)h, 1};
     vkCmdBlitImage(cmd, im->image, VK_IMAGE_LAYOUT_GENERAL, color->image, VK_IMAGE_LAYOUT_GENERAL, 1, &region,
-                   VK_FILTER_NEAREST);
+                   VK_FILTER_LINEAR);
     full_barrier(cmd, "barrier (apres le Shine)");
     bound().reset();   // (le compute a lie son pipeline : les draws suivants remettent le leur)
 }

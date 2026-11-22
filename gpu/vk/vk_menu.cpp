@@ -2141,8 +2141,12 @@ Row rows[] = {
      "cancels."},
     // ---- (OcaDim) Ray-Tracing : les essais, séparés de l'onglet OcaDim. Le SSR y est branché ; le SSAO a été retiré ----
     {TAB_RT, "Ray-Tracing — EXPÉRIMENTAL, NE FONCTIONNE PAS", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, false, true, -1, true},
-    // (OcaDim 0.0.6 : la ligne « Réflexions écran (SSR) » est retiree — l'effet donnait des taches sur les sols, faute de
-    // G-buffer pour une normale propre. Le code est garde (vk_draw.cpp shine_apply, shaders/ssr.comp) pour une reprise)
+    {TAB_RT, "Brillance et scintillements des sols", &opts.ssr, 0, 100, 5, tx_ssr_fr,   // (OcaDim 0.0.6: l'effet de surface)
+     "Une brillance et des scintillements sur les sols, les dalles et l'eau — pas un reflet : l'effet ne lit que la "
+     "couleur et la profondeur de la scène, et il est calculé au quart de la résolution puis agrandi, ce qui le rend "
+     "lisse et peu coûteux. Désactivé : aucun changement. 20 à 40 % : discret. Au-delà, le sol paraît mouillé. "
+     "EXPÉRIMENTAL.",
+     nullptr, false, true},
     {TAB_RT, "Test BVH (ray_query)", &opts.rt_test, 0, 1, 1, tx_onoff_fr,   // (OcaDim: le premier rayon, debug)
      "DEBUG — NE PRODUIT PAS UNE IMAGE CORRECTE. Le premier rayon du vrai ray tracing : une structure d'accélération (TLAS) "
      "avec un triangle, et un rayon fixe. Écran rouge : le rayon touche le triangle ; vert : il le manque. Sert seulement à "
