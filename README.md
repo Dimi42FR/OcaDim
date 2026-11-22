@@ -8,6 +8,20 @@
 
 <h4 align="center">La récompilation native d'<b>Ocarina of Time</b> sur PC, depuis <b>ta propre copie du jeu</b> — par <b>Dimi42FR</b></h4>
 
+## Nouveautés de la 0.0.6 — un démarrage fiable et des ambiances
+
+Deux ennuis en moins, un plaisir en plus. **L'écran de démarrage ne reste plus bloqué** à 100 %
+quand une autre fenêtre passe devant ; le **cache de programmes a un plafond** réglable dans le
+F1 (Auto / 1 / 2 / 4 / 8 Go / Illimité / **Vider**) ; et l'ancien onglet *Ray-Tracing* devient
+**Effets** : style (Nuit, Coucher de soleil, Donjon, Cinéma, Pluie, Rétro, *Net et propre*),
+lampe torche, cadre cinéma, halo, sépia, bougie, vieille télé, vignette, teinte chaud/froid,
+grain, brillance des sols.
+
+Tout est dessiné **par-dessus** l'image, sans y toucher : rien ne peut l'abîmer. *Net et propre*
+imite le rendu d'un upscaler moderne, **ce n'est pas du DLSS** — aucun upscaler neuronal,
+c'est un traitement d'image. Le SSR (reflets écran) n'est **pas** livré : il grésille sans
+accumulation temporelle, le code reste désactivé.
+
 ## Nouveautés de la 0.0.5-2 — la mémoire
 
 Le cache de programmes traduits (7,2 Go chez nous, 47 798 programmes) était chargé **en entier en
@@ -98,7 +112,7 @@ ton `.nup`.
 **27 heures.** C'est le temps qu'il a fallu pour sortir cette première version : du premier commit (14 novembre, 23:53)
 à la version livrée (16 novembre, 03:19). La frame generation d'AMD y est entrée dans la dernière nuit.
 
-**Télécharger :** [OcaDim 0.0.5-2 — le Setup Windows x64](https://github.com/Dimi42FR/OcaDim/releases/latest). Il compile le
+**Télécharger :** [OcaDim 0.0.6 — le Setup Windows x64](https://github.com/Dimi42FR/OcaDim/releases/latest). Il compile le
 jeu chez toi, à partir de ton `.nup`.
 
 **Tu viens tester ?** Il y a trois choses à essayer ce soir et quatre façons d'aider sans coder, plus bas, dans
@@ -323,7 +337,7 @@ Ce qui nous aide le plus, ce n'est pas « c'est bien » : c'est **où ça casse*
 ### Avec le Setup (recommandé)
 
 Le paquet est dans les **[releases](https://github.com/Dimi42FR/OcaDim/releases/latest)** :
-`OcaDimSetup-0.0.5-2.zip` (≈ 500 Mo). Dézippe-le, lance **`OcaDimSetup.exe`**, choisis ton
+`OcaDimSetup-0.0.6.zip` (≈ 500 Mo). Dézippe-le, lance **`OcaDimSetup.exe`**, choisis ton
 `.nup`, attends. Aux lancements suivants, le même exe propose **Jouer / Mettre à jour / Désinstaller**.
 
 ### À la main, depuis les sources
