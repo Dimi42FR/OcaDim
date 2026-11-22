@@ -74,6 +74,9 @@ void temporal_note_skinned_draw(const SkinnedDraw& k);
 int temporal_hidden_mesh_mode();
 /// (longshot, #1370) Whether `depth` is the depth target of the scene the chain has taken in this frame (its camera's)
 bool temporal_scene_depth_is(const Texture* depth);
+/// (OcaDim 0.0.6) La profondeur de la scene de cette frame (celle dont la camera a ete prise), ou nullptr : l'effet de
+/// surface est applique sur l'image finale, une fois par frame
+const Texture* temporal_scene_depth();
 
 /// A gameplay upscale's dispatch (program `key`; vk_draw.cpp's temporal_stand_in finds them: the 4/3 network fd029a317a9a4b94
 /// at the game's usual 3/4, the same-size pass 9dc98871eb7fc101 at full size, and one network of its own for each other

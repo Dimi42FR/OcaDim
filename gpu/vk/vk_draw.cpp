@@ -6878,6 +6878,86 @@ void ssr_after_pass(VkCommandBuffer cmd, const Pass& ps) {
     full_barrier(cmd, "barrier (apres le SSR)");
 }
 
+/// (OcaDim 0.0.6) OcaDim Shine, applique UNE fois par frame sur l'image FINALE de la scene, au moment ou l'upscaler
+/// la prend (temporal_stand_in). C'est le seul point stable : le jeu termine plusieurs passes par frame et, selon la
+/// camera, la derniere n'est pas celle qu'un crochet « fin de passe » attrape (l'effet etait ecrase).
+void shine_apply(VkCommandBuffer cmd, Texture* color, Texture* depth, uint32_t w, uint32_t h) {
+    static bool told_call;
+    if (!told_call && opts.ssr > 0) {
+        told_call = true;
+        logf("vk: OcaDim : Shine : appele (%ux%u, profondeur %s, intensite %d %%)", w, h, depth ? "oui" : "non",
+             std::clamp(opts.ssr, 0, 100));
+    }
+    if (opts.ssr <= 0 || g_ssr.failed || !color || !depth) return;
+    if (w < 1024 || h < 576) return;
+    if (color->format != VK_FORMAT_R16G16B16A16_SFLOAT) return;   // (la copie finale veut le meme format)
+    if (color->type != VK_IMAGE_TYPE_2D || depth->type != VK_IMAGE_TYPE_2D) return;
+    if (!(color->usage & VK_IMAGE_USAGE_SAMPLED_BIT) || !(depth->usage & VK_IMAGE_USAGE_SAMPLED_BIT)) return;
+    if (!(color->usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT)) return;
+    float proj[16], view_up[3], near_z = 0, far_z = 0;
+    uint32_t cw = 0, ch = 0;
+    if (!temporal_scene_camera(depth, proj, view_up, &near_z, &far_z, &cw, &ch)) return;
+    if (near_z <= 0.0f || cw != w || ch != h) return;
+    SsrImage* im = ssr_image(w, h, cmd);
+    if (!im) {
+        g_ssr.failed = true;
+        logf("vk: OcaDim : Shine : son image temporaire n'a pas pu etre faite : la ligne est sans effet");
+        return;
+    }
+    if (!ssr_make_pipelines()) return;
+    VkImageView cv = ssr_sampled_view(color, VK_IMAGE_ASPECT_COLOR_BIT);
+    VkImageView dv = ssr_sampled_view(depth, VK_IMAGE_ASPECT_DEPTH_BIT);
+    if (!cv || !dv) return;
+    if (!g_ssr.color_sampler) {
+        VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+        si.magFilter = si.minFilter = VK_FILTER_LINEAR;
+        si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.maxLod = 0.0f;
+        if (vkCreateSampler(dev.device, &si, nullptr, &g_ssr.color_sampler) != VK_SUCCESS) return;
+        si.magFilter = si.minFilter = VK_FILTER_NEAREST;
+        if (vkCreateSampler(dev.device, &si, nullptr, &g_ssr.depth_sampler) != VK_SUCCESS) return;
+    }
+    const float max_dist = std::min(4000.0f, std::max(250.0f, far_z * 0.05f));
+    SsrPush pc{};
+    pc.proj[0] = proj[0], pc.proj[1] = proj[5], pc.proj[2] = proj[10], pc.proj[3] = proj[11];
+    pc.jitter[0] = proj[2], pc.jitter[1] = proj[6];
+    pc.inv_size[0] = 1.0f / (float)w, pc.inv_size[1] = 1.0f / (float)h;
+    pc.near_z = near_z, pc.max_dist = max_dist;
+    pc.thickness = std::max(2.0f, max_dist / 32.0f * 1.5f);
+    pc.strength = std::clamp(opts.ssr, 0, 100) / 100.0f, pc.steps = 32;
+    pc.view_up[0] = view_up[0], pc.view_up[1] = view_up[1], pc.view_up[2] = view_up[2];
+    pc.pad0 = 0;
+    pc.pad1 = (int32_t)(prof_now() / 1000000);   // (le temps, pour les scintillements)
+    static bool told;
+    if (!told) {
+        told = true;
+        logf("vk: OcaDim : Shine actif sur l'image finale %ux%u (intensite %d %%)", w, h, std::clamp(opts.ssr, 0, 100));
+    }
+    full_barrier(cmd, "barrier (avant le Shine)");
+    VkDescriptorImageInfo ci{g_ssr.color_sampler, cv, VK_IMAGE_LAYOUT_GENERAL};
+    VkDescriptorImageInfo di{g_ssr.depth_sampler, dv, VK_IMAGE_LAYOUT_GENERAL};
+    VkDescriptorImageInfo oi{VK_NULL_HANDLE, im->view, VK_IMAGE_LAYOUT_GENERAL};
+    VkWriteDescriptorSet wr[3]{};
+    wr[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 0, 0, 1,
+             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &ci, nullptr, nullptr};
+    wr[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 1, 0, 1,
+             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &di, nullptr, nullptr};
+    wr[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 2, 0, 1,
+             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &oi, nullptr, nullptr};
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g_ssr.compute);
+    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g_ssr.lay_compute, 0, 3, wr);
+    vkCmdPushConstants(cmd, g_ssr.lay_compute, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof pc, &pc);
+    vkCmdDispatch(cmd, (w + 7) / 8, (h + 7) / 8, 1);
+    full_barrier(cmd, "barrier (Shine, avant la copie)");
+    VkImageCopy region{};
+    region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.extent = {w, h, 1};
+    vkCmdCopyImage(cmd, im->image, VK_IMAGE_LAYOUT_GENERAL, color->image, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+    full_barrier(cmd, "barrier (apres le Shine)");
+    bound().reset();   // (le compute a lie son pipeline : les draws suivants remettent le leur)
+}
+
 // (le test BVH : il ecrase la cible avec le rouge/vert du rayon, apres le SSR s'il tourne)
 void rt_test_after_pass(VkCommandBuffer cmd, const Pass& ps) {
     if (!opts.rt_test || !dev.accel_struct || !dev.ray_query) return;
@@ -6989,7 +7069,7 @@ void end_pass(VkCommandBuffer cmd) {
     vkCmdEndRendering(cmd);
     ps.open = false;
     note_pass_end(cmd);   // (before the dumps and probes below: they record work, and the next pass's barrier is then a full one)
-    ssr_after_pass(cmd, ps);   // (OcaDim: l'onglet Ray-Tracing, rien quand la ligne est sur Désactivé)
+    // (OcaDim 0.0.6 : l'effet est applique une fois par frame sur l'image finale, dans temporal_stand_in)
     rt_test_after_pass(cmd, ps);   // (OcaDim: le test BVH, apres le SSR : il ecrase la cible)
     if (ps.has_block_images) {
         full_barrier(cmd, "barrier (before BC slice stores)");
@@ -9925,6 +10005,8 @@ bool fsr3_stand_in(VkCommandBuffer cmd, const NvnState& s, const Program& p) {
         input_view = texture_view_of(in_handle, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Sample, VK_FORMAT_R16G16B16A16_SFLOAT);
         output_view = texture_view_of(out_handle, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Storage, VK_FORMAT_R16G16B16A16_SFLOAT);
     }
+    // (OcaDim 0.0.6) OcaDim Shine, sur l'image finale, une fois par frame (le chemin FSR 3.1/FSR 4)
+    if (in && opts.ssr > 0) shine_apply(cmd, in, const_cast<Texture*>(temporal_scene_depth()), in->width, in->height);
     return fsr3_upscale(cmd, p.key, gameplay_network(p.key), in, input_view, out, output_view, level);
 }
 /// (longshot) A temporal upscaler (NVIDIA DLSS, AMD FSR 4: vk_temporal.cpp) in place of the gameplay upscale network, when
@@ -9957,6 +10039,9 @@ bool temporal_stand_in(VkCommandBuffer cmd, const NvnState& s, const Program& p)
         in_view = texture_view_of(in_handle, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Sample, VK_FORMAT_R16G16B16A16_SFLOAT);
         out_view = texture_view_of(out_handle, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Storage, VK_FORMAT_R16G16B16A16_SFLOAT);
     }
+    // (OcaDim 0.0.6) OcaDim Shine : une seule fois par frame, sur l'image FINALE que l'upscaler prend, donc quel que
+    // soit le nombre de passes du jeu et le nombre de threads du replay
+    if (in && opts.ssr > 0) shine_apply(cmd, in, const_cast<Texture*>(temporal_scene_depth()), in->width, in->height);
     const bool done = temporal_upscale(cmd, p.key, gameplay_network(p.key), in, in_view, out, out_view, level);
     // (its actor motion may have drawn with a pipeline, viewport and descriptors of its own: the next draw sets all of its again)
     bound().reset();

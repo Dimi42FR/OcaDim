@@ -913,6 +913,9 @@ bool temporal_scene_camera(const Texture* depth, float projection[16], float vie
     const Camera* k = nullptr;
     if (s.cam.valid && s.cam.depth == depth && s.cam.frame == texture_frame_no()) k = &s.cam;
     else if (s.frame_cam.frame == texture_frame_no() && s.frame_cam.depth == depth) k = &s.frame_cam;
+    // (OcaDim 0.0.6) l'effet de surface est appele au moment de l'upscale, ou la camera de la scene peut dater de
+    // l'image precedente : une image de retard ne se voit pas sur une brillance, et sans elle l'effet ne tournait jamais
+    else if (s.cam.valid && s.cam.depth == depth) k = &s.cam;
     if (!k) return false;
     std::memcpy(projection, k->projection, sizeof(float) * 16);
     // (OcaDim, SSR) la verticale du monde en espace vue : V = inv(P) * VP, et sa deuxieme colonne. P est la projection
@@ -1053,6 +1056,15 @@ bool temporal_scene_depth_is(const Texture* depth) {
     State& s = st();
     std::lock_guard lk(s.mu);
     return depth && s.cam.valid && s.cam.depth == depth && s.cam.frame == texture_frame_no();
+}
+
+const Texture* temporal_scene_depth() {
+    State& s = st();
+    std::lock_guard lk(s.mu);
+    // (OcaDim 0.0.6) sans exiger la frame courante : au moment de l'upscale, la camera de la scene peut etre celle
+    // de l'image precedente (voir temporal_scene_camera)
+    if (s.cam.valid && s.cam.depth) return s.cam.depth;
+    return s.frame_cam.valid ? s.frame_cam.depth : nullptr;
 }
 
 void temporal_note_skinned_draw(const SkinnedDraw& k) {
