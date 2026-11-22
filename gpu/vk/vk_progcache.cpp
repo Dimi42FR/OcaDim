@@ -79,6 +79,19 @@ uint64_t program_cache_stamp() {
 // already kept (ocadim_vk_pipelines.bin). Written as made; good for this translator (LONGSHOT_SHADER_STAMP) and these switches only
 // (a file made by another starts again). RX_VK_NO_PROGRAM_CACHE=1: off ----
 std::mutex disk_mu;
+// (OcaDim 0.0.6) Le budget du cache de programmes : au-delà, plus rien n'est ajouté (les entrées déjà là restent
+// lisibles). RX_VK_PROGRAM_CACHE_MB=réglé pour un lancement (0 : illimité) ; le défaut est 2 Go, la valeur au-delà de
+// laquelle Auto ne charge plus le cache avant le titre (vk_programs.cpp).
+uint64_t menu_program_cache_budget();   // (OcaDim 0.0.6: vk_menu.cpp, la ligne « Plafond du cache de programmes »)
+uint64_t program_cache_budget() {
+    static const uint64_t env = [] {
+        const char* e = getenv("RX_VK_PROGRAM_CACHE_MB");
+        return e ? (uint64_t)atoll(e) << 20 : ~0ull;   // (none: the menu's row decides, below)
+    }();
+    if (env != ~0ull) return env;
+    return menu_program_cache_budget();   // (vk_menu.cpp: the F1's row, read at each write)
+}
+
 // (read as wanted: with every program of the game in it the file is gigabytes, and it was read into memory whole)
 FILE* disk_in = nullptr;
 std::string disk_path;   // (ocadim_programs.bin: the precompile opens it once a thread)
@@ -130,6 +143,20 @@ void disk_init() {
     static std::once_flag once;
     std::call_once(once, [] {
         if (env_on("RX_VK_NO_PROGRAM_CACHE")) return;
+        // (OcaDim 0.0.6) le cache repart à zéro : RX_VK_PROGRAM_CACHE_CLEAR=1, ou le drapeau que la ligne « Vider » du F1
+        // pose (vk_menu.cpp save) — le cache s'ouvre avant que le menu ne soit lu, d'où le drapeau
+        bool clear = env_on("RX_VK_PROGRAM_CACHE_CLEAR");
+        const std::string clear_flag = cache_path("ocadim_programs.clear");
+        if (FILE* f = fopen(clear_flag.c_str(), "rb")) fclose(f), clear = true;
+        if (clear) {
+            for (const char* n : {"ocadim_programs.bin", "ocadim_programs.zst.bin"}) {
+                const std::string p = cache_path(n);
+                std::remove(p.c_str());
+                std::remove((p.substr(0, p.size() - 4) + ".idx").c_str());
+            }
+            std::remove(clear_flag.c_str());
+            logf("vk: programme cache vidé : chaque programme est retraduit (RX_VK_PROGRAM_CACHE_CLEAR, ou la ligne du F1)");
+        }
         // (longshot) RX_VK_PROGRAM_CACHE_ZSTD=1: each record compressed with zstd, in a file of its own so that a build
         // without this switch never reads it. SPIR-V compresses about 7.7x at zstd's level 3.
         disk_zstd = env_on("RX_VK_PROGRAM_CACHE_ZSTD");
@@ -265,7 +292,8 @@ void disk_init() {
         disk_in = disk_out ? fopen(path.c_str(), "rb") : nullptr;
         disk_path = path;
         disk_on = disk_out != nullptr && disk_in != nullptr;
-        logf("vk: program cache %s: %zu program keys kept, %lld KB", path.c_str(), disk_records.size(), (long long)(good >> 10));
+        logf("vk: program cache %s: %zu program keys kept, %lld KB, its budget %lld MB", path.c_str(), disk_records.size(),
+             (long long)(good >> 10), (long long)(program_cache_budget() >> 20));
     });
 }
 
@@ -404,6 +432,16 @@ void program_cache_save(const Program& p, const std::vector<std::vector<uint32_t
     std::lock_guard lk(disk_mu);
     _fseeki64(disk_out, 0, SEEK_END);
     const int64_t at = _ftelli64(disk_out);
+    // (OcaDim 0.0.6) le budget : passé, l'entrée n'est pas ajoutée. Le jeu la garde en mémoire pour la session ; au
+    // prochain démarrage elle sera retraduite. Dit une fois, pour que le journal ne se remplisse pas.
+    const uint64_t budget = program_cache_budget();
+    if (budget && (uint64_t)at + (uint64_t)o.size() + 64 > budget) {
+        static std::atomic<int> told{0};
+        if (told++ == 0)
+            logf("vk: program cache %lld MB, its budget %lld MB: new programs are no longer saved (RX_VK_PROGRAM_CACHE_MB)",
+                 (long long)(at >> 20), (long long)(budget >> 20));
+        return;
+    }
     fwrite(head, 8, 2, disk_out);
     if (disk_zstd) fwrite(&kind, 4, 1, disk_out);
     if (compressed_ok) {

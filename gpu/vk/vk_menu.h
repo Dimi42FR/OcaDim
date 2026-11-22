@@ -165,6 +165,8 @@ struct Options {
                             // cent (5 à 100), mélangée à la couleur (vk_draw.cpp ssr_after_pass). Expérimental
     int rt_test = 0;        // (OcaDim) test BVH : 0 off, 1 le rayon ray_query contre une TLAS d'un triangle (debug)
                             // (vk_draw.cpp rt_test_after_pass). Expérimental
+    int pcache_budget = 0;  // (OcaDim 0.0.6) le plafond du cache de programmes, en Go : 0 Auto (2), 1 a 4 (1, 2, 4, 8 Go),
+                            // 5 illimité, 6 vider au prochain démarrage (vk_menu.cpp menu_program_cache_budget)
 };
 extern Options opts;
 constexpr int kAutoPreset = 6;   // (the Quality preset Auto (this PC): menu_auto_for_gpu, auto_settings.h)
@@ -193,6 +195,9 @@ bool menu_ccx_split();
 /// (OcaDim) Charger tous les programmes avant le titre au lieu de les lire quand le jeu les demande : moins de gels en
 /// partie, un démarrage plus long et plus de mémoire (vk_programs.cpp programs_load_decide)
 bool menu_load_start();
+/// (OcaDim 0.0.6) Le plafond du cache de programmes, en octets (0 : illimité) : la ligne « Plafond du cache de programmes ».
+/// vk_progcache.cpp l'appelle à chaque écriture, donc un changement s'applique sans redémarrer.
+uint64_t menu_program_cache_budget();
 /// (OcaDim) La précompilation en arrière-plan, en secondes avant le titre (0 : tout avant le titre, comme avant)
 int menu_precompile_background();
 void menu_set_gpu_count(int count);

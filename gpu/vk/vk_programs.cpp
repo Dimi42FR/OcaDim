@@ -37,10 +37,9 @@ namespace mkwvk {
 bool menu_load_start();   // (OcaDim: vk_menu.cpp, la ligne « Programmes avant le titre »)
 
 namespace {
-/// (OcaDim 0.0.5-2) Un cache de programmes de cette taille, chargé avant le titre, met des dizaines de Go en RAM (mesuré :
-/// 7,2 Go de cache, 12,6 Go résidents, 18,7 Go pour le jeu). Auto laisse alors les chargements aux premières utilisations,
-/// comme RX_VK_LOAD=create. La ligne « Activé » force toujours le chargement avant le titre.
-constexpr uint64_t kLoadAtStartCacheMax = 2ull << 30;
+/// (OcaDim 0.0.6) Le plafond du cache (la ligne « Plafond du cache de programmes ») : un cache plus gros que lui, chargé
+/// avant le titre, met des dizaines de Go en RAM (mesuré : 7,2 Go de cache, 12,6 Go résidents, 18,7 Go pour le jeu). Auto
+/// laisse alors les chargements aux premières utilisations, comme RX_VK_LOAD=create. « Activé » et RX_VK_LOAD=start forcent.
 uint64_t cache_file_bytes() {
     // (the path asked of vk_paths.h, not of program_cache_path(): that one runs the cache's own init, which has not run yet
     // when this decides, and answered nothing)
@@ -379,7 +378,8 @@ void programs_load_decide(bool native_mesh) {
     // chargés avant le titre, sinon le cache entier passe en RAM (12,6 Go mesurés). « Activé » et RX_VK_LOAD=start forcent.
     if (by_row) {
         const uint64_t bytes = cache_file_bytes();
-        if (bytes > kLoadAtStartCacheMax) {
+        const uint64_t budget = program_cache_budget();
+        if (budget && bytes > budget) {
             mode = "create";
             logf("vk: program cache %.0f MB: the programs are loaded at their first use, not before the title "
                  "(RX_VK_LOAD=start loads them all, and the RAM with them)", (double)bytes / (1 << 20));

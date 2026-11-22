@@ -85,7 +85,7 @@ extern char** environ;
 #endif
 // (OcaDim) the product version players see (the window, the start-up screen, the banner and the log):
 // this build's own, not the upstream release the sources come from
-#define OCADIM_VERSION "0.0.5"
+#define OCADIM_VERSION "0.0.6"
 
 namespace mkwvk {
 int64_t slot_wait_ns();   // (vk_replay.cpp: the replay's waits for a recording slot so far, the FPS counter's Dev line)
@@ -1368,6 +1368,11 @@ const char* tx_ssr_fr(int v) {   // (OcaDim: les réflexions écran, Désactivé
 const char* tx_workers_fr(int v) { static const char* const t[] = {"Auto", "1", "2", "3", "4", "5", "6", "7", "8"}; return t[std::clamp(v, 0, 8)]; }
 const char* tx_seg_fr(int v) { static const char* const t[] = {"Auto (160)", "32", "64", "160"}; return t[std::clamp(v, 0, 3)]; }
 const char* tx_bg_fr(int v) { static const char* const t[] = {"Désactivé", "15 s", "30 s"}; return t[std::clamp(v, 0, 2)]; }
+/// (OcaDim 0.0.6) le plafond du cache de programmes : Auto (2 Go), les tailles, l'illimité, et le vidage
+const char* tx_pcache_fr(int v) {
+    static const char* const t[] = {"Auto (2 Go)", "1 Go", "2 Go", "4 Go", "8 Go", "Illimité", "Vider"};
+    return t[std::clamp(v, 0, 6)];
+}
 /// (l'interrupteur d'environnement de ce lancement, par-dessus la ligne : ici RX_VK_DESC_PREFETCH)
 const char* prefetch_env() { return getenv("RX_VK_DESC_PREFETCH") ? "RX_VK_DESC_PREFETCH" : nullptr; }
 const char* hn_desc_prefetch(int v, int variant) {
@@ -2065,6 +2070,11 @@ Row rows[] = {
      "Auto (chargés au lancement) et Activé : tous les programmes sont chargés avant le titre, au lieu d'être lus quand le "
      "jeu les demande — plus de gels en partie, un démarrage plus long et un peu plus de mémoire. Désactivé : le mode de "
      "l'émulateur (au chargement sur NVIDIA). Prend effet après un redémarrage.", nullptr, true, true},
+    {TAB_OCADIM, "Plafond du cache de programmes", &opts.pcache_budget, 0, 6, 1, tx_pcache_fr,   // (OcaDim 0.0.6: sa taille)
+     "La taille maximale du cache de programmes traduits (cache\\ocadim_programs.bin) : au-delà, les nouveaux programmes ne "
+     "sont plus enregistrés et le fichier cesse de grossir, sans rien retraduire. Auto : 2 Go, la valeur au-delà de laquelle "
+     "le cache n'est plus chargé avant le titre. « Vider » efface le cache au prochain démarrage : la partie suivante "
+     "retraduit, comme à la première installation.", nullptr, false, true},
     {TAB_OCADIM, "Mode mémoire réduite (expérimental)", &opts.low_mem, 0, 1, 1, tx_onoff,   // (OcaDim: risky)
      "EXPÉRIMENTAL, DÉSACTIVÉ PAR DÉFAUT. Garde 24 frames d'enregistrement au lieu de 48 : moins de mémoire, mais l'anneau peut "
      "revenir sur une frame encore en vol et le pilote réinitialiser le GPU (device lost). À n'activer que pour un test, et à "
@@ -2568,6 +2578,7 @@ const char* ini_key(const Row& r) {
     if (r.value == &opts.ccx_split) return "ccx_split";
     if (r.value == &opts.precompile_bg) return "precompile_background";
     if (r.value == &opts.load_start) return "load_start";
+    if (r.value == &opts.pcache_budget) return "program_cache_budget";   // (OcaDim 0.0.6: le plafond du cache)
     if (r.value == &opts.ssr) return "ssr";   // (OcaDim: les réflexions écran, onglet Ray-Tracing)
     if (r.value == &opts.rt_test) return "rt_test";   // (OcaDim: le test BVH, onglet Ray-Tracing)
     if (r.value == &opts.intel_compiles) return "intel_shader_compiles";   // (two rows, one key)
@@ -2757,6 +2768,13 @@ void mic_chosen() {
     mic_tell_host();
 }
 void save() {
+    // (OcaDim 0.0.6) « Vider » : le drapeau que le cache lit à son ouverture (vk_progcache.cpp disk_init). La ligne reste
+    // sur « Vider » jusqu'au démarrage suivant : c'est la preuve que le choix a été pris (menu_load_start la remet à Auto)
+    if (opts.pcache_budget == 6) {
+        const std::string flag = cache_path("ocadim_programs.clear");
+        if (FILE* f = fopen(flag.c_str(), "wb")) fclose(f);
+        logf("vk: programme cache : vidé au prochain démarrage (cache/ocadim_programs.bin)");
+    }
     // (one writer at a time: the present's thread, the game's (menu_option_set) and the control bridge's, menu_setting_set)
     static std::mutex save_mu;
     std::lock_guard lk(save_mu);
@@ -5951,11 +5969,16 @@ static void probe_upscalers_soon() {
 }
 
 void startup_screen(const StartupView* view) {
+    static std::atomic<bool> done{false};   // (OcaDim 0.0.6) l'écran a été fermé une fois : plus jamais
     if (!view) {
+        done.store(true, std::memory_order_release);
         startup_on.store(false, std::memory_order_release);
         startup_fade.store(0, std::memory_order_relaxed);
         return;
     }
+    // (un peintre laissé en arrière : bloqué dans un present parce que la fenêtre était recouverte, il revient et
+    // redemanderait l'écran après que le jeu a commencé — la barre restait à 100 % devant le jeu, qui tournait derrière)
+    if (done.load(std::memory_order_acquire)) return;
     StartupView v = *view;
     if (v.version.empty()) v.version = std::string("OcaDim ") + OCADIM_VERSION;   // (OcaDim 0.0.3)
     {
@@ -6195,7 +6218,24 @@ int menu_vsync() { static const int run = env_on("RX_VK_FIFO") ? 1 : env_on("RX_
 /// Désactivé (2) laisse le mode de l'émulateur (au chargement sur NVIDIA). RX_VK_LOAD, réglé, l'emporte
 bool menu_load_start() {
     menu_init();
+    // (OcaDim 0.0.6) « Vider » a été lu par le cache à son ouverture (vk_progcache.cpp disk_init) : la ligne revient à Auto,
+    // une fois, pour que le choix ne vide pas le cache à chaque démarrage
+    if (opts.pcache_budget == 6) {
+        opts.pcache_budget = 0;
+        save();
+    }
     return std::clamp(opts.load_start, 0, 2) != 2;
+}
+/// (OcaDim 0.0.6) Le plafond du cache de programmes, en octets, tel que la ligne le donne (0 : illimité). vk_progcache.cpp
+/// l'appelle à chaque écriture : un changement s'applique sans redémarrer.
+uint64_t menu_program_cache_budget() {
+    switch (std::clamp(opts.pcache_budget, 0, 5)) {
+        case 1: return 1ull << 30;
+        case 3: return 4ull << 30;
+        case 4: return 8ull << 30;
+        case 5: return 0;
+        default: return 2ull << 30;   // (Auto, et 2 Go)
+    }
 }
 /// (OcaDim) The Descriptor prefetch row, resolved once for the run: Auto is par_scale.h's rule (on from six logical
 /// processors, where the helper's own thread does not take a core the game needs). vk_replay.cpp desc_prefetch_on asks it

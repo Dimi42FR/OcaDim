@@ -90,6 +90,10 @@ std::unique_ptr<Program> program_cache_read_light(FILE* in, std::mutex* mu, uint
 bool program_cache_complete_unshared(Program& p, FILE* in);   // (program_cache_complete for a program no other thread has yet)
 /// The cache's file, for a thread's own handle on it (empty: no cache)
 std::string program_cache_path();
+/// (OcaDim 0.0.6) Le plafond du cache, en octets (0 : illimité) : RX_VK_PROGRAM_CACHE_MB, sinon la ligne du F1
+/// (« Plafond du cache de programmes », vk_menu.cpp menu_program_cache_budget). Au-delà, rien n'est plus enregistré, et
+/// Auto ne charge plus le cache avant le titre (vk_programs.cpp)
+uint64_t program_cache_budget();
 
 // (vk_shader.cpp's, for the cache)
 uint64_t translator_stamp();   // (the translator and what it is told: LONGSHOT_SHADER_STAMP, the GPU, the environment)

@@ -1573,6 +1573,9 @@ void prepare_with_screen() {
         bool prepared = false;   // (this start prepares the programs: a first start after an update, two steps)
         uint32_t last_w = dev.swap_extent.width, last_h = dev.swap_extent.height;
         for (;;) {
+            // (OcaDim 0.0.6) le thread principal l'a laissé derrière (la fenêtre ne se montrait pas) : il s'arrête ici, sans
+            // redemander l'écran — sinon la barre restait à 100 % devant le jeu, qui tournait derrière
+            if (paint_stop.load(std::memory_order_acquire)) break;
             const bool finished = prep_finished.load(std::memory_order_acquire);
             const double secs = std::chrono::duration<double>(clock::now() - t0).count();
             const int stage = prep_stage.load();
