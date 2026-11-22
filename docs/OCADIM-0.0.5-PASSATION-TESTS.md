@@ -4,7 +4,7 @@
 
 - Produit : **OcaDim 0.0.5**
 - Branche : `ocadim-0.0.5`
-- Commit : `c5cb462d` (threads du replay à 4 par défaut)
+- Commit : `b558b02c` (workers 4 + segments 32, cache 4 programmes, docs de tests)
 - Tag : `v0.0.5`
 - Base : `merge-amont` / `95b6736c` (source de la build D 0.0.4 + RT mesh)
 - Sauvegardes : `v0.0.5-save`, `backup-0.0.5-2026-11-21`, `F:\OcaDim-SAVE-17-11\build-0.0.5-final`
@@ -19,14 +19,14 @@
   - `D:\ocarina3` (référence de jeu)
   - `D:\ocadim-0.0.5` (installation de test)
   - `C:\Users\Administrator\Desktop\Nouveau dossier (9)\OcaDim\build-0.0.5`
-  - `F:\OcaDim-SAVE-17-11\build-0.0.5-workers4`
+  - `F:\OcaDim-SAVE-17-11\build-0.0.5-workers4-seg32-p4`
 
 ## Réglages par défaut (AMD RDNA 4 / NVIDIA compatible)
 
 - FSR 4 Native AA (auto RDNA 4) ; DLSS Quality (auto NVIDIA)
 - `resolution=9` (92 %), `frame_rate_cap=3` (144), `upscaling=2` (Lanczos)
 - `threaded_rendering=1`, `sampler_cache=1`, `draw_order=1`
-- `replay_workers=4` (verrouillé après mesure), `replay_seg=3` (160)
+- `replay_workers=4` (verrouillé après mesure), `replay_seg=1` (32)
 - `descriptor_prefetch=0` (rejeté après mesure)
 - `above60_fixes=1`, `aniso=4`, `shadow_resolution=0` (= 1600 du jeu)
 - `amd_anti-lag_2=1` (AMD uniquement), frame generation par défaut : désactivée
@@ -150,14 +150,14 @@ Puis joindre le `source.zip` et le Setup à la release 0.0.5.
 
 ## Prochains tests prévus
 
-1. `replay_seg=32` avec workers=4 (référence actuelle : 160).
-2. `replay_workers=6` avec le meilleur segment.
-3. `descriptor_prefetch=1` avec workers=4.
-4. `RX_VK_ASYNC=0` puis `RX_VK_RECORDER=0` pour isoler render thread / recorder.
-5. Précompilation au chargement pour les 1 % low.
-6. Culling des acteurs hors caméra (risque scripts/musique/portes).
-7. LTO / PGO / -O3 sur fonctions chaudes.
-8. CCX split : inutile sur Ryzen 7 5800X (un seul CCD).
+1. Culling des acteurs hors caméra (risque scripts/musique/portes) : derrière une option, contrôle visuel.
+2. LTO / PGO / -O3 sur fonctions chaudes.
+3. Précompilation au chargement pour les 1 % low : **non nécessaire**, aucun gel constaté en déplacement.
+
+Faits le 22/11 et rejetés ou verrouillés : `replay_seg=32` (accepté), `replay_workers=6` (rejeté),
+`descriptor_prefetch=1` (rejeté), `RX_VK_ASYNC=0` (rejeté), `RX_VK_RECORDER=0` (sans objet, 0,5 %).
+Profilage fin `RX_VK_PROF_FINE=1` : coût étalé, aucun poste dominant, micro-optimisations abandonnées.
+CCX split : inutile sur Ryzen 7 5800X (un seul CCD).
 
 ## Tests complémentaires (22/11, Kokiri Forest)
 
