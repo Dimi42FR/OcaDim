@@ -1,45 +1,41 @@
 #version 450
-// (OcaDim 0.0.6) Reflexions ecran (SSR), reecrit. Pour chaque pixel de la scene, le rayon reflechi par la surface est
-// marche dans la profondeur de la scene ; a l'intersection, la couleur de la scene est prise. Seuls les reflets visibles a
-// l'ecran existent (l'eau, les dalles, les vitres).
+// (OcaDim 0.0.6) « OcaDim Shine » : brillance et scintillement des surfaces, a la place du SSR.
 //
-// Pas de repli : un rayon qui sort de l'ecran ne donne aucun reflet. C'est ce qui creait le trait qui glissait quand la
-// camera bougeait (l'ancien code prenait la couleur du bord de l'ecran, collee).
+// Pourquoi : un reflet ecran ne peut refleter que ce qui est DEJA dans l'image. Des qu'on baisse la camera, le ciel
+// et les facades sortent du champ et le reflet s'eteint (mesure : 0,9 % de draws hors champ a Kokiri, 5,2 % en ville).
+// Cet effet ne depend d'aucune information hors champ : il ne peut ni disparaitre, ni baver, ni faire de trait.
+//
+//   - une teinte de ciel selon l'angle (Fresnel) : les dalles prennent une lueur en regardant au loin ;
+//   - des scintillements animes sur les surfaces horizontales : l'eau et la pierre polie vivent ;
+//   - un leger assombrissement des surfaces vues de face : l'aspect « mouille ».
 //
 // Entrees :
-//   binding 0 : la couleur de la scene (telle que la passe vient de l'ecrire)
-//   binding 1 : la profondeur de la scene (la valeur telle que le jeu l'ecrit, 0 pres, 1 loin)
-//   binding 2 : la sortie, rgba16f (couleur + reflet, puis le blit la dessine dans la cible)
-//
-// Les positions sont reconstruites en espace vue avec la projection du jeu (la meme matrice que l'upscaler prend,
-// vk_temporal.cpp temporal_scene_camera) : pas besoin de matrice de vue, la camera est a l'origine. Les normales
-// viennent des differences de profondeur (le jeu n'a pas de G-buffer).
+//   binding 0 : la couleur de la scene      binding 1 : la profondeur de la scene
+//   binding 2 : la sortie, rgba16f (le blit la dessine dans la cible)
 layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(binding = 0) uniform sampler2D color_tex;
 layout(binding = 1) uniform sampler2D depth_tex;
-layout(binding = 2, rgba16f) uniform writeonly image2D out_img;
-
 layout(push_constant) uniform P {
-    vec4 proj;       // (p00, p11, p22, p23 de la projection, rangee par rangee)
-    vec2 jitter;     // (p02, p12 : le decalage de la projection, celui de l'upscaler)
+    vec4 proj;       // (p00, p11, p22, p23 de la projection)
+    vec2 jitter;     // (p02, p12)
     vec2 inv_size;   // (1 / largeur, 1 / hauteur)
-    float near_z;    // (le plan proche, en unites du monde)
-    float max_dist;  // (jusqu'ou un rayon est marche)
-    float thickness; // (l'epaisseur acceptee derriere une surface, pour ne pas traverser un mur)
-    float strength;  // (0 = aucun effet, 1 = le reflet tel que marche)
-    int steps;       // (les pas de la marche)
-    int pad0;
-    int pad1;
+    float near_z;
+    float max_dist;
+    float thickness;
+    float strength;  // (0 = aucun effet, 1 = plein)
+    int steps;       // (inutilise ici)
+    int pad0;        // (debug : 4 vert, 5 profondeur, 6 normales)
+    int pad1;        // (le temps, en millisecondes : l'animation des scintillements)
     int pad2;
     vec3 view_up;    // (la verticale du monde en espace vue)
     float pad3;
 } pc;
 
-// (la profondeur du jeu, en z d'espace vue : negatif devant la camera)
+layout(binding = 2, rgba16f) uniform writeonly image2D out_img;
+
 float scene_z(float d) { return -pc.proj.w / (d * 2.0 - 1.0 + pc.proj.z); }
 
-// (le pixel (uv, d) en espace vue. L'axe y de l'ecran va vers le bas, celui de la vue vers le haut)
 vec3 view_pos(vec2 uv, float d) {
     const float z = scene_z(d);
     const float nx = uv.x * 2.0 - 1.0;
@@ -47,15 +43,12 @@ vec3 view_pos(vec2 uv, float d) {
     return vec3(-(nx + pc.jitter.x) * z / pc.proj.x, -(ny + pc.jitter.y) * z / pc.proj.y, z);
 }
 
-// (un point d'espace vue vers (uv, profondeur) : la meme projection, pour suivre le rayon a l'ecran)
-vec2 project(vec3 p) {
-    const float w = -p.z;
-    const float cx = pc.proj.x * p.x + pc.jitter.x * p.z;
-    const float cy = pc.proj.y * p.y + pc.jitter.y * p.z;
-    return vec2(0.5 + 0.5 * cx / w, 0.5 - 0.5 * cy / w);
+// (un bruit stable par cellule, pour les scintillements)
+float hash21(vec2 p) {
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
 }
-
-bool inside(vec2 uv) { return uv.x >= 0.0 && uv.y >= 0.0 && uv.x <= 1.0 && uv.y <= 1.0; }
 
 void main() {
     const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
@@ -63,34 +56,32 @@ void main() {
     if (px.x >= size.x || px.y >= size.y) return;
     const vec2 uv = (vec2(px) + 0.5) * pc.inv_size;
     const vec4 base = textureLod(color_tex, uv, 0.0);
-    if (pc.pad0 == 4) {   // (debug : le blit et le calcul tournent-ils ? tout l'ecran en vert)
+    if (pc.pad0 == 4) {
         imageStore(out_img, px, vec4(0.0, 1.0, 0.0, 1.0));
         return;
     }
     const float d = textureLod(depth_tex, uv, 0.0).r;
-    // (un ciel, ou un endroit ou rien n'a ete ecrit : rien a reflechir)
-    if (d >= 0.99995) {
+    if (d >= 0.99995) {   // (le ciel : rien a faire)
         imageStore(out_img, px, base);
         return;
     }
     const vec3 p = view_pos(uv, d);
-    if (pc.pad0 == 5) {   // (debug : la profondeur reconstruite, en niveaux de gris)
+    if (pc.pad0 == 5) {
         const float g = clamp(-p.z / max(pc.max_dist, 1.0), 0.0, 1.0);
         imageStore(out_img, px, vec4(g, g, g, 1.0));
         return;
     }
-    if (p.z >= -pc.near_z * 0.5) {   // (derriere la camera)
+    if (p.z >= -pc.near_z * 0.5) {
         imageStore(out_img, px, base);
         return;
     }
-    // (les quatre voisins : la normale vient de leurs positions. Un voisin trop loin en profondeur est une silhouette,
-    // pas la meme surface : la encore, aucun reflet, pour ne pas baver sur les bords)
+    // (la normale, des differences de profondeur ; un voisin trop loin est une silhouette : on ne touche a rien)
     const vec2 tx = pc.inv_size;
     const float dl = textureLod(depth_tex, uv - vec2(tx.x, 0.0), 0.0).r;
     const float dr = textureLod(depth_tex, uv + vec2(tx.x, 0.0), 0.0).r;
     const float du = textureLod(depth_tex, uv - vec2(0.0, tx.y), 0.0).r;
     const float dd = textureLod(depth_tex, uv + vec2(0.0, tx.y), 0.0).r;
-    const float reach = 0.5 * abs(p.z) + 2.0;   // (un sol vu de pres change vite d'un pixel a l'autre : 0,15|z|+1 le rejetait)
+    const float reach = 0.5 * abs(p.z) + 2.0;
     if (dl >= 0.99995 || dr >= 0.99995 || du >= 0.99995 || dd >= 0.99995) {
         imageStore(out_img, px, base);
         return;
@@ -110,133 +101,46 @@ void main() {
         return;
     }
     n /= nl;
-    // (la normale face a la camera : le sens des differences depend de la main du jeu)
     const vec3 eye = normalize(-p);
     if (dot(n, eye) < 0.0) n = -n;
-    if (pc.pad0 == 6) {   // (debug : la normale reconstruite, en couleur)
+    if (pc.pad0 == 6) {
         imageStore(out_img, px, vec4(n * 0.5 + 0.5, 1.0));
         return;
     }
-    if (pc.pad0 == 7) {   // (debug : R = profondeur, G/B = normale)
-        const float g = clamp(-p.z / max(pc.max_dist, 1.0), 0.0, 1.0);
-        imageStore(out_img, px, vec4(g, n.x * 0.5 + 0.5, n.y * 0.5 + 0.5, 1.0));
-        return;
-    }
 
-    const vec3 r = reflect(normalize(p), n);
-
-    // (Fresnel : un reflet est faible de face et fort en incidence rasante, comme l'eau ou une vitre)
-    const float ndv = clamp(dot(n, eye), 0.0, 1.0);
-    const float fresnel = 0.08 + 0.92 * pow(1.0 - ndv, 3.0);
-    // (seulement les surfaces qui regardent le ciel : sols, eau, dalles. Un mur vertical ne reflete pas)
     const float up = clamp(dot(n, pc.view_up), 0.0, 1.0);
-    const float up_mask = smoothstep(0.20, 0.60, up);
-    const float floor_ref = 0.30 * smoothstep(0.35, 0.85, up);
-    // (une surface vue de biais renvoie aussi un peu de lumiere : vitres, murs mouilles, dalles rasant)
-    const float grazing = pow(1.0 - ndv, 5.0);
-    const float wall_ref = 0.20 * smoothstep(0.55, 0.95, grazing);
-    // (OcaDim 0.0.6) plafond : en incidence rasante Fresnel montait a ~0,9 et le sol devenait un miroir. Un sol de
-    // pierre ne depasse pas 40 % de reflet, meme a rasance : une brillance, jamais une flaque
-    const float weight = min(max(max(fresnel * up_mask, floor_ref), wall_ref), 0.40);
-    if (weight < 0.01) {   // (rien a reflechir ici : on n'ecrit que la couleur, sans marche inutile)
-        imageStore(out_img, px, base);
-        return;
-    }
+    const float ndv = clamp(dot(n, eye), 0.0, 1.0);
+    // (les surfaces qui regardent le ciel : sols, eau, dalles. Un mur vertical ne brille pas)
+    const float flat_mask = smoothstep(0.30, 0.75, up);
 
-    // (la marche. Un pas qui s'allonge avec la distance : fin pres, large loin. Chaque pas est projete ; des que le
-    // rayon sort de l'ecran, on s'arrete SANS reflet)
-    const int steps = clamp(pc.steps, 8, 48);
-    float prev_t = 0.0;
-    float hit_t = -1.0;
-    vec2 hit_uv = uv;
-    for (int i = 1; i <= steps; i++) {
-        const float f = float(i) / float(steps);
-        const float t = pc.max_dist * f * f;
-        const vec3 cur = p + r * t;
-        if (cur.z >= -pc.near_z * 0.5) break;   // (le rayon passe derriere la camera)
-        const vec2 suv = project(cur);
-        if (!inside(suv)) break;                // (sorti de l'ecran : aucun reflet, jamais de repli)
-        const float sd = textureLod(depth_tex, suv, 0.0).r;
-        if (sd < 0.99995) {
-            const float sz = scene_z(sd);
-            if (sz > cur.z) {   // (le rayon est passe derriere la surface : dichotomie entre ce pas et le precedent)
-                float a = prev_t, b = t;
-                for (int j = 0; j < 5; j++) {
-                    const float m = 0.5 * (a + b);
-                    const vec3 pm = p + r * m;
-                    const vec2 muv = project(pm);
-                    if (!inside(muv)) break;
-                    const float md = textureLod(depth_tex, muv, 0.0).r;
-                    if (md >= 0.99995 || scene_z(md) > pm.z) b = m;
-                    else a = m;
-                }
-                hit_t = b;
-                hit_uv = project(p + r * b);
-                break;
-            }
-        }
-        prev_t = t;
+    // (1) la teinte de ciel : faible de face, plus forte en incidence rasante. Une couleur FIXE (le haut de l'image),
+    // donc rien qui glisse ni qui bave)
+    const vec3 sky = textureLod(color_tex, vec2(0.5, 0.02), 0.0).rgb;
+    const float fresnel = 0.05 + 0.95 * pow(1.0 - ndv, 3.0);
+    float tint = pc.strength * flat_mask * (0.07 + 0.09 * fresnel);   // (visible a tout angle ; faible, car le jeu peut finir deux passes)
+    vec3 col = mix(base.rgb, mix(vec3(dot(sky, vec3(0.2126, 0.7152, 0.0722))), sky, 0.45), clamp(tint, 0.0, 0.7));
+
+    // (2) le scintillement : des points qui vivent, sur les surfaces horizontales, plus petits et plus rares au loin.
+    // Animes par le temps (pad1), donc l'eau et la pierre polie ne sont jamais figees
+    const float dist = -p.z;
+    const float far_fade = 1.0 - smoothstep(pc.max_dist * 0.35, pc.max_dist, dist);
+    const float cell = clamp(1.5 + dist * 0.015, 1.5, 4.0);   // (des POINTS de 1 a 4 px, pas des carres)
+    const vec2 gp = uv * vec2(float(size.x), float(size.y)) / cell;
+    const float t = float(pc.pad1) * 0.001;
+    float spark = 0.0;
+    // (trois phases decalees : de petits eclats qui s'allument et s'eteignent)
+    for (int k = 0; k < 3; k++) {
+        const float ph = hash21(floor(gp) + float(k) * 17.0);
+        const float life = fract(t * (0.6 + 0.9 * ph) + ph);
+        const float on = smoothstep(0.80, 0.86, life) * (1.0 - smoothstep(0.93, 0.99, life));
+        const float spot = step(0.930, hash21(floor(gp) + 3.7 + float(k) * 5.1));   // (7 % des cellules)
+        spark += on * spot;
     }
-    // (OcaDim 0.0.6) une couleur d'environnement stable, prise en haut de l'image : quand le rayon sort de l'ecran (on
-    // regarde ses pieds, le ciel n'est plus dans l'image), le sol garde un reflet au lieu de s'eteindre. Fixe, donc rien
-    // qui glisse : c'est le repli au bord de l'ecran de l'ancienne version qui faisait le trait
-    // (OcaDim 0.0.6) lueur d'environnement, pour les rayons qui sortent de l'ecran : une couleur du ciel quand le rayon
-    // part vers le haut (on regarde ses pieds), celle de l'horizon quand il part sur le cote. Deux points FIXES de
-    // l'image, donc rien qui glisse, et un degrade stable quand la camera tourne
-    // (OcaDim 0.0.6) repli d'environnement PLAT : une seule couleur, prise en haut au centre de l'image, desaturee.
-    // L'adresser par la direction du rayon creait un eventail (les rayons rasants convergent sur la meme colonne) :
-    // une couleur fixe ne peut pas baver, et elle suffit a ce qu'un sol ne s'eteigne pas quand on regarde ses pieds
-    const vec3 sky_top = textureLod(color_tex, vec2(0.5, 0.02), 0.0).rgb;
-    const vec3 horizon = textureLod(color_tex, vec2(0.5, 0.42), 0.0).rgb;
-    // (OcaDim 0.0.6) gradient VERTICAL seulement : le rayon qui part vers le haut prend le ciel, celui qui part a
-    // l'horizontale prend le decor. Pas d'azimut, donc pas de point singulier : l'eventail ne peut pas revenir
-    const float up_ray = clamp(dot(normalize(r), pc.view_up), -1.0, 1.0);
-    vec3 ambient = mix(horizon, sky_top, smoothstep(-0.15, 0.55, up_ray));
-    ambient = mix(vec3(dot(ambient, vec3(0.2126, 0.7152, 0.0722))), ambient, 0.45);
-    if (hit_t < 0.0 || !inside(hit_uv)) {
-        const float k = clamp(pc.strength * 0.45, 0.0, 1.0);
-        imageStore(out_img, px, vec4(mix(base.rgb, ambient, k), base.a));
-        return;
-    }
-    // (l'epaisseur : derriere une silhouette lointaine, le rayon a traverse un mur, il n'y a pas de reflet)
-    const float hd = textureLod(depth_tex, hit_uv, 0.0).r;
-    if (hd >= 0.99995) {
-        imageStore(out_img, px, base);
-        return;
-    }
-    const vec3 hit = p + r * hit_t;
-    const float gap = scene_z(hd) - hit.z;
-    if (gap < 0.0 || gap > pc.thickness) {
-        const float k = clamp(pc.strength * 0.35, 0.0, 1.0);
-        imageStore(out_img, px, vec4(mix(base.rgb, ambient, k), base.a));
-        return;
-    }
-    if (pc.pad0 == 1) {   // (debug : magenta partout ou un reflet est trouve)
-        imageStore(out_img, px, vec4(1.0, 0.0, 1.0, 1.0));
-        return;
-    }
-    // (un reflet reel n'est jamais un miroir parfait : quatre voisins, d'autant plus loin que l'intersection est
-    // lointaine. Ca enleve le scintillement d'un pixel a l'autre)
-    const float blur = mix(0.5, 2.5, clamp(hit_t / max(pc.max_dist, 1.0), 0.0, 1.0));
-    const vec2 bx = vec2(pc.inv_size.x * blur, 0.0), by = vec2(0.0, pc.inv_size.y * blur);
-    vec3 refl = textureLod(color_tex, hit_uv, 0.0).rgb;
-    refl += textureLod(color_tex, hit_uv + bx, 0.0).rgb;
-    refl += textureLod(color_tex, hit_uv - bx, 0.0).rgb;
-    refl += textureLod(color_tex, hit_uv + by, 0.0).rgb;
-    refl += textureLod(color_tex, hit_uv - by, 0.0).rgb;
-    refl *= 0.2;
-    if (pc.pad0 == 2) {   // (debug : le reflet seul, pour verifier son sens)
-        imageStore(out_img, px, vec4(refl, 1.0));
-        return;
-    }
-    if (pc.pad0 == 3) {   // (debug : le poids du reflet)
-        imageStore(out_img, px, vec4(vec3(weight), 1.0));
-        return;
-    }
-    // (seul le bord de la source s'efface, sur quelques pixels : le reflet ne s'arrete pas net sur les bords de l'ecran.
-    // L'intersection, elle, est a l'ecran par construction)
-    const float edge = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));
-    const float fade = smoothstep(0.0, 0.02, edge) * (1.0 - smoothstep(0.85, 1.0, hit_t / max(pc.max_dist, 1.0)));
-    const float k = clamp(pc.strength * weight * fade, 0.0, 1.0);
-    imageStore(out_img, px, vec4(mix(base.rgb, refl, k), base.a));
+    spark = clamp(spark, 0.0, 1.0) * flat_mask * far_fade * pc.strength;
+    col += sky * spark * 0.30;
+
+    // (3) l'aspect mouille : une surface horizontale vue de face s'assombrit un peu, comme une pierre humide)
+    col *= 1.0 - 0.10 * pc.strength * flat_mask * ndv;
+
+    imageStore(out_img, px, vec4(col, base.a));
 }

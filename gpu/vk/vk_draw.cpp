@@ -6758,6 +6758,7 @@ bool rt_build(VkCommandBuffer cmd) {
 }  // namespace
 
 /// (apres la passe de scene : la couleur et la profondeur sont encore celles du jeu, avant le HUD et avant l'upscaler)
+// (OcaDim 0.0.6 : OcaDim Shine, la brillance et les scintillements ; le shader a change, ce fichier doit se recompiler)
 void ssr_after_pass(VkCommandBuffer cmd, const Pass& ps) {
     if (opts.ssr <= 0 || g_ssr.failed || par_active.load(std::memory_order_relaxed)) return;
     if (ps.n < 1 || !ps.tex[0] || !ps.color[0] || !ps.depth || !ps.depth_tex) return;
@@ -6824,6 +6825,7 @@ void ssr_after_pass(VkCommandBuffer cmd, const Pass& ps) {
     pc.view_up[0] = view_up[0], pc.view_up[1] = view_up[1], pc.view_up[2] = view_up[2];
     static const int debug = getenv("RX_VK_SSR_DEBUG") ? atoi(getenv("RX_VK_SSR_DEBUG")) : 0;
     pc.pad0 = debug;   // (1 : le masque des reflets, 2 : le reflet seul, 3 : les normales)
+    pc.pad1 = (int32_t)(prof_now() / 1000000);   // (OcaDim 0.0.6 : le temps, pour l'animation des scintillements)
     static bool told;
     if (!told) {
         told = true;
