@@ -6934,7 +6934,8 @@ void shine_apply(VkCommandBuffer cmd, Texture* color, Texture* depth, uint32_t w
     if (opts.ssr <= 0 || g_ssr.failed || !color || !depth) return why("reglage ou image");
     if (w < 1024 || h < 576) return why("taille");
     // (OcaDim 0.0.6) l'image finale du jeu est en B10G11R11 (HDR) ; le blit convertit depuis l'image temporaire RGBA16F
-    if (color->format != VK_FORMAT_B10G11R11_UFLOAT_PACK32) return why("format de la couleur");
+    if (color->format != VK_FORMAT_R16G16B16A16_SFLOAT && color->format != VK_FORMAT_B10G11R11_UFLOAT_PACK32)
+        return why("format de la couleur");
     if (color->type != VK_IMAGE_TYPE_2D || depth->type != VK_IMAGE_TYPE_2D) return why("type");
     if (!(color->usage & VK_IMAGE_USAGE_SAMPLED_BIT) || !(depth->usage & VK_IMAGE_USAGE_SAMPLED_BIT)) return why("usage sampler");
     if (!(color->usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT)) return why("usage transfert");
@@ -10062,8 +10063,6 @@ bool fsr3_stand_in(VkCommandBuffer cmd, const NvnState& s, const Program& p) {
         input_view = texture_view_of(in_handle, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Sample, VK_FORMAT_R16G16B16A16_SFLOAT);
         output_view = texture_view_of(out_handle, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Storage, VK_FORMAT_R16G16B16A16_SFLOAT);
     }
-    // (OcaDim 0.0.6) OcaDim Shine, sur l'image finale, une fois par frame (le chemin FSR 3.1/FSR 4)
-    if (in && opts.ssr > 0) shine_apply(cmd, in, scene_depth_now(), in->width, in->height);
     return fsr3_upscale(cmd, p.key, gameplay_network(p.key), in, input_view, out, output_view, level);
 }
 /// (longshot) A temporal upscaler (NVIDIA DLSS, AMD FSR 4: vk_temporal.cpp) in place of the gameplay upscale network, when
@@ -10100,6 +10099,9 @@ bool temporal_stand_in(VkCommandBuffer cmd, const NvnState& s, const Program& p)
     // soit le nombre de passes du jeu et le nombre de threads du replay
     if (in && opts.ssr > 0) shine_apply(cmd, in, scene_depth_now(), in->width, in->height);
     const bool done = temporal_upscale(cmd, p.key, gameplay_network(p.key), in, in_view, out, out_view, level);
+    // (OcaDim 0.0.6) l'effet de surface, sur la SORTIE de l'upscaler (RGBA16F) : la cible HDR compactee (B10G11R11) n'est
+    // pas ecrivable de facon fiable (canaux inverses), mais celle-ci oui, et une copie au meme format ne convertit rien
+    if (done && out && opts.ssr > 0) shine_apply(cmd, out, scene_depth_now(), out->width, out->height);
     // (its actor motion may have drawn with a pipeline, viewport and descriptors of its own: the next draw sets all of its again)
     bound().reset();
     return done;
