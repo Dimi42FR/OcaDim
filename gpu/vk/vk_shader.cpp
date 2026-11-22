@@ -1985,7 +1985,7 @@ struct ProgFast {
     uint32_t amask = ~0u;           // (answer_stage_mask of p, ~0 for a compute program)
     uint64_t tex_gen[kNvnStages]{};   // (the stages' tex_gen it was kept at)
 };
-thread_local ProgFast prog_fast[2];
+thread_local ProgFast prog_fast[4];
 
 const Program* program_for(const NvnState& s, ProgramKind kind, const uint8_t color_types[8]) {
     if (!s.has_prog) return nullptr;
@@ -1996,7 +1996,7 @@ const Program* program_for(const NvnState& s, ProgramKind kind, const uint8_t co
         if (tonemap_now != tonemap_seen) {
             tonemap_seen = tonemap_now;
             picks.clear();
-            prog_fast[0].on = prog_fast[1].on = false;
+            for (ProgFast& f : prog_fast) f.on = false;
         }
     }
     const bool compute = kind == ProgramKind::Compute;
@@ -2032,7 +2032,8 @@ const Program* program_for(const NvnState& s, ProgramKind kind, const uint8_t co
     Pick& pk = picks[key];
     auto keep = [&](const Program* p) {
         if (!p || !p->ready.load(std::memory_order_acquire) || p->failed) return p;
-        if (!(prog_fast[0].on && prog_fast[0].p == p)) prog_fast[1] = prog_fast[0];
+        if (!(prog_fast[0].on && prog_fast[0].p == p))
+            for (int i = 3; i > 0; i--) prog_fast[i] = prog_fast[i - 1];   // (OcaDim: 4 kept, for scenes alternating 3-4 programs)
         ProgFast& f = prog_fast[0];
         f.on = true, f.kind = (int)kind, f.serial = s.prog.serial, f.stages = stages, f.bind = bind, f.reg = reg, f.ub = ub;
         f.nvattr = s.nvattr, f.p = p;
