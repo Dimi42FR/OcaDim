@@ -216,3 +216,18 @@ Décisions :
 - Ne pas toucher `D:\ocarina3` sans copie préalable.
 - FSR 4 : DLL AMD obligatoires, sinon le build dit « no FSR 4 ».
 - `RX_RELEASE=1` obligatoire pour la précompilation et l'écran de démarrage.
+
+## Effet de surface (0.0.6, en chantier) — nuit du 22/11
+
+Six architectures essayées, dans l'ordre, et ce que chacune a appris :
+
+1. **SSR classique**, crochet en fin de passe de scène : ne tourne pas avec le replay parallèle (`par_active`), et la cible finale n'est pas toujours celle du crochet (l'effet est écrasé).
+2. **Crochet déplacé dans `temporal_stand_in`** (une fois par frame) : bon endroit, mais **pas de caméra ni de profondeur de scène** en FSR 4 Native AA.
+3. **Profondeur capturée pendant les draws** (`g_scene_depth`, `vk_draw.cpp`) : la caméra est trouvée, l'effet s'applique.
+4. **Écriture** : trois mécanismes, trois corruptions — blit `RGBA16F → B10G11R11` (bruit), passe de rendu (assombrit), storage dans le format compacté (canaux inversés). **La cible HDR du jeu (`B10G11R11`, fmt 122) n'est pas écrivable de façon fiable depuis notre code.**
+5. **Masque sans normale** (« la rue est en bas de l'image ») : évite le bruit de profondeur et ne bave pas sur les façades.
+6. **Effet à la présentation** (`present_shine`, `vk_replay.cpp`) : bon format (écran, 8 bits), mais **avec la frame generation la présentation passe par `framegen_scale`**, et le tirage est branché sur le chemin simple — il n'est donc jamais exécuté.
+
+**Prochain pas précis** : créer une **image intermédiaire SDR**, y tirer la source + l'effet (`present_shine` existe, compile, gate à `ssr=0`), puis donner cette image à `framegen_scale` / `blit_crop_to_rect` à la place de `src`.
+
+Commits : `3467b8d0` (rue mouillée), `103eea89` (présentation). L'option est `ssr=0` par défaut, et la ligne du F1 est **« Brillance et scintillements des sols »** (onglet Ray-Tracing).
