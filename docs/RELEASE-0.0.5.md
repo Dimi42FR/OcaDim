@@ -2,8 +2,20 @@
 
 Mise à jour de performance, de confort et de transparence.
 
+## L'essentiel de cette version
+
+- **Le replay tourne sur 4 threads, par segments de 32 draws** : c'est le gros du travail de cette
+  version. Mesuré sur la même sauvegarde, même zone : **53,8 → 63,9-66,0 fps** (+10 à +12 fps) et
+  submit de **15,39 → 10,6-10,7 ms**.
+- **Cache de 4 programmes par thread** : plus de retraduction de shader dans les scènes qui
+  alternent 3-4 programmes.
+- **Tout est mesuré et documenté**, y compris ce qui a été rejeté (lot « lift » amont, préchargement
+  des descripteurs, 6 threads de replay, render thread coupé). Voir les tableaux plus bas.
+
 ## Nouveautés
 
+- **Threads du replay à 4 et segments à 32 par défaut** : gain mesuré d'environ **10 à 12 fps** et submit de **15,4 → 10,6-10,7 ms**.
+- **Cache de 4 programmes par thread** : évite une retraduction de shader dans les scènes qui alternent 3-4 programmes (aucune régression constatée).
 - **Menu F1 OcaDim en français par défaut**, avec l'onglet OcaDim complet.
 - **Nouvel écran de démarrage OcaDim** : artwork, barre dorée, séparateur OcaDim, textes français, affichage minimum de 2,5 s.
 - **Ray-Tracing marqué EXPÉRIMENTAL — NE FONCTIONNE PAS** : SSR et test BVH ne sont plus présentés comme fiables.
@@ -11,8 +23,6 @@ Mise à jour de performance, de confort et de transparence.
 - **Graphe « Shaders built » corrigé** : les pipelines construits pendant la précompilation sont maintenant comptés.
 - **FSR 4 Frame Generation** disponible et vérifiée (contexte AMD FSR 4, images générées comptées).
 - **Configuration par défaut mesurée** : FSR 4 Native AA (AMD), DLSS Quality (NVIDIA), 92 %, cap 144, rendu thread, draw order, sampler cache, ombres 1600, Anti-Lag AMD.
-- **Threads du replay à 4 et segments à 32 par défaut** : gain mesuré d'environ **10 à 12 fps** et submit de **15,4 → 10,6-10,7 ms**.
-- **Cache de 4 programmes par thread** : évite une retraduction de shader dans les scènes qui alternent 3-4 programmes (aucune régression constatée).
 
 ## Tests et mesures
 
