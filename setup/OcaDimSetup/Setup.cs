@@ -14,7 +14,7 @@ sealed record BuildResult(int Code, string? Error, string Tail);
 sealed class Setup
 {
     public const string Name = "OcaDim";
-    public const string Version = "0.0.5-2";
+    public const string Version = "0.0.6";
     public const string GameExe = "ocadim.exe";
 
     public string InstallDir { get; set; } = DefaultInstallDir;
