@@ -6878,6 +6878,15 @@ void ssr_after_pass(VkCommandBuffer cmd, const Pass& ps) {
     full_barrier(cmd, "barrier (apres le SSR)");
 }
 
+// (OcaDim 0.0.6) la cible de profondeur de la scene, prise pendant ses draws (voir temporal_note_scene_draw plus haut)
+std::mutex g_scene_mu;
+Texture* g_scene_depth = nullptr;
+uint64_t g_scene_depth_frame = ~0ull;
+static Texture* scene_depth_now() {
+    std::lock_guard lk(g_scene_mu);
+    return g_scene_depth_frame + 8 >= texture_frame_no() ? g_scene_depth : nullptr;
+}
+
 /// (OcaDim 0.0.6) OcaDim Shine, applique UNE fois par frame sur l'image FINALE de la scene, au moment ou l'upscaler
 /// la prend (temporal_stand_in). C'est le seul point stable : le jeu termine plusieurs passes par frame et, selon la
 /// camera, la derniere n'est pas celle qu'un crochet « fin de passe » attrape (l'effet etait ecrase).
@@ -6888,16 +6897,27 @@ void shine_apply(VkCommandBuffer cmd, Texture* color, Texture* depth, uint32_t w
         logf("vk: OcaDim : Shine : appele (%ux%u, profondeur %s, intensite %d %%)", w, h, depth ? "oui" : "non",
              std::clamp(opts.ssr, 0, 100));
     }
-    if (opts.ssr <= 0 || g_ssr.failed || !color || !depth) return;
-    if (w < 1024 || h < 576) return;
-    if (color->format != VK_FORMAT_R16G16B16A16_SFLOAT) return;   // (la copie finale veut le meme format)
-    if (color->type != VK_IMAGE_TYPE_2D || depth->type != VK_IMAGE_TYPE_2D) return;
-    if (!(color->usage & VK_IMAGE_USAGE_SAMPLED_BIT) || !(depth->usage & VK_IMAGE_USAGE_SAMPLED_BIT)) return;
-    if (!(color->usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT)) return;
+    // (OcaDim 0.0.6, diagnostic : la premiere raison pour laquelle l'effet ne s'applique pas, dite une fois)
+    static int told_why;
+    const auto why = [&](const char* r) {
+        if (told_why++ < 8)
+            logf("vk: OcaDim : Shine : rien (%s) : fmt %d %d, usage %#x %#x, %ux%u", r, (int)color->format,
+                 (int)depth->format, color->usage, depth->usage, w, h);
+    };
+    if (opts.ssr <= 0 || g_ssr.failed || !color || !depth) return why("reglage ou image");
+    if (w < 1024 || h < 576) return why("taille");
+    // (OcaDim 0.0.6) l'image finale du jeu est en B10G11R11 (HDR) ; le blit convertit depuis l'image temporaire RGBA16F
+    if (color->format != VK_FORMAT_R16G16B16A16_SFLOAT && color->format != VK_FORMAT_B10G11R11_UFLOAT_PACK32)
+        return why("format de la couleur");
+    if (color->type != VK_IMAGE_TYPE_2D || depth->type != VK_IMAGE_TYPE_2D) return why("type");
+    if (!(color->usage & VK_IMAGE_USAGE_SAMPLED_BIT) || !(depth->usage & VK_IMAGE_USAGE_SAMPLED_BIT)) return why("usage sampler");
+    if (!(color->usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT)) return why("usage transfert");
     float proj[16], view_up[3], near_z = 0, far_z = 0;
     uint32_t cw = 0, ch = 0;
-    if (!temporal_scene_camera(depth, proj, view_up, &near_z, &far_z, &cw, &ch)) return;
-    if (near_z <= 0.0f || cw != w || ch != h) return;
+    if (!temporal_scene_camera(depth, proj, view_up, &near_z, &far_z, &cw, &ch)) return why("camera");
+    // (OcaDim 0.0.6) la camera peut etre a la taille de la scene et l'image finale a celle du rendu : l'echantillonnage
+    // se fait en uv, donc les deux tailles n'ont pas a coincider
+    if (near_z <= 0.0f) return;   (void)cw, (void)ch;
     SsrImage* im = ssr_image(w, h, cmd);
     if (!im) {
         g_ssr.failed = true;
@@ -6949,11 +6969,14 @@ void shine_apply(VkCommandBuffer cmd, Texture* color, Texture* depth, uint32_t w
     vkCmdPushConstants(cmd, g_ssr.lay_compute, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof pc, &pc);
     vkCmdDispatch(cmd, (w + 7) / 8, (h + 7) / 8, 1);
     full_barrier(cmd, "barrier (Shine, avant la copie)");
-    VkImageCopy region{};
+    // (un blit, pas une copie : il convertit RGBA16F vers le format HDR de la cible)
+    VkImageBlit region{};
     region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    region.extent = {w, h, 1};
-    vkCmdCopyImage(cmd, im->image, VK_IMAGE_LAYOUT_GENERAL, color->image, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+    region.srcOffsets[1] = {(int32_t)w, (int32_t)h, 1};
+    region.dstOffsets[1] = {(int32_t)w, (int32_t)h, 1};
+    vkCmdBlitImage(cmd, im->image, VK_IMAGE_LAYOUT_GENERAL, color->image, VK_IMAGE_LAYOUT_GENERAL, 1, &region,
+                   VK_FILTER_NEAREST);
     full_barrier(cmd, "barrier (apres le Shine)");
     bound().reset();   // (le compute a lie son pipeline : les draws suivants remettent le leur)
 }
@@ -8751,6 +8774,12 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
     // FSR 3.1 (vk_fsr3_inputs.cpp). The vertex stage's uniform buffer 3 (NVN's binding 0)
     if (at.n && at.color[0] && at.depth) {
         temporal_note_scene_draw(at.color[0], at.width, at.height, at.depth, s.ubo[0][0].addr, s.ubo[0][0].size);
+        // (OcaDim 0.0.6) la profondeur de la scene de cette frame, gardee pour l'effet de surface : a l'upscale elle
+        // n'est plus dans l'etat, et le moteur ne la donne pas en FSR 4 Native AA
+        if (opts.ssr > 0) {
+            std::lock_guard lk(g_scene_mu);
+            g_scene_depth = at.depth, g_scene_depth_frame = texture_frame_no();
+        }
         fsr3_inputs::note_scene_draw(at.color[0], at.width, at.height, at.depth, s.ubo[0][0].addr, s.ubo[0][0].size);
     }
     uint8_t types[8];
@@ -10006,7 +10035,7 @@ bool fsr3_stand_in(VkCommandBuffer cmd, const NvnState& s, const Program& p) {
         output_view = texture_view_of(out_handle, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Storage, VK_FORMAT_R16G16B16A16_SFLOAT);
     }
     // (OcaDim 0.0.6) OcaDim Shine, sur l'image finale, une fois par frame (le chemin FSR 3.1/FSR 4)
-    if (in && opts.ssr > 0) shine_apply(cmd, in, const_cast<Texture*>(temporal_scene_depth()), in->width, in->height);
+    if (in && opts.ssr > 0) shine_apply(cmd, in, scene_depth_now(), in->width, in->height);
     return fsr3_upscale(cmd, p.key, gameplay_network(p.key), in, input_view, out, output_view, level);
 }
 /// (longshot) A temporal upscaler (NVIDIA DLSS, AMD FSR 4: vk_temporal.cpp) in place of the gameplay upscale network, when
@@ -10041,7 +10070,7 @@ bool temporal_stand_in(VkCommandBuffer cmd, const NvnState& s, const Program& p)
     }
     // (OcaDim 0.0.6) OcaDim Shine : une seule fois par frame, sur l'image FINALE que l'upscaler prend, donc quel que
     // soit le nombre de passes du jeu et le nombre de threads du replay
-    if (in && opts.ssr > 0) shine_apply(cmd, in, const_cast<Texture*>(temporal_scene_depth()), in->width, in->height);
+    if (in && opts.ssr > 0) shine_apply(cmd, in, scene_depth_now(), in->width, in->height);
     const bool done = temporal_upscale(cmd, p.key, gameplay_network(p.key), in, in_view, out, out_view, level);
     // (its actor motion may have drawn with a pipeline, viewport and descriptors of its own: the next draw sets all of its again)
     bound().reset();
