@@ -6410,7 +6410,13 @@ void present_image(VkImage src, uint32_t sw, uint32_t sh, const int crop[4], VkI
         blit_crop_to_rect(f.cmd, hdr_image, rect.w, rect.h, nullptr, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, rect);
     } else if (scaled) {
         trace_route = 1;
-        blit_crop_to_rect(f.cmd, scaled, rect.w, rect.h, nullptr, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, rect);
+        // (OcaDim 0.0.6) l'effet de surface : sur le chemin REELLEMENT utilise (l'image mise a l'echelle par l'upscaler),
+        // avec repli sur le blit s'il ne peut pas. Le format est celui de l'ecran, donc l'ecriture est fiable
+        const uint32_t cr[4] = {0, 0, rect.w, rect.h};
+        const VkRect2D r2{{(int32_t)rect.x, (int32_t)rect.y}, {rect.w, rect.h}};
+        if (!present_shine(f.cmd, dst, dev.swap_views[index], framegen_scaled_view(), cr, rect.w, rect.h, r2, dev.swap_format,
+                           opts.ssr))
+            blit_crop_to_rect(f.cmd, scaled, rect.w, rect.h, nullptr, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, rect);
     } else if (src && !native_pq) {
         // (OcaDim 0.0.6) l'effet de surface, sur l'image finale de la fenetre ; repli sur le blit s'il ne peut pas
         const uint32_t cr[4] = {crop ? crop[0] : 0u, crop ? crop[1] : 0u, crop ? crop[2] : sw, crop ? crop[3] : sh};

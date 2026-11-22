@@ -7100,7 +7100,22 @@ bool shine_make(VkFormat format) {
 /// (OcaDim 0.0.6) L'effet, tire dans l'image de la fenetre. false : rien n'a ete fait, l'appelant fait son blit habituel.
 bool present_shine(VkCommandBuffer cmd, VkImage dst, VkImageView dst_view, VkImageView src_view, const uint32_t crop[4],
                    uint32_t sw, uint32_t sh, const VkRect2D& rect, VkFormat format, int strength) {
-    if (strength <= 0 || !dst_view || !src_view || !rect.extent.width || !rect.extent.height) return false;
+    if (strength <= 0 || !src_view || !rect.extent.width || !rect.extent.height) return false;
+    // (OcaDim 0.0.6) la vue de la fenetre n'existe que pour les overlays d'ImGui : on la fait nous-memes, une par image
+    if (!dst_view) {
+        static std::unordered_map<uint64_t, VkImageView> made;
+        const uint64_t key = (uint64_t)(uintptr_t)dst ^ ((uint64_t)format << 56);
+        if (const auto it = made.find(key); it != made.end()) {
+            dst_view = it->second;
+        } else {
+            VkImageViewCreateInfo vc{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+            vc.image = dst, vc.viewType = VK_IMAGE_VIEW_TYPE_2D, vc.format = format;
+            vc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            VkImageView v = VK_NULL_HANDLE;
+            if (vkCreateImageView(dev.device, &vc, nullptr, &v) != VK_SUCCESS) return false;
+            made[key] = v, dst_view = v;
+        }
+    }
     if (!shine_make(format)) return false;
     // (la cible arrive en TRANSFER_DST_OPTIMAL : on la passe en attachement pour le tirage, puis on la rend comme avant)
     VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
