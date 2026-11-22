@@ -6412,7 +6412,11 @@ void present_image(VkImage src, uint32_t sw, uint32_t sh, const int crop[4], VkI
         trace_route = 1;
         blit_crop_to_rect(f.cmd, scaled, rect.w, rect.h, nullptr, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, rect);
     } else if (src && !native_pq) {
-        blit_crop_to_rect(f.cmd, src, sw, sh, crop, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, rect);
+        // (OcaDim 0.0.6) l'effet de surface, sur l'image finale de la fenetre ; repli sur le blit s'il ne peut pas
+        const uint32_t cr[4] = {crop ? crop[0] : 0u, crop ? crop[1] : 0u, crop ? crop[2] : sw, crop ? crop[3] : sh};
+        const VkRect2D r2{{(int32_t)rect.x, (int32_t)rect.y}, {rect.w, rect.h}};
+        if (!present_shine(f.cmd, dst, dev.swap_views[index], view, cr, sw, sh, r2, dev.swap_format, opts.ssr))
+            blit_crop_to_rect(f.cmd, src, sw, sh, crop, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, rect);
     } else {
         if (src) {   // (Native, unscaled, and the HDR pass not made: black, said once, rather than the picture converted)
             static bool told;

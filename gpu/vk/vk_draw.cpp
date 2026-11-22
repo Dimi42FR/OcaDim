@@ -7010,6 +7010,144 @@ void shine_apply(VkCommandBuffer cmd, Texture* color, Texture* depth, uint32_t w
     bound().reset();   // (le compute a lie son pipeline : les draws suivants remettent le leur)
 }
 
+} // namespace
+
+// ---- (OcaDim 0.0.6) « rue mouillee » a la PRESENTATION : sur l'image finale de la fenetre, au format d'ecran ----
+// (le tampon de rendu du jeu est en B10G11R11 et ce pilote l'ecrit mal depuis notre code ; ici l'ecriture est celle
+// d'ImGui, donc fiable. Rien quand la ligne est sur Desactive, et repli sur le blit habituel si quoi que ce soit echoue)
+#include "shaders/present_shine_vert_spv.h"
+#include "shaders/present_shine_frag_spv.h"
+
+namespace {
+struct PresentShine {
+    VkFormat format = VK_FORMAT_UNDEFINED;
+    VkPipeline pipe = VK_NULL_HANDLE;
+    VkPipelineLayout lay = VK_NULL_HANDLE;
+    VkDescriptorSetLayout dsl = VK_NULL_HANDLE;
+    VkSampler samp = VK_NULL_HANDLE;
+    bool failed = false;
+};
+PresentShine g_shine;
+
+bool shine_make(VkFormat format) {
+    if (g_shine.failed) return false;
+    if (g_shine.pipe && g_shine.format == format) return true;
+    if (g_shine.pipe) vkDestroyPipeline(dev.device, g_shine.pipe, nullptr), g_shine.pipe = VK_NULL_HANDLE;
+    if (!g_shine.dsl) {
+        VkDescriptorSetLayoutBinding b{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        li.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+        li.bindingCount = 1, li.pBindings = &b;
+        if (vkCreateDescriptorSetLayout(dev.device, &li, nullptr, &g_shine.dsl) != VK_SUCCESS) return (g_shine.failed = true), false;
+        VkPushConstantRange r{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 32};
+        VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        pl.setLayoutCount = 1, pl.pSetLayouts = &g_shine.dsl;
+        pl.pushConstantRangeCount = 1, pl.pPushConstantRanges = &r;
+        if (vkCreatePipelineLayout(dev.device, &pl, nullptr, &g_shine.lay) != VK_SUCCESS) return (g_shine.failed = true), false;
+        VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+        si.magFilter = si.minFilter = VK_FILTER_LINEAR;
+        si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.maxLod = 0.0f;
+        if (vkCreateSampler(dev.device, &si, nullptr, &g_shine.samp) != VK_SUCCESS) return (g_shine.failed = true), false;
+    }
+    VkShaderModule vm = VK_NULL_HANDLE, fm = VK_NULL_HANDLE;
+    const auto vert = BUILTIN_SPV(PRESENT_SHINE_VERT_SPV), frag = BUILTIN_SPV(PRESENT_SHINE_FRAG_SPV);
+    VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+    mi.codeSize = vert.size, mi.pCode = vert.code;
+    if (guarded_shader_module(&mi, &vm) != VK_SUCCESS) return (g_shine.failed = true), false;
+    mi.codeSize = frag.size, mi.pCode = frag.code;
+    if (guarded_shader_module(&mi, &fm) != VK_SUCCESS) {
+        vkDestroyShaderModule(dev.device, vm, nullptr);
+        return (g_shine.failed = true), false;
+    }
+    VkPipelineShaderStageCreateInfo st[2]{{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO},
+                                          {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO}};
+    st[0].stage = VK_SHADER_STAGE_VERTEX_BIT, st[0].module = vm, st[0].pName = "main";
+    st[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT, st[1].module = fm, st[1].pName = "main";
+    VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    vp.viewportCount = vp.scissorCount = 1;
+    VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    rs.polygonMode = VK_POLYGON_MODE_FILL, rs.cullMode = VK_CULL_MODE_NONE, rs.lineWidth = 1.0f;
+    VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    VkPipelineColorBlendAttachmentState cb{};
+    cb.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    VkPipelineColorBlendStateCreateInfo bs{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    bs.attachmentCount = 1, bs.pAttachments = &cb;
+    const VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dy{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    dy.dynamicStateCount = 2, dy.pDynamicStates = dyn;
+    VkPipelineRenderingCreateInfo rci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+    rci.colorAttachmentCount = 1, rci.pColorAttachmentFormats = &format;
+    VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    ci.pNext = &rci;
+    ci.stageCount = 2, ci.pStages = st;
+    ci.pVertexInputState = &vi, ci.pInputAssemblyState = &ia, ci.pViewportState = &vp, ci.pRasterizationState = &rs;
+    ci.pMultisampleState = &ms, ci.pColorBlendState = &bs, ci.pDynamicState = &dy, ci.layout = g_shine.lay;
+    const bool ok = guarded_graphics(VK_NULL_HANDLE, &ci, &g_shine.pipe) == VK_SUCCESS && g_shine.pipe;
+    vkDestroyShaderModule(dev.device, vm, nullptr);
+    vkDestroyShaderModule(dev.device, fm, nullptr);
+    if (!ok) return (g_shine.failed = true), false;
+    g_shine.format = format;
+    logf("vk: OcaDim : rue mouillee : pipeline de presentation pret (format %d)", (int)format);
+    return true;
+}
+}   // namespace
+
+/// (OcaDim 0.0.6) L'effet, tire dans l'image de la fenetre. false : rien n'a ete fait, l'appelant fait son blit habituel.
+bool present_shine(VkCommandBuffer cmd, VkImage dst, VkImageView dst_view, VkImageView src_view, const uint32_t crop[4],
+                   uint32_t sw, uint32_t sh, const VkRect2D& rect, VkFormat format, int strength) {
+    if (strength <= 0 || !dst_view || !src_view || !rect.extent.width || !rect.extent.height) return false;
+    if (!shine_make(format)) return false;
+    // (la cible arrive en TRANSFER_DST_OPTIMAL : on la passe en attachement pour le tirage, puis on la rend comme avant)
+    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+    b.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT, b.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    b.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, b.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+    b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, b.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.image = dst, b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    di.imageMemoryBarrierCount = 1, di.pImageMemoryBarriers = &b;
+    vkCmdPipelineBarrier2(cmd, &di);
+    VkRenderingAttachmentInfo ca{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    ca.imageView = dst_view, ca.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    ca.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD, ca.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+    ri.renderArea = rect;
+    ri.layerCount = 1;
+    ri.colorAttachmentCount = 1, ri.pColorAttachments = &ca;
+    vkCmdBeginRendering(cmd, &ri);
+    const VkViewport v{ (float)rect.offset.x, (float)rect.offset.y, (float)rect.extent.width, (float)rect.extent.height, 0.0f, 1.0f };
+    vkCmdSetViewport(cmd, 0, 1, &v);
+    vkCmdSetScissor(cmd, 0, 1, &rect);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_shine.pipe);
+    VkDescriptorImageInfo ii{g_shine.samp, src_view, VK_IMAGE_LAYOUT_GENERAL};
+    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 0, 0, 1,
+                           VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &ii, nullptr, nullptr};
+    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_shine.lay, 0, 1, &w);
+    struct { float uv[4]; float strength; float time; float pad[2]; } pc{};
+    pc.uv[0] = (float)crop[2] / (float)sw, pc.uv[1] = (float)crop[3] / (float)sh;
+    pc.uv[2] = (float)crop[0] / (float)sw, pc.uv[3] = (float)crop[1] / (float)sh;
+    pc.strength = (float)std::clamp(strength, 0, 100) / 100.0f;
+    pc.time = (float)((prof_now() / 1000000) % 100000) / 1000.0f;
+    vkCmdPushConstants(cmd, g_shine.lay, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof pc, &pc);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRendering(cmd);
+    // (retour a l'etat attendu par la suite de la presentation)
+    b.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, b.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+    b.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+    b.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+    b.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    vkCmdPipelineBarrier2(cmd, &di);
+    static bool told;
+    if (!told) told = true, logf("vk: OcaDim : rue mouillee : actif a la presentation (intensite %d %%)", std::clamp(strength, 0, 100));
+    return true;
+}
+
+namespace {
 // (le test BVH : il ecrase la cible avec le rouge/vert du rayon, apres le SSR s'il tourne)
 void rt_test_after_pass(VkCommandBuffer cmd, const Pass& ps) {
     if (!opts.rt_test || !dev.accel_struct || !dev.ray_query) return;
