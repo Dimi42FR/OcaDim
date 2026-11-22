@@ -12,6 +12,24 @@ Mise à jour de performance, de confort et de transparence.
 - **Tout est mesuré et documenté**, y compris ce qui a été rejeté (lot « lift » amont, préchargement
   des descripteurs, 6 threads de replay, render thread coupé). Voir les tableaux plus bas.
 
+### Gains mesurés (Forêt Kokiri, même sauvegarde, même caméra)
+
+| Réglage | fps | submit |
+|---|---|---|
+| Base D avant cette version | 53,8 | 15,39 ms |
+| Replay 2 threads | 59,5-62,4 | 13,33-13,39 ms |
+| Replay 4 threads, segments 160 | 60,2-61,5 | 11,27-11,94 ms |
+| **Cette version : 4 threads + segments 32** | **63,9-66,0** | **10,6-10,7 ms** |
+
+Testés et **rejetés** après mesure :
+
+| Réglage rejeté | fps | Pourquoi |
+|---|---|---|
+| Lot « lift » amont (FPXKEEP, VECFP, float rapides) | 49,6 | ~1,5 ms de CPU en plus, ~4 fps perdus |
+| Préchargement des descripteurs | 58,8-62,4 | descripteurs +6 à +15 % |
+| 6 threads de replay | 63,1-64,7 | mêmes fps, cœurs pris au jeu, ressenti moins bon |
+| Render thread coupé | 58,9-59,8 | submit identique : c'est le recouvrement qui compte |
+
 ## Nouveautés
 
 - **Threads du replay à 4 et segments à 32 par défaut** : gain mesuré d'environ **10 à 12 fps** et submit de **15,4 → 10,6-10,7 ms**.
