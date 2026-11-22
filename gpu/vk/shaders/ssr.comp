@@ -1,49 +1,34 @@
 #version 450
-// (OcaDim 0.0.6) « OcaDim Shine » : brillance et scintillement des surfaces, a la place du SSR.
+// (OcaDim 0.0.6) « Rue mouillee » : la brillance des sols, sans normale et sans masque par surface.
 //
-// Pourquoi : un reflet ecran ne peut refleter que ce qui est DEJA dans l'image. Des qu'on baisse la camera, le ciel
-// et les facades sortent du champ et le reflet s'eteint (mesure : 0,9 % de draws hors champ a Kokiri, 5,2 % en ville).
-// Cet effet ne depend d'aucune information hors champ : il ne peut ni disparaitre, ni baver, ni faire de trait.
-//
-//   - une teinte de ciel selon l'angle (Fresnel) : les dalles prennent une lueur en regardant au loin ;
-//   - des scintillements animes sur les surfaces horizontales : l'eau et la pierre polie vivent ;
-//   - un leger assombrissement des surfaces vues de face : l'aspect « mouille ».
-//
-// Entrees :
-//   binding 0 : la couleur de la scene      binding 1 : la profondeur de la scene
-//   binding 2 : la sortie, rgba16f (le blit la dessine dans la cible)
+// Pourquoi ce choix : une normale reconstruite depuis la profondeur (le jeu n'a pas de G-buffer) est trop bruitee, et le
+// masque « surface horizontale » finissait par prendre les facades et le ciel (test abuse : tout scintillait). Ici l'effet
+// s'appuie sur ce qui est stable : la RUE EST EN BAS DE L'IMAGE, et une surface mouillee s'assombrit, prend une lueur de
+// ciel rasante, et scintille un peu. Aucune information hors champ, aucune normale : ca ne peut ni baver ni se casser.
 layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(binding = 0) uniform sampler2D color_tex;
 layout(binding = 1) uniform sampler2D depth_tex;
+layout(binding = 2, rgba16f) uniform writeonly image2D out_img;
+
 layout(push_constant) uniform P {
-    vec4 proj;       // (p00, p11, p22, p23 de la projection)
-    vec2 jitter;     // (p02, p12)
-    vec2 inv_size;   // (1 / largeur, 1 / hauteur)
+    vec4 proj;
+    vec2 jitter;
+    vec2 inv_size;
     float near_z;
     float max_dist;
     float thickness;
     float strength;  // (0 = aucun effet, 1 = plein)
-    int steps;       // (inutilise ici)
-    int pad0;        // (debug : 4 vert, 5 profondeur, 6 normales)
+    int steps;
+    int pad0;
     int pad1;        // (le temps, en millisecondes : l'animation des scintillements)
     int pad2;
-    vec3 view_up;    // (la verticale du monde en espace vue)
+    vec3 view_up;
     float pad3;
 } pc;
 
-layout(binding = 2, rgba16f) uniform writeonly image2D out_img;
-
 float scene_z(float d) { return -pc.proj.w / (d * 2.0 - 1.0 + pc.proj.z); }
 
-vec3 view_pos(vec2 uv, float d) {
-    const float z = scene_z(d);
-    const float nx = uv.x * 2.0 - 1.0;
-    const float ny = 1.0 - uv.y * 2.0;
-    return vec3(-(nx + pc.jitter.x) * z / pc.proj.x, -(ny + pc.jitter.y) * z / pc.proj.y, z);
-}
-
-// (un bruit stable par cellule, pour les scintillements)
 float hash21(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
     p += dot(p, p + 45.32);
@@ -56,7 +41,7 @@ void main() {
     if (px.x >= size.x || px.y >= size.y) return;
     const vec2 uv = (vec2(px) + 0.5) * pc.inv_size;
     const vec4 base = textureLod(color_tex, uv, 0.0);
-    if (pc.pad0 == 4) {
+    if (pc.pad0 == 4) {   // (debug : le calcul tourne-t-il ? tout en vert)
         imageStore(out_img, px, vec4(0.0, 1.0, 0.0, 1.0));
         return;
     }
@@ -65,92 +50,44 @@ void main() {
         imageStore(out_img, px, base);
         return;
     }
-    const vec3 p = view_pos(uv, d);
-    if (pc.pad0 == 5) {
-        const float g = clamp(-p.z / max(pc.max_dist, 1.0), 0.0, 1.0);
+    if (pc.pad0 == 5) {   // (debug : la profondeur, en gris)
+        const float z = scene_z(d);
+        const float g = clamp(-z / max(pc.max_dist, 1.0), 0.0, 1.0);
         imageStore(out_img, px, vec4(g, g, g, 1.0));
         return;
     }
-    if (p.z >= -pc.near_z * 0.5) {
-        imageStore(out_img, px, base);
-        return;
-    }
-    // (la normale, des differences de profondeur. OcaDim 0.0.6, passe de qualite : le voisinage d'UN pixel donnait une
-    // normale bruitee (la profondeur du jeu l'est) et la brillance se rallumait par plaques. Trois pixels : la normale est
-    // lissee, et la pente qui en sort donne une CONFIANCE - un bord de silhouette la met a zero au lieu de baver)
-    const vec2 tx = pc.inv_size;
-    const float o = 3.0;   // (pixels de voisinage)
-    const float dl = textureLod(depth_tex, uv - vec2(tx.x * o, 0.0), 0.0).r;
-    const float dr = textureLod(depth_tex, uv + vec2(tx.x * o, 0.0), 0.0).r;
-    const float du = textureLod(depth_tex, uv - vec2(0.0, tx.y * o), 0.0).r;
-    const float dd = textureLod(depth_tex, uv + vec2(0.0, tx.y * o), 0.0).r;
-    const float reach = 2.0 * abs(p.z) + 4.0;   // (le voisinage plus large franchit plus de distance)
-    if (dl >= 0.99995 || dr >= 0.99995 || du >= 0.99995 || dd >= 0.99995) {
-        imageStore(out_img, px, base);
-        return;
-    }
-    const vec3 pl = view_pos(uv - vec2(tx.x * o, 0.0), dl);
-    const vec3 pr = view_pos(uv + vec2(tx.x * o, 0.0), dr);
-    const vec3 pu = view_pos(uv - vec2(0.0, tx.y * o), du);
-    const vec3 pd = view_pos(uv + vec2(0.0, tx.y * o), dd);
-    if (abs(pl.z - p.z) > reach || abs(pr.z - p.z) > reach || abs(pu.z - p.z) > reach || abs(pd.z - p.z) > reach) {
-        imageStore(out_img, px, base);
-        return;
-    }
-    vec3 n = cross(pd - pu, pr - pl);
-    const float nl = length(n);
-    if (nl < 1e-8) {
-        imageStore(out_img, px, base);
-        return;
-    }
-    n /= nl;
-    const vec3 eye = normalize(-p);
-    if (dot(n, eye) < 0.0) n = -n;
-    if (pc.pad0 == 6) {
-        imageStore(out_img, px, vec4(n * 0.5 + 0.5, 1.0));
-        return;
-    }
 
-    const float up = clamp(dot(n, pc.view_up), 0.0, 1.0);
-    const float ndv = clamp(dot(n, eye), 0.0, 1.0);
-    // (OcaDim 0.0.6) confiance de planéité : la pente de profondeur rapportée à la distance. Un sol vu de biais a une
-    // pente faible et reguliere ; un bord d'objet, une marche ou une silhouette la font exploser : on n'y touche pas
-    const float slope = length(vec2(scene_z(dr) - scene_z(dl), scene_z(dd) - scene_z(du))) * 0.5 /
-                        max(1.0, -p.z) / (o * 2.0);
-    const float conf = 1.0 - smoothstep(0.015, 0.090, slope);
-    // (les surfaces qui regardent le ciel : sols, eau, dalles. Un mur vertical ne brille pas)
-    const float flat_mask = smoothstep(0.30, 0.75, up) * conf;
-
-    // (1) la teinte de ciel : faible de face, plus forte en incidence rasante. Une couleur FIXE (le haut de l'image),
-    // donc rien qui glisse ni qui bave)
-    // (OcaDim 0.0.6) ecretage HDR : le tampon du jeu porte des valeurs bien au-dessus de 1 (ciel, soleils), et les
-    // melanger telles quelles brulait le sol et les personnages en blanc
+    // (le ciel, ecrete : le tampon du jeu porte des valeurs bien au-dessus de 1)
     const vec3 sky = min(textureLod(color_tex, vec2(0.5, 0.02), 0.0).rgb, vec3(1.5));
-    const float fresnel = 0.05 + 0.95 * pow(1.0 - ndv, 3.0);
-    float tint = pc.strength * flat_mask * (0.06 + 0.08 * fresnel);   // (visible a tout angle ; faible, car le jeu peut finir deux passes)
-    vec3 col = mix(base.rgb, mix(vec3(dot(sky, vec3(0.2126, 0.7152, 0.0722))), sky, 0.45), clamp(tint, 0.0, 0.7));
+    const vec3 sky_grey = mix(vec3(dot(sky, vec3(0.2126, 0.7152, 0.0722))), sky, 0.55);
 
-    // (2) le scintillement : des points qui vivent, sur les surfaces horizontales, plus petits et plus rares au loin.
-    // Animes par le temps (pad1), donc l'eau et la pierre polie ne sont jamais figees
-    const float dist = -p.z;
-    const float far_fade = 1.0 - smoothstep(pc.max_dist * 0.35, pc.max_dist, dist);
-    const float cell = clamp(1.5 + dist * 0.015, 1.5, 4.0);   // (des POINTS de 1 a 4 px, pas des carres)
+    // (la rue : le bas de l'image. Le plus « mouille » est la ou la rue s'eloigne (vers l'horizon, au milieu), et le
+    // tout premier plan reste plus mat - c'est ce que fait une vraie chaussee humide)
+    const float y = uv.y;
+    const float road = smoothstep(0.38, 0.66, y) * mix(1.0, 0.55, smoothstep(0.82, 1.0, y));
+    // (la lueur rasante : une bande un peu au-dessus du bas, la ou l'angle est le plus rasant)
+    const float band = smoothstep(0.42, 0.62, y) * (1.0 - smoothstep(0.62, 0.86, y));
+    const float s = pc.strength * road;
+
+    // (1) la pierre humide s'assombrit)
+    vec3 col = base.rgb * (1.0 - 0.22 * s);
+    // (2) la lueur de ciel, rasante, qui donne le « mouille »)
+    col = mix(col, sky_grey, clamp(0.16 * s * (0.35 + 0.65 * band), 0.0, 0.6));
+    // (3) les scintillements, uniquement sur la rue, petits et rares)
+    const float dist = -scene_z(d);
+    const float far_fade = 1.0 - smoothstep(pc.max_dist * 0.30, pc.max_dist * 0.85, dist);
+    const float cell = clamp(1.5 + dist * 0.012, 1.5, 3.5);
     const vec2 gp = uv * vec2(float(size.x), float(size.y)) / cell;
     const float t = float(pc.pad1) * 0.001;
     float spark = 0.0;
-    // (trois phases decalees : de petits eclats qui s'allument et s'eteignent)
     for (int k = 0; k < 3; k++) {
         const float ph = hash21(floor(gp) + float(k) * 17.0);
-        const float life = fract(t * (0.6 + 0.9 * ph) + ph);
-        const float on = smoothstep(0.80, 0.86, life) * (1.0 - smoothstep(0.93, 0.99, life));
-        const float spot = step(0.930, hash21(floor(gp) + 3.7 + float(k) * 5.1));   // (7 % des cellules)
+        const float life = fract(t * (0.35 + 0.55 * ph) + ph);
+        const float on = smoothstep(0.84, 0.89, life) * (1.0 - smoothstep(0.93, 0.99, life));
+        const float spot = step(0.960, hash21(floor(gp) + 3.7 + float(k) * 5.1));   // (4 % des cellules)
         spark += on * spot;
     }
-    spark = clamp(spark, 0.0, 1.0) * flat_mask * far_fade * pc.strength;
-    col += sky * spark * 0.30;
-
-    // (3) l'aspect mouille : une surface horizontale vue de face s'assombrit un peu, comme une pierre humide)
-    col *= 1.0 - 0.10 * pc.strength * flat_mask * ndv;
+    col += sky_grey * clamp(spark, 0.0, 1.0) * pc.strength * road * far_fade * 0.35;
 
     imageStore(out_img, px, vec4(col, base.a));
 }
