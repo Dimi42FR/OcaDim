@@ -6792,6 +6792,12 @@ void ssr_after_pass(VkCommandBuffer cmd, const Pass& ps) {
     // (OcaDim : la scene peut finir en plusieurs passes ; la derniere est l'image que l'upscaler prend, c'est elle qui doit
     // porter les reflets. On applique donc a chaque fin de passe de cette profondeur, la derniere gagne. Le cout est celui
     // d'une passe par fin de passe ; le jeu n'en a qu'une en pratique)
+    // (OcaDim 0.0.6) une seule application par frame : le reseau d'upscale est dispatche plusieurs fois, et chaque
+    // passage remelangeait une image deja traitee (l'ecran partait au blanc)
+    static std::atomic<uint64_t> applied{~0ull};
+    const uint64_t fno = texture_frame_no();
+    uint64_t was = applied.load(std::memory_order_relaxed);
+    if (was == fno || !applied.compare_exchange_strong(was, fno, std::memory_order_relaxed)) return;
     SsrImage* im = ssr_image(w, h, cmd);
     if (!im) {
         g_ssr.failed = true;

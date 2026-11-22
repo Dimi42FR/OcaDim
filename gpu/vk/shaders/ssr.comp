@@ -115,7 +115,9 @@ void main() {
 
     // (1) la teinte de ciel : faible de face, plus forte en incidence rasante. Une couleur FIXE (le haut de l'image),
     // donc rien qui glisse ni qui bave)
-    const vec3 sky = textureLod(color_tex, vec2(0.5, 0.02), 0.0).rgb;
+    // (OcaDim 0.0.6) ecretage HDR : le tampon du jeu porte des valeurs bien au-dessus de 1 (ciel, soleils), et les
+    // melanger telles quelles brulait le sol et les personnages en blanc
+    const vec3 sky = min(textureLod(color_tex, vec2(0.5, 0.02), 0.0).rgb, vec3(1.5));
     const float fresnel = 0.05 + 0.95 * pow(1.0 - ndv, 3.0);
     float tint = pc.strength * flat_mask * (0.07 + 0.09 * fresnel);   // (visible a tout angle ; faible, car le jeu peut finir deux passes)
     vec3 col = mix(base.rgb, mix(vec3(dot(sky, vec3(0.2126, 0.7152, 0.0722))), sky, 0.45), clamp(tint, 0.0, 0.7));
